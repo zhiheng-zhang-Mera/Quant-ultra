@@ -1,220 +1,373 @@
 """
-Phase 6: Multi-Asset Position Sizing and Bounded Execution Matrix Optimization (BL-MVO Engine)
+Phase 6: Multi-directional Uncertainty Position Sizing and Convex Optimization
+Full implementation with Black-Litterman fusion, CQR intervals, and MVO.
+Now precomputes daily weights and intervals for the entire Test set.
 Fully compliant with Final-Flow.md [2026 Production Release]
 """
 import numpy as np
+import pandas as pd
 import cvxpy as cp
-from scipy.linalg import fractional_matrix_power
+from sklearn.covariance import LedoitWolf
+from sklearn.preprocessing import StandardScaler
 import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+import pytz
 
 logger = logging.getLogger("PositionSizing")
 
-CONFIG = {
-    "OMEGA_MIN": 1e-8,
-    "OMEGA_MAX": 0.01,
-    "HALFLIFE_EWMA": 21,
-    "MAX_LEVERAGE": 1.0,  # 默认多空总杠杆上限（可根据配置调整）
-    "SECTOR_LIMIT": 0.3,  # 单行业上限
-    "EPSILON": 0.001,
-    "STOCK_CAP_LONG": 0.045,  # 举牌红线 4.5%
-    "STOCK_CAP_SHORT": 0.25,
-    "GAMMA_RISK": 2.5,  # 初始值，将在CV中优化
-    "TRANSACTION_COST_COEFF": 0.0003,
-}
+# ---------- 辅助函数（保持不变） ----------
+def _fractional_diff_series(series: np.ndarray, d: float) -> np.ndarray:
+    """因果递推分数阶微分 (1-L)^d，仅依赖历史。"""
+    n = len(series)
+    if n == 0 or d == 0:
+        return series.copy()
+    weights = [1.0]
+    for k in range(1, n):
+        w = -weights[-1] * (d - k + 1) / k
+        weights.append(w)
+    diff = np.zeros(n)
+    for t in range(n):
+        s = 0.0
+        for k in range(t + 1):
+            s += weights[k] * series[t - k]
+        diff[t] = s
+    return diff
 
-def step_m_1_directional_mask(context: dict):
-    """
-    基于方向分类器和 gamma* 生成最终有符号掩码 S_i ∈ {-1,0,1}
-    """
-    print("[Step M.1] Applying directional probability filter with gamma*.")
+def _compute_whitebox_features(df: pd.DataFrame) -> np.ndarray:
+    """计算五个白盒特征：Mom_1D, Mom_5D, Mom_20D, GK_Vol, Turnover_Shock。"""
+    df = df.sort_index()
+    close = df['close'].values
+    open_ = df['open'].values
+    high = df['high'].values
+    low = df['low'].values
+    amount = df['amount'].values
+    T = len(df)
+    features = np.full((T, 5), np.nan)
+    log_ret = np.full(T, np.nan)
+    log_ret[1:] = np.log(close[1:] / close[:-1])
+    features[:, 0] = log_ret
+    for t in range(5, T):
+        features[t, 1] = np.sum(log_ret[t-5:t])
+    for t in range(20, T):
+        features[t, 2] = np.sum(log_ret[t-20:t])
+    for t in range(T):
+        if high[t] > 0 and low[t] > 0 and open_[t] > 0 and close[t] > 0:
+            hl = np.log(high[t] / low[t])
+            co = np.log(close[t] / open_[t])
+            gk = 0.5 * hl**2 - (2 * np.log(2) - 1) * co**2
+            features[t, 3] = np.sqrt(max(gk, 0.0))
+    for t in range(20, T):
+        avg_amt = np.mean(amount[t-20:t])
+        if avg_amt > 0:
+            features[t, 4] = amount[t] / avg_amt
+    return features
 
+def _get_features_for_date(asset: str, date: datetime, context: dict) -> Optional[np.ndarray]:
+    """为指定资产在给定日期提取特征向量（经分数阶微分、特征选择、标准化）。"""
     bus = context['data_bus']
-    # 获取最新日期（Test集第一个交易日或当前）
-    slices = context['slices']
-    test_dates = slices.get('Test', [])
-    if not test_dates:
-        raise ValueError("Test 集为空，无法执行头寸分配。")
-    current_date = test_dates[0]  # 假设我们只对Test第一天进行分配，实际循环在回测中逐日进行
+    d = context.get('best_d', 0.0)
+    selected = context.get('selected_features', list(range(5)))
+    scaler = context.get('feature_scaler')
+    if scaler is None:
+        logger.error("Missing feature_scaler in context, cannot transform.")
+        return None
+    end_date = date.strftime("%Y-%m-%d")
+    start_date = (date - timedelta(days=180)).strftime("%Y-%m-%d")
+    df = bus.load_asset_history(asset, start_date, end_date)
+    if df is None or df.empty or len(df) < 30:
+        return None
+    raw_feat = _compute_whitebox_features(df)
+    if np.isnan(raw_feat).any():
+        raw_feat = pd.DataFrame(raw_feat).fillna(method='ffill').values
+    diff_feat = np.zeros_like(raw_feat)
+    for f in range(raw_feat.shape[1]):
+        diff_feat[:, f] = _fractional_diff_series(raw_feat[:, f], d)
+    current_feat = diff_feat[-1, :]
+    current_feat = current_feat[selected]
+    current_feat_scaled = scaler.transform(current_feat.reshape(1, -1)).flatten()
+    return current_feat_scaled
 
+def _fetch_borrowable_stocks(date: datetime) -> set:
+    """从 AkShare 获取指定日期的融券可用标的集合。"""
+    try:
+        import akshare as ak
+        date_str = date.strftime("%Y%m%d")
+        df = ak.stock_borrow_analysis(date=date_str)
+        if df.empty:
+            return set()
+        df = df[df['融券余量'] > 0]
+        codes = df['代码'].astype(str).tolist()
+        result = set()
+        for c in codes:
+            if len(c) != 6:
+                continue
+            if c.startswith('6'):
+                result.add(f"{c}.SH")
+            elif c.startswith('0') or c.startswith('3'):
+                result.add(f"{c}.SZ")
+        return result
+    except Exception as e:
+        logger.warning(f"获取融券列表失败 ({date}): {e}")
+        return set()
+
+def _compute_robust_covariance(bus, assets, date, lookback=252):
+    """Ledoit-Wolf 协方差估计，使用真实历史收益率。"""
+    returns = []
+    for asset in assets:
+        hist = bus.load_asset_history(asset, end_date=date.strftime('%Y-%m-%d'))
+        if hist is None or hist.empty:
+            ret = np.zeros(lookback)
+        else:
+            ret_series = hist['log_return'].tail(lookback)
+            if len(ret_series) < 50:
+                ret_series = hist['log_return']
+            ret = ret_series.values
+            if len(ret) < 2:
+                ret = np.zeros(lookback)
+        if len(ret) > lookback:
+            ret = ret[-lookback:]
+        elif len(ret) < lookback:
+            pad = lookback - len(ret)
+            ret = np.pad(ret, (pad, 0), constant_values=np.nan)
+        returns.append(ret)
+    X = np.vstack(returns).T
+    X = X[~np.isnan(X).any(axis=1)]
+    if X.shape[0] < 2:
+        n = len(assets)
+        return np.eye(n) * 0.01
+    lw = LedoitWolf().fit(X)
+    return lw.covariance_
+
+def _compute_market_weights(bus, assets, date):
+    """自由流通市值权重"""
+    caps = []
+    for asset in assets:
+        cap = bus.get_free_float_market_cap(asset, date)
+        caps.append(max(cap, 0.0))
+    total = sum(caps)
+    if total <= 0:
+        return np.ones(len(assets)) / len(assets)
+    return np.array(caps) / total
+
+# ---------- 核心步骤（保持不变，但需要返回更多信息） ----------
+def step_m_1_directional_mask(context: dict, date: datetime) -> dict:
+    """返回方向掩码字典。"""
     assets = context['assets']
-    selected = context['selected_features']
-    scaler = context['feature_scaler']
-    clf = context['direction_classifier']
-    gamma = context['gamma_star']
-
+    clf = context.get('direction_classifier')
+    gamma = context.get('gamma_star', 0.5)
+    if clf is None:
+        raise RuntimeError("direction_classifier 未找到。")
+    borrowable = _fetch_borrowable_stocks(date)
     masks = {}
     for sym in assets:
-        feat = bus.query_by_pit(sym, current_date, "whitebox_features")
+        feat = _get_features_for_date(sym, date, context)
         if feat is None:
             masks[sym] = 0
             continue
-        X = scaler.transform(feat[selected].reshape(1, -1))
-        probs = clf.predict_proba(X)[0]  # [neg, zero, pos]
-        p_pos = probs[2]   # 多头
-        p_neg = probs[0]   # 空头
-        if p_pos >= gamma and p_pos > p_neg:
+        prob = clf.predict_proba(feat.reshape(1, -1))[0]
+        prob_neg, prob_zero, prob_pos = prob[0], prob[1], prob[2]
+        if prob_pos >= gamma and prob_pos > prob_neg:
             masks[sym] = 1
-        elif p_neg >= gamma and p_neg > p_pos:
-            # 检查融券可用性（从上下文获取）
-            borrow = context['margin_borrow_liquidity'].get(sym, False)
-            masks[sym] = -1 if borrow else 0
+        elif prob_neg >= gamma and prob_neg > prob_pos:
+            if sym in borrowable:
+                masks[sym] = -1
+            else:
+                masks[sym] = 0
         else:
             masks[sym] = 0
-
     context['directional_symbol_masks'] = masks
-    print(f"[完成] 方向掩码: {masks}")
+    return masks
 
-
-def step_m_2_black_litterman_fusion(context: dict):
+def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights: Optional[np.ndarray] = None):
     """
-    构建 CQR 异方差宽度，合成主观观点协方差矩阵 Ω，并运行 BL 后验收益率计算。
+    返回 (R_BL, Sigma_robust, q_low, q_mid, q_high, Omega_diag, Q_view)
+    同时更新上下文中的历史宽度等。
     """
-    print("[Step M.2] Computing BL posterior returns with CQR uncertainty and short-cost penalties.")
-
     bus = context['data_bus']
     assets = context['assets']
-    masks = context['directional_symbol_masks']
-    quant_models = context['quantile_models']
-    scaler = context['feature_scaler']
-    error_thresholds = context['q_error_threshold_dict']
-    tau = context['tau_BL']
-    # 获取当前日期（Test第一天）
-    slices = context['slices']
-    current_date = slices['Test'][0]
-
     n = len(assets)
-    q_mid = np.zeros(n)
+    masks = context.get('directional_symbol_masks', {})
+    quant_models = context.get('quantile_models')
+    if quant_models is None:
+        raise RuntimeError("quantile_models 未找到。")
+    scaler = context.get('feature_scaler')
+    config = context.get('config', {})
+    tau = config.get('tau_BL', 0.02)
+    omega_min = config.get('omega_min', 1e-8)
+    omega_max = config.get('omega_max', 0.01)
+    halflife = 21
+    if 'width_history' not in context:
+        context['width_history'] = {sym: [] for sym in assets}
+    if 'smoothed_width' not in context:
+        context['smoothed_width'] = {}
+
     q_low = np.zeros(n)
+    q_mid = np.zeros(n)
     q_high = np.zeros(n)
     Q_view = np.zeros(n)
     Omega_diag = np.zeros(n)
 
-    # 模拟短融费率（实际应从数据源获取）
-    short_loan_fees = {sym: 0.08 / 252 for sym in assets}  # 年化8%折算日度
-
-    # 获取特征
-    X_list = []
-    valid_indices = []
     for i, sym in enumerate(assets):
-        feat = bus.query_by_pit(sym, current_date, "whitebox_features")
-        if feat is not None:
-            X_list.append(feat[context['selected_features']])
-            valid_indices.append(i)
-    if not X_list:
-        raise RuntimeError("无特征数据，无法进行BL融合。")
-    X_all = scaler.transform(np.vstack(X_list))
+        feat = _get_features_for_date(sym, date, context)
+        if feat is None:
+            q_low[i] = q_mid[i] = q_high[i] = 0.0
+            Q_view[i] = 0.0
+            Omega_diag[i] = omega_max
+            continue
+        X = feat.reshape(1, -1)
+        pred_low = quant_models[0.025].predict(X)[0]
+        pred_mid = quant_models[0.5].predict(X)[0]
+        pred_high = quant_models[0.975].predict(X)[0]
+        pred_low = min(pred_low, pred_mid)
+        pred_high = max(pred_high, pred_mid)
+        err_thresh = context.get('q_error_threshold_dict', {}).get(sym, 0.0)
+        q_low[i] = pred_low - err_thresh
+        q_mid[i] = pred_mid
+        q_high[i] = pred_high + err_thresh
 
-    # 预测分位数
-    for j, idx in enumerate(valid_indices):
-        x = X_all[j].reshape(1, -1)
-        q_low[idx] = quant_models[0.025].predict(x)[0]
-        q_mid[idx] = quant_models[0.5].predict(x)[0]
-        q_high[idx] = quant_models[0.975].predict(x)[0]
-
-    # 分位数单调性修正
-    q_low = np.minimum(q_low, q_mid)
-    q_high = np.maximum(q_high, q_mid)
-
-    # 计算异方差宽度并构建Ω
-    for i, sym in enumerate(assets):
-        err = error_thresholds.get(sym, 0.01)
-        width = (q_high[i] + err) - (q_low[i] - err)
-        # EWMA平滑（模拟）
-        smoothed_width = width  # 此处简化，实际应有历史序列
-        omega_ii = np.clip((smoothed_width ** 2) * tau, CONFIG["OMEGA_MIN"], CONFIG["OMEGA_MAX"])
+        width = q_high[i] - q_low[i]
+        context['width_history'][sym].append(width)
+        if len(context['width_history'][sym]) > 252 * 2:
+            context['width_history'][sym] = context['width_history'][sym][-252:]
+        alpha = 1 - 0.5 ** (1 / halflife)
+        prev_smooth = context['smoothed_width'].get(sym, width)
+        smoothed = alpha * width + (1 - alpha) * prev_smooth
+        context['smoothed_width'][sym] = smoothed
+        omega_ii = np.clip((smoothed ** 2) * tau, omega_min, omega_max)
         Omega_diag[i] = omega_ii
 
-        # 主观观点：中位数预测扣减融券成本
-        view = q_mid[i]
-        if masks.get(sym, 0) < 0:
-            view -= short_loan_fees.get(sym, 0.08/252)
-        Q_view[i] = view
+        short_rate = bus.get_short_rate(sym) if masks.get(sym, 0) == -1 else 0.0
+        Q_view[i] = q_mid[i] - short_rate
 
-    context['quantile_predictions'] = {'low': q_low, 'mid': q_mid, 'high': q_high}
+    Sigma_robust = _compute_robust_covariance(bus, assets, date, lookback=252)
+    w_mkt = _compute_market_weights(bus, assets, date)
+    lambda_mkt = bus.compute_market_risk_aversion(date.strftime('%Y-%m-%d'))
+    Pi = lambda_mkt * (Sigma_robust @ w_mkt)
+    Omega = np.diag(Omega_diag)
+    inv_prior = np.linalg.inv(tau * Sigma_robust)
+    inv_omega = np.linalg.inv(Omega)
+    P = np.eye(n)
+    R_BL = np.linalg.inv(inv_prior + P.T @ inv_omega @ P) @ (inv_prior @ Pi + P.T @ inv_omega @ Q_view)
+
+    # 将计算结果存入上下文（供优化使用）
+    context['Sigma_robust'] = Sigma_robust
+    context['Pi'] = Pi
+    context['R_BL'] = R_BL
     context['Omega_diag'] = Omega_diag
     context['Q_view'] = Q_view
 
-    # 先验均衡收益率 Π: 使用市值加权 + Ledoit-Wolf 协方差（模拟）
-    # 使用简单的协方差矩阵（从历史数据估计，这里用随机）
-    Sigma_robust = np.eye(n) * 0.0003
-    # 自由流通市值权重（模拟）
-    w_mkt = np.array([0.4, 0.3, 0.3])[:n]
-    # 市场风险厌恶系数 lambda_mkt（模拟）
-    lambda_mkt = 3.0
-    Pi = lambda_mkt * (Sigma_robust @ w_mkt)
-    context['Pi'] = Pi
-    context['Sigma_robust'] = Sigma_robust
+    return R_BL, Sigma_robust, q_low, q_high
 
-    # 解 BL 后验
-    inv_prior = np.linalg.inv(tau * Sigma_robust)
-    Omega = np.diag(Omega_diag)
-    inv_omega = np.linalg.inv(Omega)
-    P = np.eye(n)  # 观点映射矩阵为单位矩阵
-    R_BL = np.linalg.inv(inv_prior + P.T @ inv_omega @ P) @ (inv_prior @ Pi + P.T @ inv_omega @ Q_view)
-    context['R_BL'] = R_BL
-    print("[完成] BL 后验收益率计算完毕。")
-
-
-def step_m_3_convex_optimization(context: dict):
-    """
-    求解带约束的 MVO 优化，含换手惩罚、杠杆上限、行业限制、举牌红线等。
-    """
-    print("[Step M.3] Solving bounded convex optimization for final weights.")
-
+def step_m_3_convex_optimization(context: dict, date: datetime, prev_weights: Optional[np.ndarray] = None):
+    """返回目标权重向量。"""
     n = len(context['assets'])
-    R_BL = context['R_BL']
-    Sigma = context['Sigma_robust']
-    masks = context['directional_symbol_masks']
-    borrow_liquidity = context['margin_borrow_liquidity']
+    R_BL = context.get('R_BL')
+    Sigma = context.get('Sigma_robust')
+    masks = context.get('directional_symbol_masks', {})
+    config = context.get('config', {})
+    borrow_liquidity = context.get('borrowable_today', set())
+    if R_BL is None or Sigma is None:
+        raise RuntimeError("缺少 R_BL 或 Sigma。")
+    gamma_risk = config.get('gamma_risk_initial', 2.5)
+    max_leverage = config.get('max_leverage', 1.0)
+    sector_limit = config.get('sector_limit', 0.3)
+    stock_cap_long = config.get('stock_cap_pct', 0.045)
+    stock_cap_short = config.get('stock_cap_short', 0.25)
+    eps = config.get('epsilon', 0.001)
+    trans_cost = config.get('transaction_cost_coeff', 0.0003)
+    if prev_weights is None:
+        w_prev = np.zeros(n)
+    else:
+        w_prev = np.array(prev_weights)
 
-    # 风险厌恶系数 (可从上下文中获取，或从CV中优化)
-    gamma_risk = CONFIG["GAMMA_RISK"]
-
-    # 变量
     w = cp.Variable(n)
-    # 前一期权重（假设为0，实际回测中会传递）
-    w_prev = np.zeros(n)
-
-    # 目标函数：最大化 R_BL^T w - (gamma/2) w^T Sigma w - κ * sum(|w - w_prev|)
-    utility = w.T @ R_BL - (gamma_risk / 2) * cp.quad_form(w, Sigma) - CONFIG["TRANSACTION_COST_COEFF"] * cp.sum(cp.abs(w - w_prev))
-
-    # 约束
+    utility = w.T @ R_BL - (gamma_risk / 2) * cp.quad_form(w, Sigma) - trans_cost * cp.sum(cp.abs(w - w_prev))
     constraints = []
-    # 总杠杆上限
-    constraints.append(cp.sum(cp.abs(w)) <= CONFIG["MAX_LEVERAGE"])
-    # 个股限制
-    for i in range(n):
-        # 多头上限 4.5%（举牌红线）
-        constraints.append(w[i] <= CONFIG["STOCK_CAP_LONG"])
-        # 空头下限（根据融券可用性）
-        sym = context['assets'][i]
-        short_cap = -CONFIG["STOCK_CAP_SHORT"] if borrow_liquidity.get(sym, False) else 0.0
-        constraints.append(w[i] >= short_cap)
-    # 行业集中度（简单模拟，实际需行业映射）
-    # 假设前3只为行业1，后3只为行业2，设限制
-    if n >= 3:
-        constraints.append(cp.sum(w[:3]) <= CONFIG["SECTOR_LIMIT"])
-    if n >= 3:
-        constraints.append(cp.sum(w[3:]) <= CONFIG["SECTOR_LIMIT"])
+    constraints.append(cp.sum(cp.abs(w)) <= max_leverage)
+    for i, sym in enumerate(context['assets']):
+        constraints.append(w[i] <= stock_cap_long)
+        if sym in borrow_liquidity:
+            constraints.append(w[i] >= -stock_cap_short)
+        else:
+            constraints.append(w[i] >= 0.0)
+    sector_map = context.get('sector_map')
+    if sector_map is None:
+        bus = context['data_bus']
+        sector_map = {}
+        for sym in context['assets']:
+            sector_map[sym] = bus.get_sector(sym)
+        context['sector_map'] = sector_map
+    sectors = set(sector_map.values())
+    for sec in sectors:
+        idx = [i for i, sym in enumerate(context['assets']) if sector_map.get(sym) == sec]
+        if idx:
+            constraints.append(cp.sum(w[idx]) <= sector_limit)
 
-    # 求解
     prob = cp.Problem(cp.Maximize(utility), constraints)
-    prob.solve(solver=cp.ECOS)
-
+    prob.solve(solver=cp.ECOS, verbose=False)
     if w.value is None:
-        raise RuntimeError("凸优化求解失败。")
-    final_w = w.value.flatten()
-    # 过滤小权重
-    final_w[np.abs(final_w) < CONFIG["EPSILON"]] = 0.0
+        logger.error("凸优化求解失败，使用上一期权重。")
+        final_w = w_prev.copy()
+    else:
+        final_w = w.value.flatten()
+        final_w[np.abs(final_w) < eps] = 0.0
+    return final_w
 
-    # 存储目标权重
-    context['target_weights'] = {context['assets'][i]: final_w[i] for i in range(n)}
-    print(f"[完成] 优化权重: {context['target_weights']}")
+# ---------- 新的 execute：预计算整个 Test 集 ----------
+def execute(pipeline_context: dict) -> dict:
+    logger.info("=" * 60)
+    logger.info("Phase 6: 多空双向不确定性头寸分配与凸优化（预计算全 Test 集）")
+    logger.info("=" * 60)
 
+    # 确保必要字段存在
+    if 'assets' not in pipeline_context or not pipeline_context['assets']:
+        raise ValueError("上下文中缺少 assets。")
+    slices = pipeline_context.get('slices', {})
+    test_dates = slices.get('Test', [])
+    if not test_dates:
+        raise ValueError("Test 集为空，无法计算权重。")
 
-def execute(pipeline_context: dict):
-    step_m_1_directional_mask(pipeline_context)
-    step_m_2_black_litterman_fusion(pipeline_context)
-    step_m_3_convex_optimization(pipeline_context)
+    assets = pipeline_context['assets']
+    n_assets = len(assets)
+    # 初始化收集列表
+    weight_records = []
+    interval_records = []
+    prev_weights = None
+
+    for date in test_dates:
+        # 更新当前日期
+        pipeline_context['current_date'] = date
+        # 步骤 M.1-M.3
+        masks = step_m_1_directional_mask(pipeline_context, date)
+        pipeline_context['directional_symbol_masks'] = masks
+        pipeline_context['borrowable_today'] = _fetch_borrowable_stocks(date)
+        R_BL, Sigma, q_low, q_high = step_m_2_black_litterman_fusion(pipeline_context, date, prev_weights)
+        weights = step_m_3_convex_optimization(pipeline_context, date, prev_weights)
+
+        # 记录权重和区间
+        weight_records.append(weights)
+        interval_records.append((q_low, q_high))
+        prev_weights = weights
+
+    # 构建 DataFrame
+    weight_df = pd.DataFrame(weight_records, index=test_dates, columns=assets)
+    # 构建区间 DataFrame，存储 q_low 和 q_high 两列，每列是 (日期, 资产) 的多级索引？但为了方便，我们存为两个 DataFrame 或一个 MultiIndex。
+    # 为简化，存两个 DataFrame: q_low_df, q_high_df
+    q_low_list = []
+    q_high_list = []
+    for low, high in interval_records:
+        q_low_list.append(low)
+        q_high_list.append(high)
+    q_low_df = pd.DataFrame(q_low_list, index=test_dates, columns=assets)
+    q_high_df = pd.DataFrame(q_high_list, index=test_dates, columns=assets)
+
+    # 存入上下文
+    pipeline_context['daily_weights'] = weight_df
+    pipeline_context['daily_intervals'] = {'q_low': q_low_df, 'q_high': q_high_df}
+
+    # 保留最后一天的目标权重（供后续使用）
+    pipeline_context['target_weights'] = {assets[i]: weights[i] for i in range(n_assets)}
     pipeline_context['allocation_weights_ready'] = True
+    logger.info(f"Step 6 预计算完成，共 {len(test_dates)} 个交易日。")
     return pipeline_context
