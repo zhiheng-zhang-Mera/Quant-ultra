@@ -112,7 +112,7 @@ if ENV_FINGERPRINT["git_status"] == "DIRTY":
     sys.exit(1)
 
 # ============================
-# 3. 免费开源数据源管理器
+# 3. 免费开源数据源管理器（增强版）
 # ============================
 class FreeDataSourceManager:
     def __init__(self, cache_dir: Path = None):
@@ -120,8 +120,9 @@ class FreeDataSourceManager:
         self.cache_dir.mkdir(exist_ok=True)
         self._sources: List[tuple] = []
         self._bs_logged = False
+        self._logger = logging.getLogger("FreeDataSourceManager")
         self._init_sources()
-
+        
     def _init_sources(self):
         try:
             import akshare as ak
@@ -140,7 +141,77 @@ class FreeDataSourceManager:
         if not self._sources:
             raise RuntimeError("❌ 未检测到任何免费数据源（AkShare / BaoStock）。请安装至少一个。")
 
+    # ---------- 指数专用获取 ----------
+    def fetch_index_historical(self, symbol: str, start_date: str, end_date: str, freq: str = "d") -> Optional[pd.DataFrame]:
+        """专门获取指数历史数据，优先 AkShare 的 stock_zh_index_hist"""
+        cache_key = f"index_{symbol}_{start_date}_{end_date}_{freq}.parquet"
+        cache_path = self.cache_dir / cache_key
+        if cache_path.exists():
+            try:
+                if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 7:
+                    df = pd.read_parquet(cache_path)
+                    if not df.empty:
+                        return df
+            except:
+                pass
+
+        # 1) AkShare 指数接口
+        try:
+            code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+            df = self._ak.stock_zh_index_hist(symbol=code, period="daily",
+                                              start_date=start_date.replace("-", ""),
+                                              end_date=end_date.replace("-", ""))
+            if not df.empty:
+                df.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low",
+                                   "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True, errors="ignore")
+                df["date"] = pd.to_datetime(df["date"])
+                df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
+                df.to_parquet(cache_path, index=False)
+                return df
+        except Exception as e:
+            self._logger.warning(f"AkShare 指数获取失败 {symbol}: {e}")
+
+        # 2) BaoStock 降级
+        try:
+            if not self._bs_logged:
+                self._bs.login()
+                self._bs_logged = True
+            code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+            bs_code = f"sh.{code}" if symbol.endswith(".SH") else f"sz.{code}"
+            # 强制清洗日期
+            start = pd.to_datetime(start_date).strftime("%Y-%m-%d")
+            end = pd.to_datetime(end_date).strftime("%Y-%m-%d")
+            rs = self._bs.query_history_k_data_plus(code=bs_code,
+                                                    fields="date,open,high,low,close,volume,amount",
+                                                    start_date=start, end_date=end,
+                                                    frequency="d", adjustflag="2")
+            if rs is not None and rs.error_code == "0":
+                data = []
+                while rs.next():
+                    data.append(rs.get_row_data())
+                if data:
+                    df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+                    df["date"] = pd.to_datetime(df["date"])
+                    for col in ["open", "high", "low", "close", "volume", "amount"]:
+                        df[col] = pd.to_numeric(df[col])
+                    df.to_parquet(cache_path, index=False)
+                    return df
+        except Exception as e:
+            self._logger.warning(f"BaoStock 指数获取失败 {symbol}: {e}")
+
+        return None  # 失败返回 None
+
     def fetch_historical(self, symbol: str, start_date: str, end_date: str, freq: str = "d", max_retries: int = 3) -> Optional[pd.DataFrame]:
+        """
+        统一入口，自动判别指数或个股。
+        所有失败返回 None，不再抛出 RuntimeError。
+        """
+        # 判断是否为常见指数
+        index_symbols = {"000300.SH", "000905.SH", "000016.SH", "399001.SZ", "399006.SZ"}
+        if symbol in index_symbols:
+            return self.fetch_index_historical(symbol, start_date, end_date, freq)
+
+        # 个股逻辑（原实现，但改为返回 None）
         cache_key = f"{symbol}_{start_date}_{end_date}_{freq}.parquet"
         cache_path = self.cache_dir / cache_key
         if cache_path.exists():
@@ -152,6 +223,7 @@ class FreeDataSourceManager:
                         return df
             except Exception:
                 pass
+
         last_error = None
         for name, fetch_func in self._sources:
             for attempt in range(1, max_retries + 1):
@@ -163,7 +235,10 @@ class FreeDataSourceManager:
                 except Exception as e:
                     last_error = e
                     time.sleep(1)
-        raise RuntimeError(f"❌ 所有数据源获取 {symbol} 均失败，最后异常: {last_error}")
+        if last_error is None:
+            last_error = "所有数据源返回空数据（未抛出异常）"
+        self._logger.error(f"❌ 所有数据源获取 {symbol} 均失败，最后异常: {last_error}")
+        return None  # 改为返回 None，不再抛异常
 
     def _fetch_akshare(self, symbol: str, start_date: str, end_date: str, freq: str = "d"):
         code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
@@ -187,11 +262,15 @@ class FreeDataSourceManager:
         bs_code = f"sh.{code}" if symbol.endswith(".SH") else f"sz.{code}"
         freq_map = {"d": "d", "w": "w", "m": "m"}
         bs_freq = freq_map.get(freq, "d")
+        # 关键修复：强制清洗日期格式
+        start = pd.to_datetime(start_date).strftime("%Y-%m-%d")
+        end = pd.to_datetime(end_date).strftime("%Y-%m-%d")
         rs = self._bs.query_history_k_data_plus(code=bs_code,
                                                 fields="date,open,high,low,close,volume,amount",
-                                                start_date=start_date.replace("-", ""),
-                                                end_date=end_date.replace("-", ""),
+                                                start_date=start, end_date=end,
                                                 frequency=bs_freq, adjustflag="2")
+        if rs is None:
+            return None
         if rs.error_code != "0":
             return None
         data = []
@@ -233,6 +312,8 @@ class FreeDataSourceManager:
                     self._bs.login()
                     self._bs_logged = True
                 rs = self._bs.query_all_stock()
+                if rs is None:
+                    continue
                 if rs.error_code == "0":
                     symbols = []
                     while rs.next():
@@ -248,45 +329,78 @@ class FreeDataSourceManager:
         raise RuntimeError("❌ 所有数据源获取全 A 股票列表均失败。")
 
     def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = 2026) -> pd.DatetimeIndex:
-        cache_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
-        if cache_path.exists():
+            cache_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
+            if cache_path.exists():
+                try:
+                    if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 7:
+                        df = pd.read_parquet(cache_path)
+                        if not df.empty:
+                            return pd.DatetimeIndex(df["date"])
+                except Exception as e:
+                    self._logger.warning(f"读取交易日历缓存失败: {e}")
+
+            # 1) AkShare
             try:
-                if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 7:
-                    df = pd.read_parquet(cache_path)
-                    if not df.empty:
-                        return pd.DatetimeIndex(df["date"])
-            except Exception:
-                pass
-        try:
-            if hasattr(self, "_ak"):
-                cal = self._ak.tool_trade_date_hist_sina()
-                if not cal.empty:
-                    cal["trade_date"] = pd.to_datetime(cal["trade_date"])
-                    cal = cal[(cal["trade_date"].dt.year >= start_year) & (cal["trade_date"].dt.year <= end_year)]
-                    dates = cal["trade_date"].tolist()
-                    if dates:
-                        pd.DataFrame({"date": dates}).to_parquet(cache_path, index=False)
-                        return pd.DatetimeIndex(dates)
-        except Exception:
-            pass
-        try:
-            if not self._bs_logged:
-                self._bs.login()
-                self._bs_logged = True
-            all_dates = []
-            for year in range(start_year, end_year + 1):
-                rs = self._bs.query_trade_dates(start_date=f"{year}-01-01", end_date=f"{year}-12-31")
-                if rs.error_code == "0":
+                if hasattr(self, "_ak"):
+                    cal = self._ak.tool_trade_date_hist_sina()
+                    if cal is not None and not cal.empty:
+                        cal["trade_date"] = pd.to_datetime(cal["trade_date"])
+                        cal = cal[(cal["trade_date"].dt.year >= start_year) & (cal["trade_date"].dt.year <= end_year)]
+                        dates = cal["trade_date"].tolist()
+                        if dates:
+                            pd.DataFrame({"date": dates}).to_parquet(cache_path, index=False)
+                            self._logger.info(f"AkShare 获取交易日历成功，共 {len(dates)} 天")
+                            return pd.DatetimeIndex(dates)
+                    else:
+                        self._logger.warning("AkShare 返回空日历")
+            except Exception as e:
+                self._logger.warning(f"AkShare 获取交易日历异常: {e}")
+
+            # 2) BaoStock
+            try:
+                if not self._bs_logged:
+                    self._bs.login()
+                    self._bs_logged = True
+                all_dates = []
+                for year in range(start_year, end_year + 1):
+                    rs = self._bs.query_trade_dates(start_date=f"{year}-01-01", end_date=f"{year}-12-31")
+                    if rs is None:
+                        self._logger.warning(f"BaoStock 查询 {year} 年交易日返回 None")
+                        continue
+                    if rs.error_code != "0":
+                        self._logger.warning(f"BaoStock 查询 {year} 年交易日失败，错误码: {rs.error_code}")
+                        continue
                     while rs.next():
                         row = rs.get_row_data()
-                        if row[1] == "1":
+                        if row[1] == "1":   # 1 表示交易日
                             all_dates.append(pd.Timestamp(row[0]))
-            if all_dates:
-                pd.DataFrame({"date": all_dates}).to_parquet(cache_path, index=False)
-                return pd.DatetimeIndex(all_dates)
-        except Exception:
-            pass
-        raise RuntimeError(f"❌ 所有数据源获取交易日历 ({start_year}-{end_year}) 均失败。")
+                if all_dates:
+                    pd.DataFrame({"date": all_dates}).to_parquet(cache_path, index=False)
+                    self._logger.info(f"BaoStock 获取交易日历成功，共 {len(all_dates)} 天")
+                    return pd.DatetimeIndex(all_dates)
+                else:
+                    self._logger.warning("BaoStock 未返回任何交易日")
+            except Exception as e:
+                self._logger.warning(f"BaoStock 获取交易日历异常: {e}")
+
+            # 3) pandas_market_calendars 降级
+            try:
+                import pandas_market_calendars as mcal
+                sse = mcal.get_calendar('SSE')
+                start = datetime(start_year, 1, 1)
+                end = datetime(end_year, 12, 31)
+                schedule = sse.schedule(start_date=start, end_date=end)
+                dates = schedule.index.tz_localize(None).to_pydatetime().tolist()
+                if dates:
+                    pd.DataFrame({"date": dates}).to_parquet(cache_path, index=False)
+                    self._logger.info(f"pandas_market_calendars 获取交易日历成功，共 {len(dates)} 天")
+                    return pd.DatetimeIndex(dates)
+            except ImportError:
+                self._logger.warning("pandas_market_calendars 未安装，无法降级")
+            except Exception as e:
+                self._logger.warning(f"pandas_market_calendars 降级失败: {e}")
+
+            raise RuntimeError(f"❌ 所有数据源获取交易日历 ({start_year}-{end_year}) 均失败。")
 
 # ============================
 # 4. 审计日志
@@ -440,6 +554,7 @@ class PITDataBus:
     def fetch_benchmark_prices(self, start_date: str, end_date: str) -> pd.Series:
         df = self.manager.fetch_historical("000300.SH", start_date, end_date)
         if df is None or df.empty:
+            self._logger.warning("基准指数数据为空，返回空 Series")
             return pd.Series()
         df.set_index("date", inplace=True)
         return df["close"]
@@ -450,7 +565,7 @@ class PITDataBus:
     def get_benchmark_returns(self, start_date: str, end_date: str, freq='W') -> pd.Series:
         try:
             df = self.manager.fetch_historical("000300.SH", start_date, end_date)
-            if df.empty:
+            if df is None or df.empty:
                 return pd.Series()
             df.set_index("date", inplace=True)
             ret = np.log(df["close"] / df["close"].shift(1))
@@ -473,6 +588,8 @@ class PITDataBus:
                 start_date=date.strftime("%Y-%m-%d"), end_date=date.strftime("%Y-%m-%d"),
                 adjustflag="2"
             )
+            if rs is None:
+                raise Exception("BaoStock 返回 None")
             if rs.error_code == "0" and rs.next():
                 row = rs.get_row_data()
                 free_float = float(row[1])  # 万股
@@ -481,7 +598,7 @@ class PITDataBus:
                 self._mcap_cache[cache_key] = mcap
                 return mcap
             else:
-                raise Exception("BaoStock 返回空")
+                raise Exception("BaoStock 返回空或错误")
         except Exception as e:
             return self._handle_failure("get_free_float_market_cap", asset, e, fallback_value=0.0)
 
@@ -508,6 +625,8 @@ class PITDataBus:
         except Exception as e:
             try:
                 rs = self.manager._bs.query_stock_industry(code=self._to_bs_code(asset))
+                if rs is None:
+                    raise Exception("BaoStock 返回 None")
                 if rs.error_code == "0" and rs.next():
                     sector = rs.get_row_data()[1]
                     self._sector_cache[asset] = sector
@@ -683,18 +802,27 @@ def run_pipeline(args):
         except Exception as e:
             logger.warning(f"配置加载失败: {e}")
 
+    np.random.seed(42)  # 固定随机种子，确保可复现
+
+    # 生成默认完整配置（包含所有可调参数）
     default_config = {
-        "slicing": {"ratios": [0.50, 0.60, 0.70, 0.85]},
-        "holding_period": 5,
-        "max_leverage": 2.0,
-        "risk_aversion": 0.02,
-        "error_threshold_window": 252,
-        "embargo_min": 5,
-        "impact_params": {"kappa": 0.05, "alpha": 0.5},
+        "adv_window": 20,
+        "min_adv_threshold": 1e7,
+        "ipo_safety_days": 20,
+        "max_participation_rate": 0.05,
+        "expected_turnover": 0.05,
+        "max_single_stock_weight": 0.05,
+        "default_residual_rate": 0.0,
+        "impact_alpha": 0.5,
+        "impact_kappa_base": 0.05,
+        "spread_lookback_days": 60,
+        "stock_cap_pct": 0.045,
+        "total_shares_source": "free_float",
+        "short_rate_default": 0.08/252,
+        "short_rate_source": "fixed",
         "tau_BL": 0.02,
         "omega_min": 1e-8,
         "omega_max": 0.01,
-        "stock_cap_pct": 0.045,
         "gamma_risk_initial": 2.5,
         "sector_limit": 0.3,
         "epsilon": 0.001,
@@ -703,7 +831,38 @@ def run_pipeline(args):
         "vol_window": 20,
         "threshold_multiplier": 0.5,
         "min_vol_obs": 5,
-    }
+        "error_threshold_window": 252,
+        "embargo_min": 5,
+        "holding_period": 5,
+        "max_leverage": 2.0,
+        "d_min_search": [0.1, 0.3, 0.5, 0.7, 0.9],
+        "vif_threshold": 30,
+        "cluster_select_ratio": 0.8,
+        "lgb_params": {
+            "n_estimators": 100,
+            "num_leaves": 31,
+            "learning_rate": 0.05,
+            "deterministic": True,
+            "num_threads": 1,
+            "random_state": 42,
+            "verbosity": -1,
+        },
+        "train_b1_grid_gamma": np.linspace(0.3, 0.7, 9).tolist(),
+        "error_min_samples": 50,
+        "cv_folds": 3,
+        "psi_lookback_days": 60,
+        "volatility_window": 20,
+        "crowded_corr_threshold": 0.95,
+        "vol_compress_quantile": 0.1,
+        "mae_threshold": 1e-5,
+        "watchdog_timeout": 30,
+        "psi_threshold": 0.25,
+        "psi_window": 5,
+        "max_incremental_trees": 2000,
+        "max_model_size": 2e9,
+        "smoothing_period": 25,
+        }
+    # 合并用户配置（若提供）
     for k, v in default_config.items():
         if k not in config:
             config[k] = v

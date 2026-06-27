@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Quant-Ultra + Conformal-BL 项目依赖自动检查与安装脚本
-用法: python install_deps.py [--mirror https://pypi.tuna.tsinghua.edu.cn/simple] [--scan]
+Quant-Ultra + Conformal-BL 项目依赖自动检查与安装脚本（增强版）
+用法: python install_deps.py [--mirror https://pypi.tuna.tsinghua.edu.cn/simple] [--scan] [--no-upgrade]
+特性: 每次运行自动更新 pip 和所有已安装库，额外安装 akshare、baostock
 """
 
 import subprocess
@@ -13,18 +14,25 @@ import os
 import argparse
 from pathlib import Path
 
-# 项目所需的核心第三方库（根据代码实际导入情况整理）
+import pandas_market_calendars
+
+# 项目所需的核心第三方库（根据代码实际导入情况整理 + 新增）
 REQUIRED_LIBRARIES = [
     "numpy",
     "pandas",
     "pytz",
     "lightgbm",
-    "scikit-learn",      # 导入为 sklearn
+    "scikit-learn",
     "statsmodels",
     "scipy",
     "cvxpy",
-    "matplotlib",        # 部分可视化可能用到
-    "tabulate",          # 常见辅助
+    "matplotlib",
+    "tabulate",
+    "pandas_market_calendars",
+    "pyyaml",
+    "requests",
+    "akshare",          # 新增金融数据接口
+    "baostock",         # 新增金融数据接口
 ]
 
 # 标准库白名单（不安装）
@@ -51,9 +59,6 @@ STDLIB = set(sys.stdlib_module_names) if hasattr(sys, 'stdlib_module_names') els
 ])
 
 def get_imported_libs(project_root='.'):
-    """
-    扫描项目所有 .py 文件，提取顶层导入的第三方库名。
-    """
     imported = set()
     py_files = Path(project_root).rglob('*.py')
     for py_file in py_files:
@@ -62,7 +67,6 @@ def get_imported_libs(project_root='.'):
         try:
             with open(py_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            # 匹配 import xxx 或 from xxx import yyy
             matches = re.findall(r'^(?:from|import)\s+([a-zA-Z0-9_]+)', content, re.MULTILINE)
             for m in matches:
                 if m not in STDLIB and not m.startswith('_'):
@@ -71,20 +75,69 @@ def get_imported_libs(project_root='.'):
             continue
     return imported
 
+def upgrade_pip_and_all_packages(mirror=None):
+    """升级 pip 以及所有已安装的第三方库"""
+    print("=" * 60)
+    print("开始升级 pip 和所有已安装的第三方库...")
+    print("=" * 60)
+
+    # 1. 升级 pip 自身
+    pip_cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip']
+    if mirror:
+        pip_cmd.extend(['-i', mirror])
+    try:
+        subprocess.check_call(pip_cmd)
+        print("✓ pip 升级成功")
+    except subprocess.CalledProcessError as e:
+        print(f"✗ pip 升级失败: {e}")
+
+    # 2. 获取所有已安装的第三方库（排除标准库、setuptools、wheel、pip 本身等）
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'list', '--format=freeze'],
+            capture_output=True, text=True, check=True
+        )
+        installed_packages = []
+        for line in result.stdout.splitlines():
+            pkg_name = line.split('==')[0].strip()
+            # 跳过一些基础包，避免冲突
+            if pkg_name.lower() in ('pip', 'setuptools', 'wheel', 'distribute'):
+                continue
+            installed_packages.append(pkg_name)
+        print(f"发现 {len(installed_packages)} 个第三方库，开始逐个升级...")
+    except subprocess.CalledProcessError as e:
+        print(f"✗ 获取已安装列表失败: {e}")
+        return
+
+    # 3. 逐个升级（若指定镜像则使用）
+    success_count = 0
+    fail_count = 0
+    for pkg in installed_packages:
+        print(f"  升级 {pkg} ...", end=f" 已完成 {success_count + fail_count} ")
+        cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade']
+        if mirror:
+            cmd.extend(['-i', mirror])
+        cmd.append(pkg)
+        try:
+            subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("✓")
+            success_count += 1
+        except subprocess.CalledProcessError:
+            print("✗")
+            fail_count += 1
+
+    print(f"升级完成: 成功 {success_count} 个，失败 {fail_count} 个")
+    return success_count, fail_count
+
 def check_and_install(packages, mirror=None):
-    """
-    检查每个包是否已安装，若缺失则通过 pip 安装。
-    返回 (已安装列表, 缺失并已安装列表, 失败列表)
-    """
     installed = []
     missing = []
     failed = []
 
     print("=" * 60)
-    print("开始检查依赖库...")
+    print("开始检查依赖库是否完整安装...")
     print("=" * 60)
 
-    # 映射包名到实际 pip 包名（如 scikit-learn 对应 sklearn）
     pip_name_map = {
         'sklearn': 'scikit-learn',
         'cvxpy': 'cvxpy',
@@ -96,6 +149,12 @@ def check_and_install(packages, mirror=None):
         'scipy': 'scipy',
         'matplotlib': 'matplotlib',
         'tabulate': 'tabulate',
+        'pandas_market_calendars': 'pandas_market_calendars',
+        'yaml': 'pyyaml',
+        'requests': 'requests',
+        'pyarrow': 'pyarrow',
+        'akshare': 'akshare',      # 新增
+        'baostock': 'baostock',    # 新增
     }
 
     for pkg in packages:
@@ -124,13 +183,22 @@ def check_and_install(packages, mirror=None):
     return installed, missing, failed
 
 def main():
-    parser = argparse.ArgumentParser(description='Quant-Ultra 依赖自动安装')
+    parser = argparse.ArgumentParser(description='Quant-Ultra 依赖自动安装（增强版）')
     parser.add_argument('--mirror', type=str, default=None,
                         help='指定 pip 镜像源，如 https://pypi.tuna.tsinghua.edu.cn/simple')
     parser.add_argument('--scan', action='store_true',
                         help='扫描项目代码自动识别依赖（推荐）')
+    parser.add_argument('--no-upgrade', action='store_true',
+                        help='跳过全局 pip 和所有库的升级（默认会进行升级）')
     args = parser.parse_args()
 
+    # 1. 升级 pip 和所有已安装库（除非用户明确跳过）
+    if not args.no_upgrade:
+        upgrade_pip_and_all_packages(args.mirror)
+    else:
+        print("已跳过全局升级（--no-upgrade）")
+
+    # 2. 确定需要检查的包列表
     if args.scan:
         print("正在扫描项目源代码中的导入...")
         libs = get_imported_libs()
@@ -141,6 +209,7 @@ def main():
 
     print(f"将检查以下库: {', '.join(packages)}")
 
+    # 3. 检查并安装缺失的库
     installed, missing, failed = check_and_install(packages, args.mirror)
 
     print("\n" + "=" * 60)
