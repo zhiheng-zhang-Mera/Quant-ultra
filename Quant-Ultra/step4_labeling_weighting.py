@@ -29,16 +29,10 @@ def fetch_borrowable_stocks(context: dict, trade_date: pd.Timestamp) -> Set[str]
     """
     从 AkShare 获取指定交易日有融券余量的股票代码集合。
     若接口失败或数据缺失，按规范降级为"全部不可用"，并记录审计事件。
-
-    规范引用：
-        Final-Flow.md 步骤 4.1：
-        "若 T 日无融券券源库存，强制将 -1 信号就地重写为 0。"
-        "数据缺失默认残值"降级机制同样适用于融券数据缺失场景。
     """
     audit_logger = context.get("audit_logger")
     try:
         import akshare as ak
-        # 注意：stock_borrow_analysis 需要日期格式为 "YYYYMMDD"
         date_str = trade_date.strftime("%Y%m%d")
         df = ak.stock_borrow_analysis(date=date_str)
         if df.empty:
@@ -51,7 +45,6 @@ def fetch_borrowable_stocks(context: dict, trade_date: pd.Timestamp) -> Set[str]
                 })
             return set()
 
-        # 筛选融券余量 > 0 的标的，并转换为标准带后缀代码
         df = df[df['融券余量'] > 0]
         codes = df['代码'].astype(str).tolist()
         result = set()
@@ -62,7 +55,6 @@ def fetch_borrowable_stocks(context: dict, trade_date: pd.Timestamp) -> Set[str]
                 result.add(f"{c}.SH")
             elif c.startswith('0') or c.startswith('3'):
                 result.add(f"{c}.SZ")
-            # 北交所(8开头)一般无融券，忽略
         logger.info(f"获取融券可用标的: {len(result)} 只（日期: {date_str}）")
         return result
 
@@ -91,10 +83,10 @@ def execute(pipeline_context: dict) -> dict:
     """
     Phase 4 主入口。
     期望上下文中已包含:
-        - config: 配置字典（含 lambda_decay, vol_window, threshold_multiplier）
+        - config: 配置字典（含 lambda_decay, vol_window, threshold_multiplier, min_vol_obs）
         - data_bus: PITDataBus 实例
         - slices: 包含 'Train-A' 日期列表
-        - assets: 待处理的资产列表（可选，若缺失则从 data_bus 获取全量）
+        - assets: 待处理的资产列表（可选）
         - audit_logger: 审计日志记录器
     """
     logger.info("=" * 60)
@@ -111,19 +103,18 @@ def execute(pipeline_context: dict) -> dict:
     if not train_dates_raw:
         raise ValueError("❌ Train-A 切片为空，请先执行 Phase 2 切片划分。")
 
-    # 转换为 Pandas DatetimeIndex，用于高效向量化索引
     train_dates = pd.DatetimeIndex(train_dates_raw).tz_localize(None)
 
     # 从配置读取超参（带默认值）
     lambda_decay = config.get("lambda_decay", 0.01)
     vol_window = config.get("vol_window", 20)
     threshold_multiplier = config.get("threshold_multiplier", 0.5)
-    min_valid_obs = config.get("min_vol_obs", 5)  # 波动率计算最少有效样本
+    min_valid_obs = config.get("min_vol_obs", 5)
 
     logger.info(f"配置参数: λ={lambda_decay}, vol_window={vol_window}, "
-                f"threshold_multiplier={threshold_multiplier}")
+                f"threshold_multiplier={threshold_multiplier}, min_vol_obs={min_valid_obs}")
 
-    # 获取标的池（若上下文未提供则全量拉取）
+    # 获取标的池
     assets = pipeline_context.get("assets")
     if not assets:
         logger.info("上下文中无 assets，从数据总线全量获取")
@@ -131,30 +122,21 @@ def execute(pipeline_context: dict) -> dict:
         pipeline_context["assets"] = assets
     logger.info(f"标的池规模: {len(assets)} 只")
 
-    # 2. 获取融券可用性（以 Train-A 最后一天作为基准，实际业务中可每日动态）
-    #   注：若策略需要每日精确融券动态，可在循环中调用，但需注意 API 频率。
-    #   此处采用规范建议：以区间末态可用性作为近似，降低外部请求压力。
-    #   更严格的实现可扩展为按日查询并缓存。
+    # 2. 获取融券可用性（以 Train-A 最后一天为基准）
     trade_date_ref = train_dates[-1]
     borrowable_set = fetch_borrowable_stocks(pipeline_context, trade_date_ref)
     logger.info(f"融券可用标的数量: {len(borrowable_set)}")
 
-    # 3. 批量计算标签（向量化）
-    #    数据结构：对于每只资产，取出其全历史价格序列，对齐到 Train-A 日期网格
-    y_clf_all = {}   # key: (date, asset) -> label
-    y_reg_all = {}   # key: (date, asset) -> return
-
-    # 用于后续权重计算的日期范围
+    # 3. 批量计算标签
+    y_clf_all = {}
+    y_reg_all = {}
     T_max = train_dates[-1]
 
-    # 为了提升性能，我们按资产逐个处理
     processed_count = 0
     skipped_no_data = 0
 
     for sym in assets:
-        # 加载资产历史（实际仅取 Train-A 区间前后少量扩展，PIT总线内部有缓存）
         try:
-            # 为防边界效应，前后多取 30 个交易日，便于计算滚动波动率
             start_dt = train_dates[0] - pd.Timedelta(days=60)
             end_dt = train_dates[-1] + pd.Timedelta(days=5)
             df = bus.load_asset_history(
@@ -171,67 +153,44 @@ def execute(pipeline_context: dict) -> dict:
             skipped_no_data += 1
             continue
 
-        # 提取全收益价格序列（前复权）
-        # 注意：df index 是日期，可能不连续，需 reindex 到目标日期网格
         price_series = df['total_return_price']
-
-        # 重索引到 Train-A 日期网格，前向填充（停牌时维持最新价，符合 PIT）
         prices = price_series.reindex(train_dates, method='ffill')
 
-        # 检查是否有足够有效数据
         valid_mask = prices.notna()
         if valid_mask.sum() < 2:
             skipped_no_data += 1
             continue
 
-        # 4.1 计算远期收益率 y_reg (次日对数收益)
-        #      T+1 价格用 shift(-1) 表示未来，但最后一天无未来值，故 shift 后为 NaN
+        # 远期收益
         prices_t1 = prices.shift(-1)
         y_reg = np.log(prices_t1 / prices)
 
-        # 4.2 计算动态波动率（滚动窗口）
-        #      日收益率序列
+        # 波动率
         daily_ret = prices.pct_change()
-        #      滚动标准差（年化用于三屏障，规范未要求年化，直接用日波动率 * 乘数）
         rolling_vol = daily_ret.rolling(window=vol_window, min_periods=min_valid_obs).std()
-
-        # 若波动率缺失（上市初期），用全局中位数替代（符合规范"不足50个样本降级"精神）
         global_vol_median = rolling_vol.median()
         if pd.isna(global_vol_median) or global_vol_median == 0:
-            global_vol_median = 0.02  # 绝对保底（约2%日波动）
-
+            global_vol_median = 0.02
         rolling_vol_filled = rolling_vol.fillna(global_vol_median)
-
-        # 三屏障阈值
         threshold = rolling_vol_filled * threshold_multiplier
 
-        # 4.3 生成方向标签 y_clf
-        #      vectorized assignment
+        # 方向标签
         y_clf = np.zeros(len(train_dates), dtype=np.int8)
-
-        # 多头信号：y_reg >= +threshold
         long_mask = (y_reg >= threshold)
         y_clf[long_mask] = 1
-
-        # 空头信号：y_reg <= -threshold
         short_mask = (y_reg <= -threshold)
-
-        # 融券约束：仅当 sym 在 borrowable_set 中才允许 -1
         if sym in borrowable_set:
             y_clf[short_mask] = -1
         else:
-            # 若无融券，空头信号置0（规范 4.1）
             y_clf[short_mask] = 0
-
-        # 对于 y_reg 或 threshold 本身为 NaN 的（如最后一天），强制置0
         invalid_mask = y_reg.isna() | threshold.isna()
         y_clf[invalid_mask] = 0
 
-        # 4.4 存储结果到字典（仅保留非 NaN 的有效 y_reg）
+        # 存储
         for i, d in enumerate(train_dates):
             y_reg_val = y_reg.iloc[i]
             if pd.isna(y_reg_val):
-                continue  # 无远期价格，跳过（如最后一天）
+                continue
             key = (d, sym)
             y_reg_all[key] = float(y_reg_val)
             y_clf_all[key] = int(y_clf[i])
@@ -243,19 +202,16 @@ def execute(pipeline_context: dict) -> dict:
     logger.info(f"✅ 标签生成完成。有效标的: {processed_count}，无数据跳过: {skipped_no_data}")
     logger.info(f"总样本数: {len(y_reg_all)}")
 
-    # 5. 计算样本时间衰减权重（规范 4.2）
+    # 5. 计算样本时间衰减权重
     logger.info("计算指数时间衰减权重...")
     sample_weights = {}
     lambda_ = lambda_decay
-
-    # 将 T_max 转为 datetime 计算天数差
     if isinstance(T_max, pd.Timestamp):
         t_max_dt = T_max.to_pydatetime()
     else:
         t_max_dt = T_max
 
     for (date, sym), _ in y_reg_all.items():
-        # date 可能是 Timestamp 或 datetime
         if isinstance(date, pd.Timestamp):
             date_dt = date.to_pydatetime()
         else:
@@ -286,17 +242,12 @@ def execute(pipeline_context: dict) -> dict:
     pipeline_context["borrowable_stocks"] = borrowable_set
     pipeline_context["labeling_ready"] = True
 
-    # 上报阶段完成状态
     pipeline_context["_phase_status"] = pipeline_context.get("_phase_status", {})
     pipeline_context["_phase_status"]["step4_labeling_weighting"] = "success"
 
     return pipeline_context
 
 
-# ============================================================
-# （可选）独立运行测试入口（调试用）
-# ============================================================
 if __name__ == "__main__":
-    # 仅供本模块自测，实际运行由 main.py 驱动
     logging.basicConfig(level=logging.INFO)
     logger.info("本模块不作为独立入口，请通过主调度器运行。")
