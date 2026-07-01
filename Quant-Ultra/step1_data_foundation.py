@@ -1,6 +1,6 @@
 """
 Phase 1: Asset Screening and Basic Data Cleaning (Data Foundation)
-Now uses the unified PITDataBus from main.py, no internal redefinition.
+Optimized with local caching, single BaoStock login, merged data loading, and progress display.
 """
 import numpy as np
 import pandas as pd
@@ -11,10 +11,14 @@ import logging
 import akshare as ak
 import baostock as bs
 import pandas_market_calendars as mcal
+from pathlib import Path
 
 logger = logging.getLogger("DataFoundation")
 
-# 全局配置（与 main.py 保持一致）
+PROJECT_ROOT = Path(__file__).parent.resolve()
+DATA_CACHE = PROJECT_ROOT / "data_cache"
+DATA_CACHE.mkdir(exist_ok=True)
+
 CONFIG = {
     "ADV_WINDOW": 20,
     "MIN_ADV_THRESHOLD": 1e7,
@@ -25,9 +29,21 @@ CONFIG = {
     "DEFAULT_RESIDUAL_RATE": 0.0,
     "TIMEZONE": "Asia/Shanghai",
     "MS_PRECISION": True,
+    "CACHE_EXPIRE_DAYS": 7,
 }
 
-# 交易日历服务（独立，可保留）
+
+def print_progress(current, total, symbol=None, extra=""):
+    """在控制台同一行更新进度（不写入日志文件）"""
+    if symbol:
+        msg = f"处理股票: {symbol} ({current}/{total}) {extra}"
+    else:
+        msg = f"进度: {current}/{total} {extra}"
+    print(f"\r{msg:<80}", end='', flush=True)
+    if current == total:
+        print()  # 换行
+
+
 class TradingCalendar:
     def __init__(self, start_date: datetime, end_date: datetime):
         self.start = start_date
@@ -54,7 +70,6 @@ class TradingCalendar:
                 return dates
         except Exception:
             pass
-        # 兜底
         dates = []
         current = self.start
         while current <= self.end:
@@ -66,8 +81,90 @@ class TradingCalendar:
     def get_trading_days(self) -> List[datetime]:
         return self._calendar
 
-# 数据获取辅助（可保留原有 DataFetcher）
+
 class DataFetcher:
+    _bs_logged = False   # 类变量，确保只登录一次
+
+    @staticmethod
+    def _ensure_bs_login():
+        if not DataFetcher._bs_logged:
+            bs.login()
+            DataFetcher._bs_logged = True
+
+    @staticmethod
+    def _get_cache_path(symbol: str, start_date: str, end_date: str) -> Path:
+        return DATA_CACHE / f"{symbol}_{start_date}_{end_date}.parquet"
+
+    @staticmethod
+    def _is_cache_valid(cache_path: Path) -> bool:
+        if not cache_path.exists():
+            return False
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        if (datetime.now() - mtime).days > CONFIG.get("CACHE_EXPIRE_DAYS", 7):
+            return False
+        return True
+
+    @staticmethod
+    def get_historical_daily(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """优先缓存 → AkShare → BaoStock（仅登录一次）"""
+        cache_path = DataFetcher._get_cache_path(symbol, start_date, end_date)
+        if DataFetcher._is_cache_valid(cache_path):
+            try:
+                df = pd.read_parquet(cache_path)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                logger.warning(f"读取缓存失败 {cache_path}: {e}")
+
+        code = symbol.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+        # AkShare
+        try:
+            df = ak.stock_zh_a_hist(symbol=code, adjust='qfq',
+                                    start_date=start_date.replace('-', ''),
+                                    end_date=end_date.replace('-', ''))
+            if not df.empty:
+                df.rename(columns={'日期': 'date', '开盘': 'open', '收盘': 'close',
+                                   '最高': 'high', '最低': 'low', '成交量': 'volume',
+                                   '成交额': 'amount'}, inplace=True, errors='ignore')
+                df['symbol'] = symbol
+                for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['date'] = pd.to_datetime(df['date'])
+                df.to_parquet(cache_path, index=False)
+                return df
+            else:
+                raise Exception("AkShare 返回空数据")
+        except Exception as e:
+            logger.debug(f"AkShare 获取 {symbol} 失败，尝试 BaoStock: {e}")
+
+        # BaoStock 降级
+        try:
+            DataFetcher._ensure_bs_login()
+            bs_code = f"sh.{code}" if symbol.endswith('.SH') or symbol.startswith('6') else f"sz.{code}"
+            rs = bs.query_history_k_data_plus(bs_code, "date,open,high,low,close,volume,amount",
+                                              start_date=start_date, end_date=end_date,
+                                              frequency="d", adjustflag="2")
+            data = []
+            while rs.next():
+                data.append(rs.get_row_data())
+            if data:
+                df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+                df['symbol'] = symbol
+                for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df['date'] = pd.to_datetime(df['date'])
+                df.to_parquet(cache_path, index=False)
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"BaoStock 获取 {symbol} 失败: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def get_dividend_info(symbol: str) -> pd.DataFrame:
+        return pd.DataFrame()
+
     @staticmethod
     def get_all_stocks() -> pd.DataFrame:
         try:
@@ -76,12 +173,11 @@ class DataFetcher:
             return df
         except Exception:
             try:
-                bs.login()
+                DataFetcher._ensure_bs_login()
                 rs = bs.query_all_stock()
                 data = []
                 while rs.next():
                     data.append(rs.get_row_data())
-                bs.logout()
                 df = pd.DataFrame(data, columns=rs.fields)
                 df.rename(columns={'code': 'symbol'}, inplace=True)
                 return df
@@ -116,43 +212,9 @@ class DataFetcher:
             return '其他'
 
     @staticmethod
-    def get_historical_daily(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-        code = symbol.replace('.SH', '').replace('.SZ', '')
-        try:
-            df = ak.stock_zh_a_hist(symbol=code, adjust='qfq',
-                                    start_date=start_date.replace('-', ''),
-                                    end_date=end_date.replace('-', ''))
-            if df.empty:
-                raise Exception("empty")
-            df.rename(columns={'日期': 'date', '开盘': 'open', '收盘': 'close',
-                               '最高': 'high', '最低': 'low', '成交量': 'volume',
-                               '成交额': 'amount'}, inplace=True, errors='ignore')
-            df['symbol'] = symbol
-            return df
-        except Exception:
-            try:
-                bs.login()
-                bs_code = f"sh.{symbol}" if symbol.startswith('6') else f"sz.{symbol}"
-                rs = bs.query_history_k_data_plus(bs_code, "date,open,high,low,close,volume,amount",
-                                                  start_date=start_date, end_date=end_date,
-                                                  frequency="d", adjustflag="2")
-                data = []
-                while rs.next():
-                    data.append(rs.get_row_data())
-                bs.logout()
-                if data:
-                    df = pd.DataFrame(data, columns=["date","open","high","low","close","volume","amount"])
-                    df['symbol'] = symbol
-                    return df
-                else:
-                    return pd.DataFrame()
-            except Exception:
-                return pd.DataFrame()
-
-    @staticmethod
     def get_st_status(symbol: str) -> bool:
         try:
-            bs.login()
+            DataFetcher._ensure_bs_login()
             bs_code = f"sh.{symbol}" if symbol.startswith('6') else f"sz.{symbol}"
             end = datetime.now().strftime('%Y-%m-%d')
             start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -160,38 +222,47 @@ class DataFetcher:
             data = []
             while rs.next():
                 data.append(rs.get_row_data())
-            bs.logout()
             if data:
                 return data[-1][1] == '1'
             return False
         except Exception:
             return False
 
-# 步骤实现（使用传入的 bus）
-def step_1_1_screening(context: dict, bus, calendar: TradingCalendar):
-    print("[Step 1.1] Asset screening and capacity estimation")
+
+# ==================== Phase 1 步骤函数 ====================
+
+def step_1_1_screening(context: dict, bus):
+    print("[Step 1.1] Asset screening and capacity estimation (with caching)")
     fetcher = DataFetcher()
     now = datetime.now(bus._tz)
+
     all_stocks_df = fetcher.get_all_stocks()
     if all_stocks_df.empty:
         context['assets'] = []
         return
+
+    end_date = now.strftime('%Y-%m-%d')
+    start_date = (now - timedelta(days=400)).strftime('%Y-%m-%d')
+
     raw_assets = []
-    for _, row in all_stocks_df.iterrows():
+    total = len(all_stocks_df)
+
+    for idx, (_, row) in enumerate(all_stocks_df.iterrows(), 1):
         symbol = row['symbol']
         if not symbol[0].isdigit():
             continue
-        basic_info = fetcher.get_stock_basic_info(symbol)
-        start_date = (now - timedelta(days=CONFIG["ADV_WINDOW"] * 3)).strftime('%Y-%m-%d')
-        end_date = now.strftime('%Y-%m-%d')
+        print_progress(idx, total, symbol, "下载/读取数据")
+
         hist_df = fetcher.get_historical_daily(symbol, start_date, end_date)
         if hist_df.empty:
             continue
-        hist_df['date'] = pd.to_datetime(hist_df['date'])
-        hist_df = hist_df.sort_values('date')
+
         adv_series = hist_df['amount'].tail(CONFIG["ADV_WINDOW"])
         adv = adv_series.mean() if len(adv_series) >= CONFIG["ADV_WINDOW"] * 0.5 else 0
-        bus.append_atom(symbol, now, adv, "adv", now - timedelta(days=1))
+        if adv == 0:
+            continue
+
+        basic_info = fetcher.get_stock_basic_info(symbol)
         list_date_str = basic_info.get('list_date')
         if list_date_str and isinstance(list_date_str, str):
             try:
@@ -200,9 +271,21 @@ def step_1_1_screening(context: dict, bus, calendar: TradingCalendar):
                 list_date = datetime(2000, 1, 1, tzinfo=bus._tz)
         else:
             list_date = datetime(2000, 1, 1, tzinfo=bus._tz)
+
+        bus.append_atom(symbol, now, adv, "adv", now - timedelta(days=1))
         bus.append_atom(symbol, now, list_date, "listing_date", now)
         bus.append_atom(symbol, now, basic_info.get('board', '未知'), "board", now)
+
         raw_assets.append({'symbol': symbol, 'list_date': list_date, 'adv': adv})
+
+        if 'asset_histories' not in context:
+            context['asset_histories'] = {}
+        context['asset_histories'][symbol] = hist_df
+
+        if idx % 100 == 0:
+            logger.info(f"已处理 {idx}/{total} 只股票")
+
+    # 筛选
     filtered = []
     for info in raw_assets:
         sym = info['symbol']
@@ -213,8 +296,9 @@ def step_1_1_screening(context: dict, bus, calendar: TradingCalendar):
         if days_since_list < CONFIG["IPO_SAFETY_DAYS"]:
             continue
         filtered.append(sym)
+
     context['assets'] = filtered
-    # 容量估算
+
     aum_capacity = float('inf')
     for sym in filtered:
         adv = bus.query_by_pit(sym, now, "adv")
@@ -226,34 +310,46 @@ def step_1_1_screening(context: dict, bus, calendar: TradingCalendar):
         aum_capacity = 0
     context['baseline_aum_limit'] = aum_capacity
     context['adv_data'] = {sym: bus.query_by_pit(sym, now, "adv") for sym in filtered}
-    print(f"[筛选] 通过初筛的资产: {len(filtered)} 只，AUM上限: {aum_capacity:,.0f}")
+
+    print(f"\n[筛选] 通过初筛的资产: {len(filtered)} 只，AUM上限: {aum_capacity:,.0f}")
+
 
 def step_1_2_survivorship_and_returns(context: dict, bus, audit):
-    print("[Step 1.2] Total return computation")
+    print("[Step 1.2] Total return computation with dividends (reusing cached data)")
     assets = context.get('assets', [])
     now = datetime.now(bus._tz)
-    fetcher = DataFetcher()
-    for sym in assets:
-        try:
-            start_date = (now - timedelta(days=400)).strftime('%Y-%m-%d')
-            end_date = now.strftime('%Y-%m-%d')
-            hist_df = fetcher.get_historical_daily(sym, start_date, end_date)
-            if hist_df.empty:
+    asset_histories = context.get('asset_histories', {})
+
+    total = len(assets)
+    for idx, sym in enumerate(assets, 1):
+        print_progress(idx, total, sym, "写入全收益价格")
+        hist_df = asset_histories.get(sym)
+        if hist_df is None or hist_df.empty:
+            try:
+                start_date = (now - timedelta(days=400)).strftime('%Y-%m-%d')
+                end_date = now.strftime('%Y-%m-%d')
+                hist_df = DataFetcher.get_historical_daily(sym, start_date, end_date)
+            except Exception as e:
+                logger.warning(f"重新下载 {sym} 失败: {e}")
                 continue
-            for _, row in hist_df.iterrows():
-                dt = pd.to_datetime(row['date']).to_pydatetime().replace(tzinfo=bus._tz)
-                price = float(row['close'])
-                bus.append_atom(sym, dt, price, "total_return_price", dt)
-        except Exception as e:
-            logger.warning(f"处理 {sym} 全收益率失败: {e}")
-    print("[完成] 全收益率价格序列已生成")
+
+        for _, row in hist_df.iterrows():
+            dt = pd.to_datetime(row['date']).to_pydatetime().replace(tzinfo=bus._tz)
+            price = float(row['close'])
+            bus.append_atom(sym, dt, price, "total_return_price", dt)
+
+        audit.log_event("TOTAL_RETURN_WARNING", {"symbol": sym, "msg": "Using adjusted close, no dividend reinvestment"})
+    print()  # 换行
+
 
 def step_1_3_trading_status_mapping(context: dict, bus):
     print("[Step 1.3] Trading status mapping")
     assets = context.get('assets', [])
     now = datetime.now(bus._tz)
     fetcher = DataFetcher()
-    for sym in assets:
+    total = len(assets)
+    for idx, sym in enumerate(assets, 1):
+        print_progress(idx, total, sym, "映射涨跌停")
         try:
             board = bus.query_by_pit(sym, now, "board")
             if board is None:
@@ -280,26 +376,26 @@ def step_1_3_trading_status_mapping(context: dict, bus):
             bus.append_atom(sym, now, mapping, "trading_status_mapping", now)
         except Exception as e:
             logger.warning(f"处理 {sym} 交易状态映射失败: {e}")
+    print()
+
 
 def step_1_4_calendar_and_timezone(context: dict, bus):
     print("[Step 1.4] Trading calendar validation")
-    # 已经由 main 预加载，此处仅校验
     if 'trading_days_dt' not in context or not context['trading_days_dt']:
         raise RuntimeError("交易日历未加载")
     print(f"[完成] 交易日历共 {len(context['trading_days_dt'])} 个交易日")
 
+
 def execute(pipeline_context: dict):
     print("\n[Phase 1] 开始数据基础层构建...")
-    bus = pipeline_context['data_bus']          # 使用主调度器传入的统一 bus
+    bus = pipeline_context['data_bus']
     audit = pipeline_context['audit_logger']
-    # 执行子步骤
+
     step_1_4_calendar_and_timezone(pipeline_context, bus)
-    # 创建日历用于筛选（可以复用 bus 中的日历，但这里用 TradingCalendar 独立）
-    now = datetime.now(bus._tz)
-    cal = TradingCalendar(now - timedelta(days=400), now)
-    step_1_1_screening(pipeline_context, bus, cal)
+    step_1_1_screening(pipeline_context, bus)
     step_1_2_survivorship_and_returns(pipeline_context, bus, audit)
     step_1_3_trading_status_mapping(pipeline_context, bus)
+
     pipeline_context['data_foundation_ready'] = True
     print(f"[Phase 1] 完成，资产池 {len(pipeline_context.get('assets', []))} 只")
     return pipeline_context

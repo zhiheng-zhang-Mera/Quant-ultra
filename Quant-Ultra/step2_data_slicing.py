@@ -18,6 +18,7 @@ def step_2_1_moving_window_slicing(context: dict):
     """
     核心切分逻辑：考虑 Purge 与 Embargo 的硬性截断。
     规范强制 Embargo >= max(holding_period, significant_autocorrelation_lag)
+    同时支持从配置中读取自定义最小禁运区（embargo_min）。
     """
     logger.info("[Step 2.1] 执行多段式物理窗口切分（含 Purge & Embargo）")
 
@@ -28,6 +29,7 @@ def step_2_1_moving_window_slicing(context: dict):
     config = context.get('config', {})
     slicing_ratios = config.get('slicing', {}).get('ratios', [0.50, 0.60, 0.70, 0.85])
     holding_period = context.get('holding_period', config.get('holding_period', 5))
+    embargo_min = config.get('embargo_min', 5)   # 从配置读取最小禁运区，默认为5
 
     data_bus = context.get('data_bus')
     audit_logger = context.get('audit_logger')
@@ -38,17 +40,14 @@ def step_2_1_moving_window_slicing(context: dict):
     max_lag = 1  # 保底
     try:
         # 使用数据总线获取沪深300指数或标池平均收益估算市场记忆性
-        # 取前 60% 交易日作为样本
         cutoff_idx = int(len(trading_days_dt) * 0.6)
         if cutoff_idx > 20:
             sample_days = trading_days_dt[:cutoff_idx]
             start_dt = sample_days[0].strftime("%Y-%m-%d")
             end_dt = sample_days[-1].strftime("%Y-%m-%d")
 
-            # 修正：使用 fetch_benchmark_prices（原 query_benchmark_prices 不存在）
             benchmark_prices = data_bus.fetch_benchmark_prices(start_dt, end_dt)
             if benchmark_prices is not None and len(benchmark_prices) > 20:
-                # 对齐到交易日（取交集）
                 common_dates = set(benchmark_prices.index) & set(sample_days)
                 if common_dates:
                     aligned = benchmark_prices.loc[sorted(common_dates)]
@@ -82,11 +81,11 @@ def step_2_1_moving_window_slicing(context: dict):
         if audit_logger:
             audit_logger.log_event("ACF_CALC_FAILED", {"error": str(e), "fallback": 1})
 
-    # 2. 刚性确定禁运区
-    embargo_window = max(holding_period, max_lag)
+    # 2. 刚性确定禁运区（取持有期、显著滞后、配置最小禁运区三者的最大值）
+    embargo_window = max(holding_period, max_lag, embargo_min)
     context['embargo_window'] = embargo_window
     context['holding_period'] = holding_period
-    logger.info(f"持有期: {holding_period}, 显著滞后: {max_lag}, 最终禁运窗口: {embargo_window}")
+    logger.info(f"持有期: {holding_period}, 显著滞后: {max_lag}, 配置最小禁运区: {embargo_min}, 最终禁运窗口: {embargo_window}")
 
     # 3. 五段式切分（带 Purge/Embargo 截断）
     n = len(trading_days_dt)
@@ -97,11 +96,9 @@ def step_2_1_moving_window_slicing(context: dict):
     test_end = n
 
     # 应用截断：左侧截掉 embargo_window，右侧截掉 embargo_window
-    # Train-A: 0 ~ raw_a_end - embargo
     a_end = max(0, raw_a_end - embargo_window)
     slices = {}
 
-    # Train-B1: raw_a_end + embargo ~ raw_b1_end - embargo
     b1_start = min(raw_a_end + embargo_window, raw_b1_end)
     b1_end = max(0, raw_b1_end - embargo_window)
     slices["Train-A"] = trading_days_dt[0:a_end]
@@ -161,14 +158,12 @@ def step_2_2_purge_and_embargo_validation(context: dict):
         last_left = left[-1]
         first_right = right[0]
 
-        # 计算交易日索引差（这才是真正的隔离间距）
         try:
             idx_left = trading_days_dt.index(last_left)
             idx_right = trading_days_dt.index(first_right)
-            delta_days = idx_right - idx_left  # 交易日数
+            delta_days = idx_right - idx_left
         except ValueError:
-            # 若日期不在列表中，回退到日历日粗略估算
-            delta_days = (first_right - last_left).days // 7 * 5  # 粗略
+            delta_days = (first_right - last_left).days // 7 * 5  # 粗略估算
 
         if delta_days < embargo_window:
             err_msg = (f"隔离带坍塌！{keys[i]} 与 {keys[i+1]} 交界处间隔仅 {delta_days} 个交易日，"
@@ -194,7 +189,6 @@ def step_2_2_purge_and_embargo_validation(context: dict):
 def execute(pipeline_context: dict):
     # 确保交易日历存在
     if 'trading_days_dt' not in pipeline_context or not pipeline_context['trading_days_dt']:
-        # 尝试从 data_bus 重建（但 data_bus 已持有日历）
         cal = pipeline_context.get('data_bus').manager.fetch_trading_calendar(2010, 2026)
         pipeline_context['trading_days_dt'] = cal.tz_localize(pytz.timezone("Asia/Shanghai")).tolist()
 
