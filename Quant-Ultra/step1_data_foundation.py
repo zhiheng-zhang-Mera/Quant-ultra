@@ -45,13 +45,14 @@ CONFIG = {
 
 def print_progress(current, total, symbol=None, extra=""):
     """保留原有简单进度打印（用于非并发场景）"""
+    """在控制台同一行更新进度（不写入日志文件）"""
     if symbol:
         msg = f"处理股票: {symbol} ({current}/{total}) {extra}"
     else:
         msg = f"进度: {current}/{total} {extra}"
     print(f"\r{msg:<80}", end='', flush=True)
     if current == total:
-        print()
+        print()  # 换行
 
 
 class TradingCalendar:
@@ -784,6 +785,8 @@ def step_1_3_trading_status_mapping(context: dict, bus):
             all_status.append(record)
         except Exception as e:
             logger.warning(f"处理 {sym} 交易状态映射失败: {e}")
+    print()
+
 
     # 保存缓存
     if all_status:

@@ -383,7 +383,7 @@ class FreeDataSourceManager:
             except Exception as e:
                 self._logger.warning(f"BaoStock 获取交易日历异常: {e}")
 
-            # 3) pandas_market_calendars 降级
+            # 3) pandas_market_calendars 降级（需已安装）
             try:
                 import pandas_market_calendars as mcal
                 sse = mcal.get_calendar('SSE')
@@ -806,6 +806,7 @@ def run_pipeline(args):
 
     # 生成默认完整配置（包含所有可调参数）
     default_config = {
+        # 原有参数...
         "adv_window": 20,
         "min_adv_threshold": 1e7,
         "ipo_safety_days": 20,
@@ -814,12 +815,12 @@ def run_pipeline(args):
         "max_single_stock_weight": 0.05,
         "default_residual_rate": 0.0,
         "impact_alpha": 0.5,
-        "impact_kappa_base": 0.05,
-        "spread_lookback_days": 60,
+        "impact_kappa_base": 0.05,          # 基础冲击系数（用于自适应）
+        "spread_lookback_days": 60,         # 价差估计窗口
         "stock_cap_pct": 0.045,
-        "total_shares_source": "free_float",
+        "total_shares_source": "free_float", # 或 "total"
         "short_rate_default": 0.08/252,
-        "short_rate_source": "fixed",
+        "short_rate_source": "fixed",       # 或 "api"
         "tau_BL": 0.02,
         "omega_min": 1e-8,
         "omega_max": 0.01,
