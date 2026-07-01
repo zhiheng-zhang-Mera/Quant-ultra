@@ -9,23 +9,23 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 logger = logging.getLogger("Phase3")
 
 
 def _load_asset_data(data_manager, asset: str, start_date: str = "2010-01-01", end_date: str = None):
-    """
-    Load full historical OHLCV data for a single asset using the data manager.
-    Returns a DataFrame with columns: open, high, low, close, volume, amount
-    and derived columns: adv (daily amount), adv_ma20 (20-day rolling average of adv)
-    Index is DatetimeIndex (date).
-    """
     if end_date is None:
         end_date = datetime.now().strftime("%Y-%m-%d")
     df = data_manager.fetch_historical(asset, start_date, end_date)
     if df is None or df.empty:
         return None
     df.set_index("date", inplace=True)
+    # ---- 统一时区 ----
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('Asia/Shanghai')
+    # ---- 其余处理 ----
     for col in ["open", "high", "low", "close", "volume", "amount"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col])
@@ -200,7 +200,7 @@ def step_3_4_whitebox_feature_panel(context: dict):
 def execute(pipeline_context: dict):
     """
     Phase 3 main entry point.
-    Loads real OHLCV data for all assets and computes features.
+    Loads real OHLCV data for all assets using multithreading.
     """
     logger.info("=" * 60)
     logger.info("EXECUTING PHASE 3: POINT-IN-TIME SETUP")
@@ -214,21 +214,60 @@ def execute(pipeline_context: dict):
     data_manager = pipeline_context['data_bus'].manager
     assets = pipeline_context['assets']
     config = pipeline_context.get('config', {})
-    # 从配置读取起始年份（默认2010）
     start_year = config.get('data_start_year', 2010)
     start_date = f"{start_year}-01-01"
     end_date = datetime.now().strftime("%Y-%m-%d")
 
-    logger.info("Loading historical OHLCV data for all assets...")
+    # 并发加载参数（可从配置读取，默认 10 个线程）
+    max_workers = config.get('data_load_workers', 10)
+    progress_interval = config.get('data_load_progress_interval', 20)   # 每加载 N 只打印一次
+
+    logger.info(f"Loading historical OHLCV data for {len(assets)} assets "
+                f"using {max_workers} threads from {start_date} to {end_date}...")
+
     asset_ohlcv = {}
-    for sym in assets:
-        df = _load_asset_data(data_manager, sym, start_date, end_date)
-        if df is not None:
-            asset_ohlcv[sym] = df
-    logger.info(f"Loaded data for {len(asset_ohlcv)} assets out of {len(assets)}.")
+    failed_assets = []
+
+    # 加载单个资产的函数（捕获异常，避免单点失败）
+    def load_one(asset):
+        try:
+            df = _load_asset_data(data_manager, asset, start_date, end_date)
+            return asset, df
+        except Exception as e:
+            logger.warning(f"Failed to load {asset}: {e}")
+            return asset, None
+
+    # 提交所有任务
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_asset = {executor.submit(load_one, asset): asset for asset in assets}
+        completed = 0
+        total = len(assets)
+        start_time = time.time()
+
+        for future in as_completed(future_to_asset):
+            asset, df = future.result()
+            if df is not None and not df.empty:
+                asset_ohlcv[asset] = df
+            else:
+                failed_assets.append(asset)
+
+            completed += 1
+            # 每 progress_interval 个或全部完成时打印一次进度
+            if completed % progress_interval == 0 or completed == total:
+                elapsed = time.time() - start_time
+                rate = completed / elapsed if elapsed > 0 else 0
+                logger.info(f"Progress: {completed}/{total} assets loaded "
+                            f"({rate:.1f} assets/sec), "
+                            f"success: {len(asset_ohlcv)}, failed: {len(failed_assets)}")
+
+    logger.info(f"Finished loading. Success: {len(asset_ohlcv)}/{total}, "
+                f"failed: {len(failed_assets)}")
+    if failed_assets:
+        logger.info(f"Failed assets (first 10): {failed_assets[:10]}")
 
     pipeline_context['asset_ohlcv'] = asset_ohlcv
 
+    # 后续步骤不变
     step_3_1_online_regime_labels(pipeline_context)
     step_3_2_preserve_raw_prices(pipeline_context)
     step_3_3_cross_sectional_guard(pipeline_context)
