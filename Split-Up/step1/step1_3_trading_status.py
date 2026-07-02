@@ -1,5 +1,5 @@
 """
-Quant-Ultra Flow - Step 1.3: Trading Status & Price Boundary Mapping (Strict Priority Edition)
+Quant-Ultra Flow - Step 1.3: Trading Status & Price Boundary Mapping (Multi-Market Mechanism)
 """
 import logging
 import pandas as pd
@@ -27,7 +27,7 @@ def run_status_mapping(context: dict, data_bus, data_manager):
                         "board": row['board'], "is_st": row['is_st'], "days_listed": row['days_listed'],
                         "limit_up": row['limit_up'], "limit_down": row['limit_down'], "prev_close": row['prev_close']
                     }, "trading_status_mapping", dt)
-                logger.info("🛡️ 成功命中交易状态映射与边界控制快照缓存")
+                logger.info("🛡️ 成功命中双市场状态联动映射控制快照")
                 return
         except Exception:
             pass
@@ -81,7 +81,7 @@ def run_status_mapping(context: dict, data_bus, data_manager):
             logger.warning(f"⚠️ 优先级流转：尝试通过 {name} 获取 ST 池失败或无权限，自动向下轮询: {e}")
 
     all_status = []
-    for sym in tqdm(assets, desc="[生产控制: 涨跌停映射]", unit="只"):
+    for sym in tqdm(assets, desc="[多套涨跌幅联动映射]", unit="只"):
         try:
             code = sym.split('.')[0]
             is_st = code in st_codes
@@ -93,7 +93,14 @@ def run_status_mapping(context: dict, data_bus, data_manager):
             prev_date = now - timedelta(days=1)
             prev_price = data_bus.query_by_pit(sym, prev_date, "total_return_price") or 100.0
 
-            limit_ratio = 0.05 if is_st else (0.20 if board in ["科创板", "创业板"] else 0.10)
+            # ====================================================
+            # 多套涨跌幅多板联动联动映射控制核 (Flow-Pro 1.3)
+            # ====================================================
+            if board == "美股成分股":
+                # 海外成熟市场无名义涨跌停红线约束，自适应扩展安全防御安全边界
+                limit_ratio = 50.0  
+            else:
+                limit_ratio = 0.05 if is_st else (0.20 if board in ["科创板", "创业板"] else 0.10)
             
             mapping = {
                 "board": board, 
@@ -109,11 +116,11 @@ def run_status_mapping(context: dict, data_bus, data_manager):
             record.update({'symbol': sym, 'date': latest_trading_day})
             all_status.append(record)
         except Exception as e:
-            logger.warning(f"⚠️ 分析资产风控边界异常 {sym}: {e}")
+            logger.warning(f"⚠️ 分析资产风控联动边界异常 {sym}: {e}")
 
     if all_status:
         try:
             pd.DataFrame(all_status).to_parquet(cache_path, index=False)
-            logger.info("💾 交易状态控制字典已成功同步至持久化本地缓存")
+            logger.info("💾 联动控制字典同步至持久化本地缓存完毕")
         except Exception as e:
-            logger.warning(f"保存状态控制缓存失败: {e}")
+            logger.warning(f"保存边界映射失败: {e}")
