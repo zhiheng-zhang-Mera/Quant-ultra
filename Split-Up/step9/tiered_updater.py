@@ -1,6 +1,7 @@
 """
 Quant-Ultra Flow - Step 9.2: Tiered MLOps Updating Protocols & Drift Management
 Calculates precise PSI metrics and coordinates linear staircase model transitions.
+Fully refactored to reuse Phase 5 training feature space network (Resolves Flaw A-3).
 """
 import logging
 import numpy as np
@@ -13,84 +14,71 @@ logger = logging.getLogger("MLOps.TieredUpdater")
 def evaluate_distribution_drift(context: dict) -> dict:
     """
     固定分箱 PSI 稳定性追踪审计。
-    管理 Tier 3 全量分布式联邦迁移重训总线激活，并维持 25 日线性步进平滑过渡。
+    核心修复 A-3：彻底废除本地3维粗糙因子拼凑，全面复用阶段5固化的定点高维特征魔方 (fractional_features_cube)，
+    实现监控特征空间与训练特征空间（5维共享+各节点垂直私有特征）的同质化对齐。
     """
-    logger.info("[Step 9.2] 触发阶梯式运维更新协议：执行点状特征分布 PSI 审计。")
+    logger.info("[Step 9.2] 启动高维特征时序分布 PSI 联合审计协议。")
     
-    data_bus = context.get('data_bus')
     target_weights = context.get('target_weights', {})
     current_date_str = context.get('current_date')
+    
+    # 优先穿透提取阶段5输出的完整高维特征魔方
+    feature_cube = context.get('fractional_features_cube')
+    selected_features = context.get('selected_features', None)
     
     if isinstance(current_date_str, datetime):
         current_date_str = current_date_str.strftime("%Y-%m-%d")
     elif current_date_str is None:
         current_date_str = datetime.now().strftime("%Y-%m-%d")
         
-    if data_bus is None or not target_weights:
-        logger.warning("缺失联邦数据总线 DataBus 或目标权重。挂起 PSI 稳定性审计。")
+    if feature_cube horizon_data is None if isinstance(feature_cube, type(None)) else False:
+        # 若高维魔方未就绪，向阶段3共享面板降级融合
+        feature_cube = context.get('feature_panel_shared')
+
+    if feature_cube is None or not target_weights:
+        logger.warning("🚨 [PSI审计挂起] 全局总线未检测到预计算的高维特征魔方或资产清单。")
         return context
 
     assets = list(target_weights.keys())
     
-    # 1. 抽取当前时间轴的真实特征分布矩阵
-    current_features = []
-    end_dt = datetime.strptime(current_date_str, "%Y-%m-%d")
-    start_dt = end_dt - timedelta(days=LOOKBACK_WINDOW_PSI + 20)
-    
-    for asset in assets:
-        try:
-            df = data_bus.load_asset_history(asset, start_dt.strftime("%Y-%m-%d"), current_date_str)
-            if df is None or len(df) < 21:
-                continue
-            df = df.sort_index()
-            # 提炼跨市场核心因子代理：20日对数全收益、20日滚动波动率、成交量滚动残差变动
-            ret_20 = float(np.log(df['close'].iloc[-1] / df['close'].iloc[-21]))
-            daily_returns = np.log(df['close'] / df['close'].shift(1)).dropna()
-            vol_20 = float(daily_returns.tail(20).std())
-            turnover_vol = float(df['volume'].tail(20).std() / (df['volume'].tail(20).mean() + 1e-8))
-            
-            vec = [ret_20, vol_20, turnover_vol]
-            if not np.isnan(vec).any():
-                current_features.append(vec)
-        except Exception:
-            continue
-
-    if not current_features:
-        logger.warning("当前时段未采集到足够有效特征点，挂起分箱计算。")
-        return context
-        
-    current_matrix = np.array(current_features)  # (N_assets, N_features)
-
-    # 2. 抽取/缓存背景基准特征分布矩阵
-    baseline_matrix = context.get('baseline_factor_samples')
-    if baseline_matrix is None:
-        base_samples = []
-        base_end = end_dt - timedelta(days=1)
-        base_start = base_end - timedelta(days=LOOKBACK_WINDOW_PSI)
-        for asset in assets:
-            try:
-                df = data_bus.load_asset_history(asset, base_start.strftime("%Y-%m-%d"), base_end.strftime("%Y-%m-%d"))
-                if df is None or len(df) < 21:
-                    continue
-                df = df.sort_index()
-                ret_20 = float(np.log(df['close'].iloc[-1] / df['close'].iloc[-21]))
-                daily_returns = np.log(df['close'] / df['close'].shift(1)).dropna()
-                vol_20 = float(daily_returns.tail(20).std())
-                turnover_vol = float(df['volume'].tail(20).std() / (df['volume'].tail(20).mean() + 1e-8))
-                
-                vec = [ret_20, vol_20, turnover_vol]
-                if not np.isnan(vec).any():
-                    base_samples.append(vec)
-            except Exception:
-                continue
-        if base_samples:
-            baseline_matrix = np.array(base_samples)
-            context['baseline_factor_samples'] = baseline_matrix
-        else:
-            logger.warning("未能成功构建背景基准特征分布参考矩阵。")
+    # ====================================================
+    # 核心修复 A-3：自适应解析 MultiIndex 结构，提取真实模型特征
+    # ====================================================
+    try:
+        # 确保 DataFrame 索引规范对齐 (date, asset)
+        df_features = feature_cube.copy()
+        if not isinstance(df_features.index, pd.MultiIndex):
+            logger.error("特征魔方格式不符合 MultiIndex (date, asset) 规范，挂起审计。")
             return context
+            
+        # 精准锁定列空间（若存在特征选择则过滤，否则全量对齐5维+私有特征）
+        feature_cols = selected_features if selected_features else list(df_features.columns)
+        df_features = df_features[feature_cols]
+        
+        # 2. 动态切分当前观测窗口与历史基准窗口
+        end_dt = pd.to_datetime(current_date_str)
+        start_current_dt = end_dt - timedelta(days=LOOKBACK_WINDOW_PSI)
+        
+        start_baseline_dt = start_current_dt - timedelta(days=LOOKBACK_WINDOW_PSI)
+        end_baseline_dt = start_current_dt - timedelta(days=1)
+        
+        # 横截面索引切片抽取
+        idx = pd.IndexSlice
+        current_slice = df_features.loc[idx[start_current_dt:end_dt, assets], :]
+        baseline_slice = df_features.loc[idx[start_baseline_dt:end_baseline_dt, assets], :]
+        
+        if current_slice.empty or baseline_slice.empty:
+            logger.warning("⚠️ 当前窗口或基准窗口内的特征样本数不足，跳过本轮分布审计。")
+            return context
+            
+        current_matrix = current_slice.to_numpy()
+        baseline_matrix = baseline_slice.to_numpy()
+        
+    except Exception as ex:
+        logger.error(f"🚨 从高维特征矩阵中切片真实训练特征空间发生致命溃败: {str(ex)}")
+        return context
 
-    # 3. 严格应用 10 箱等频固定分箱规则计算 PSI
+    # 3. 严格应用 10 箱等频固定分箱规则计算高维多列 PSI
     num_bins = 10
     psi_by_feature = []
     
@@ -98,6 +86,12 @@ def evaluate_distribution_drift(context: dict) -> dict:
         base_col = baseline_matrix[:, col_idx]
         curr_col = current_matrix[:, col_idx]
         
+        # 剔除空值干扰
+        base_col = base_col[~np.isnan(base_col)]
+        curr_col = curr_col[~np.isnan(curr_col)]
+        if len(base_col) == 0 or len(curr_col) == 0:
+            continue
+            
         combined_vals = np.concatenate([base_col, curr_col])
         quantiles = np.percentile(combined_vals, np.linspace(0, 100, num_bins + 1))
         quantiles[0] = -np.inf
@@ -120,32 +114,34 @@ def evaluate_distribution_drift(context: dict) -> dict:
         psi_val = float(np.sum((curr_probs - base_probs) * np.log(curr_probs / base_probs)))
         psi_by_feature.append(psi_val)
 
+    if not psi_by_feature:
+        return context
+        
     mean_psi = float(np.mean(psi_by_feature))
     context['current_mean_psi'] = mean_psi
-    logger.info(f"特征时序平稳度模型计算完成：平均 PSI = {mean_psi:.4f}")
+    logger.info(f"✅ 模型全量高维特征(维度={len(psi_by_feature)})平稳度审计完成：平均 PSI = {mean_psi:.4f}")
 
     # 累加连续触警交易日天数
     consecutive_breaches = context.get('psi_consecutive_breaches', 0)
     if mean_psi > PSI_THRESHOLD:
         consecutive_breaches += 1
-        logger.warning(f"⚠️ [平稳度触警] 特征 PSI 高于安全警戒线！当前连续天数: {consecutive_breaches}/{PSI_CONSECUTIVE_DAYS}")
+        logger.warning(f"⚠️ [平稳度触警] 生产环境高维特征空间 PSI 突破警戒线！当前连续天数: {consecutive_breaches}/{PSI_CONSECUTIVE_DAYS}")
     else:
         consecutive_breaches = 0
     context['psi_consecutive_breaches'] = consecutive_breaches
 
-    # 综合研判是否挂起增量流式更新并启动全量重训
+    # 综合研判是否激活 Tier 3 分布式联邦迁移重训总线
     trigger_retrain = False
     if consecutive_breaches >= PSI_CONSECUTIVE_DAYS:
-        logger.critical(f"特征 PSI 分布连续 {PSI_CONSECUTIVE_DAYS} 天超标，一键激活 Tier 3 全量联邦重训。")
+        logger.critical(f"🚨 特征空间分布失真连续 {PSI_CONSECUTIVE_DAYS} 天超标，物理激活 Tier 3 全量联邦重训总线。")
         trigger_retrain = True
     elif context.get('negative_migration_detected', False):
-        logger.critical("检测到 A 股验证集损失连续超标触发负迁移红线！强行强制切入物理重训总线。")
+        logger.critical("🚨 检测到跨市场对抗微调触发负迁移红线！强行激活重训总线，执行本地模型全方位回归。")
         trigger_retrain = True
 
-    # 4. 新老模型 25 交易日线性步进切换平滑控制逻辑
+    # 4. 新老模型线性步进切换平滑控制
     transition_day = context.get('transition_day', 0)
     if trigger_retrain:
-        logger.info("联邦中央协调器广播重训令牌。挂起在线流式微调，全面刷新领域对抗矩阵。")
         context['tier3_retrain_active'] = True
         context['transition_day'] = 1
         context['alpha_new_model'] = 1.0 / SMOOTHING_PERIOD
