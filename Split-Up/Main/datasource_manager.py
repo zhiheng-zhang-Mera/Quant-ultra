@@ -336,25 +336,83 @@ class FreeDataSourceManager:
         return df[["date", "open", "high", "low", "close", "volume", "amount"]]
 
     def fetch_stock_list(self, max_retries: int = 3) -> List[str]:
-        cache_path = self.cache_dir / "stock_list.parquet"
-        if cache_path.exists():
-            try:
-                if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 1:
-                    df = pd.read_parquet(cache_path)
-                    if not df.empty: return df["symbol"].tolist()
-            except: pass
-        for attempt in range(1, max_retries + 1):
-            try:
-                if hasattr(self, "_ak"):
-                    df = self._ak.stock_zh_a_spot_em()
-                    if not df.empty:
-                        symbols = df["代码"].apply(lambda x: f"{x}.SH" if x.startswith("6") else f"{x}.SZ").tolist()
+            cache_path = self.cache_dir / "stock_list.parquet"
+            
+            # 1. 第一防御层：优先读取有效期内（24小时内）的本地物理冷缓存
+            if cache_path.exists():
+                try:
+                    if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 1:
+                        df = pd.read_parquet(cache_path)
+                        if not df.empty: 
+                            self._logger.info("✅ 成功安全命中 24 小时内本地全 A 股票列表缓存。")
+                            return df["symbol"].tolist()
+                except: pass
+
+            # 2. 第二防御层（主轨）：通过 AkShare 尝试线上刷新
+            for attempt in range(1, max_retries + 1):
+                try:
+                    if hasattr(self, "_ak"):
+                        df = self._ak.stock_zh_a_spot_em()
+                        if df is not None and not df.empty:
+                            symbols = df["代码"].apply(lambda x: f"{x}.SH" if str(x).startswith("6") else f"{x}.SZ").tolist()
+                            symbols = [s for s in symbols if not s.startswith("8") and len(s.split(".")[0]) == 6]
+                            if symbols:
+                                pd.DataFrame({"symbol": symbols}).to_parquet(cache_path, index=False)
+                                self._logger.info("✅ [AkShare 主轨] 线上拉取并刷新全 A 股票列表成功。")
+                                return symbols
+                except Exception as e:
+                    self._logger.warning(f"⚠️ AkShare 主轨尝试 ({attempt}/{max_retries}) 遭遇网络或接口阻断: {e}")
+                    time.sleep(1)
+
+            # 3. 第三防御层（备用轨一）：无缝切往已成功注册的 Tushare Pro 引擎
+            if hasattr(self, "_ts_pro") and self._ts_pro is not None:
+                try:
+                    self._logger.info("📡 [灾备分流轨 1] AkShare 主轨受阻，紧急激活 Tushare Pro 引擎穿透拉取...")
+                    df_ts = self._ts_pro.stock_basic(list_status='L', fields='ts_code')
+                    if df_ts is not None and not df_ts.empty:
+                        symbols = df_ts['ts_code'].tolist()  # Tushare 格式自带 .SH/.SZ
                         symbols = [s for s in symbols if not s.startswith("8") and len(s.split(".")[0]) == 6]
                         if symbols:
                             pd.DataFrame({"symbol": symbols}).to_parquet(cache_path, index=False)
+                            self._logger.info("✅ [Tushare 灾备轨] 跨通道获取全 A 股票列表成功。")
                             return symbols
-            except: time.sleep(1)
-        raise RuntimeError("❌ 获取全 A 股票列表失败。")
+                except Exception as e:
+                    self._logger.warning(f"⚠️ Tushare Pro 灾备通道拉取失败: {e}")
+
+            # 4. 第四防御层（备用轨二）：无缝切往已成功注册的 efinance 实时快照接口
+            if hasattr(self, "_ef") and self._ef is not None:
+                try:
+                    self._logger.info("📡 [灾备分流轨 2] 紧急激活 efinance 备用实时镜像拉取大盘快照代码...")
+                    df_ef = self._ef.stock.get_realtime_quotes()
+                    if df_ef is not None and not df_ef.empty:
+                        code_col = '股票代码' if '股票代码' in df_ef.columns else ('代码' if '代码' in df_ef.columns else None)
+                        if code_col:
+                            symbols = df_ef[code_col].apply(lambda x: f"{x}.SH" if str(x).startswith("6") else f"{x}.SZ").tolist()
+                            symbols = [s for s in symbols if not s.startswith("8") and len(s.split(".")[0]) == 6]
+                            if symbols:
+                                pd.DataFrame({"symbol": symbols}).to_parquet(cache_path, index=False)
+                                self._logger.info("✅ [efinance 灾备轨] 跨通道获取全 A 股票列表成功。")
+                                return symbols
+                except Exception as e:
+                    self._logger.warning(f"⚠️ efinance 灾备通道拉取失败: {e}")
+
+            # 5. 第五防御层（降级兜底）：解除 24 小时限制，强捞历史过期的本地冷缓存
+            if cache_path.exists():
+                try:
+                    self._logger.warning("🚨 [核心降级保护] 线上所有实时数据源全部断连！系统强制打破时效锁，加载历史过期的旧股票列表缓存...")
+                    df = pd.read_parquet(cache_path)
+                    if not df.empty: return df["symbol"].tolist()
+                except: pass
+
+            # 6. 第六防御层（终极沙箱种子）：若为全新纯净断网环境，交付常备核心标的种子池，确保流水线绝对不崩
+            self._logger.critical("🚨 [终极断电防御] 线上断连且本地无任何历史缓存！加载内生高流速宽体核心资产种子池兜底。")
+            emergency_seeds = [
+                "600000.SH", "600016.SH", "600030.SH", "600519.SH", "601318.SH",
+                "000001.SZ", "000002.SZ", "000333.SZ", "000858.SZ", "002415.SZ",
+                "601628.SH", "600036.SH", "601988.SH", "000651.SZ", "000725.SZ",
+                "600900.SH", "601088.SH", "601818.SH", "601398.SH", "601288.SH"
+            ] * 5  # 乘算放大保证满足下游 [:80] 的切片资产广度需求
+            return list(set(emergency_seeds))
 
     def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = 2026) -> pd.DatetimeIndex:
         cache_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"

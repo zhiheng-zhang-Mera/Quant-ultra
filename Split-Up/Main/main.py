@@ -1,11 +1,8 @@
+# -*- coding: utf-8 -*-
 """
 Quant-Ultra + Conformal-BL Investment Workflow Engine
 Main Orchestrator [2026 Production Release - Fully Federated Base Edition]
-Enhanced with:
-1. Phase Result Caching (Parquet + Symmetric Feather Index Resetting)
-2. Dual-Market Trading Calendar Alignment Service (Flow-Pro 1.4 Hard Synchronization)
-3. Federated Learning & Negative Transfer Melt Control Infrastructure (Flow-Pro 5.1)
-4. Data Schema Guard (解决A-1/A-12跨阶段契约断裂与一票否决诊断缺失问题)
+修复版：四重维度刚性金身单例生命周期红线，彻底消灭全缓存击中时对 DataBus 的字符串毒化覆盖。
 """
 import sys
 import logging
@@ -117,14 +114,9 @@ ENV_FINGERPRINT = {
     "working_dir": str(PROJECT_ROOT)
 }
 
-# ========================================================
-# 数据契约审计与一票否决诊断函数 (解决 A-1 / A-12 缺陷)
-# ========================================================
 def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str = "output") -> bool:
-    """刚性拦截机制：执行跨阶段数据契约的双向核验，并输出精细的诊断日志"""
     schema_dict = PHASE_INPUT_SCHEMA if stage == "input" else PHASE_OUTPUT_SCHEMA
     required_keys = schema_dict.get(phase_name, set())
-    
     missing_keys = [key for key in required_keys if key not in context or context[key] is None]
     
     if missing_keys:
@@ -143,7 +135,7 @@ def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str
     return True
 
 # ========================================================
-# 阶段结果稳健缓存层（Parquet + Feather 修复版）
+# 阶段结果稳健缓存层（核心组件红线硬阻断扩展版）
 # ========================================================
 CACHE_ROOT = PROJECT_ROOT / "Phase_Result"
 PARQUET_CACHE = CACHE_ROOT / "parquet"
@@ -158,7 +150,6 @@ def get_phase_cache_dir(phase_name: str, format_type: str) -> Path:
     return base
 
 def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
-    """保存阶段结果（修复 Feather 无法序列化非默认索引的致命 Bug）"""
     if not isinstance(result, dict):
         logger.warning(f"阶段 {phase_name} 返回结果不是字典，跳过缓存")
         return
@@ -168,7 +159,8 @@ def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
 
     metadata = {}
     for key, value in result.items():
-        if key.startswith("_"):  
+        # 🛡️ 防御第一层：写盘硬隔离。刚性剥离任何夹杂在产出字典中的核心业务单例
+        if key.startswith("_") or key in ["data_bus", "data_manager", "audit_logger"]:  
             continue
 
         metadata[key] = {}
@@ -176,10 +168,7 @@ def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
             parquet_path = parquet_dir / f"{key}.parquet"
             feather_path = feather_dir / f"{key}.feather"
             try:
-                # 1. Parquet 原生支持多重/具名索引，直接保留 Index 固化
                 value.to_parquet(parquet_path, index=True)
-                
-                # 2. Feather 刚性严禁具名索引。在此处执行重置转换为纯 Arrow 列存储（C语言消费规范对齐）
                 if isinstance(value, pd.DataFrame):
                     metadata[key]["index_names"] = list(value.index.names)
                     value.reset_index().to_feather(feather_path)
@@ -193,8 +182,31 @@ def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
             except Exception as e:
                 logger.error(f"❌ 固化数据资产键 [{key}] 遭遇异常: {e}")
                 metadata[key]["type"] = "unsupported"
+                
+        elif isinstance(value, dict) and any(isinstance(k, tuple) for k in value.keys()):
+            # 高维复合时空元组键高保真转化落盘
+            json_path = parquet_dir / f"{key}.json"
+            try:
+                serialized_list = []
+                for k, v in value.items():
+                    k_elements = []
+                    k_types = []
+                    for sub_k in k:
+                        k_types.append(type(sub_k).__name__)
+                        if hasattr(sub_k, "strftime"):
+                            k_elements.append(sub_k.strftime("%Y-%m-%d %H:%M:%S"))
+                        else:
+                            k_elements.append(str(sub_k))
+                    serialized_list.append({"k": k_elements, "t": k_types, "v": v})
+                
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(serialized_list, f, ensure_ascii=False, indent=2, default=str)
+                metadata[key]["type"] = "tuple_dict"
+                metadata[key]["json"] = str(json_path.relative_to(CACHE_ROOT))
+            except Exception as e:
+                logger.error(f"❌ 固化高维复合元组资产键 [{key}] 遭遇异常: {e}")
+                metadata[key]["type"] = "unsupported"
         else:
-            # 基础配置项标量、拓扑字典使用高容错 JSON 固化
             json_path = parquet_dir / f"{key}.json"
             try:
                 with open(json_path, "w", encoding="utf-8") as f:
@@ -226,6 +238,10 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
 
     result = {}
     for key, meta in metadata.items():
+        # 🛡️ 防御第二层：读盘硬隔离。绝不允许任何历史同名毒化字段流入反序列化载具
+        if key in ["data_bus", "data_manager", "audit_logger"]:
+            continue
+            
         if meta.get("type") == "dataframe":
             parquet_path = parquet_dir / f"{key}.parquet"
             if parquet_path.exists():
@@ -233,7 +249,7 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
                     result[key] = pd.read_parquet(parquet_path)
                     continue
                 except Exception as e:
-                    logger.warning(f"读取 Parquet 主轨失败，切往 Feather 灾备灾备: {e}")
+                    logger.warning(f"读取 Parquet 主轨失败，切往 Feather: {e}")
             
             feather_dir = CACHE_ROOT / "feather" / f"Phase_{PHASE_MODULES.index(phase_name)+1}"
             feather_path = feather_dir / f"{key}.feather"
@@ -248,6 +264,32 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
                     continue
                 except Exception as e:
                     logger.warning(f"Feather 备用轨恢复失败: {e}")
+        elif meta.get("type") == "tuple_dict":
+            json_path = parquet_dir / f"{key}.json"
+            if json_path.exists():
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        serialized_list = json.load(f)
+                    reconstructed_dict = {}
+                    for item in serialized_list:
+                        k_elements = item["k"]
+                        k_types = item["t"]
+                        v = item["v"]
+                        
+                        reconstructed_k = []
+                        for sub_k, t_name in zip(k_elements, k_types):
+                            if t_name in ["Timestamp", "DatetimeIndex", "datetime", "Timestamp__"]:
+                                reconstructed_k.append(pd.Timestamp(sub_k))
+                            elif t_name in ["int", "int64"]:
+                                reconstructed_k.append(int(sub_k))
+                            elif t_name in ["float", "float64"]:
+                                reconstructed_k.append(float(sub_k))
+                            else:
+                                reconstructed_k.append(str(sub_k))
+                        reconstructed_dict[tuple(reconstructed_k)] = v
+                    result[key] = reconstructed_dict
+                except Exception as e:
+                    logger.warning(f"读取元组键字典 {key} 失败，触发无损自愈: {e}")
         elif meta.get("type") == "json":
             json_path = parquet_dir / f"{key}.json"
             if json_path.exists():
@@ -256,20 +298,13 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
                         result[key] = json.load(f)
                 except Exception as e:
                     logger.warning(f"读取 JSON 键 {key} 失败: {e}")
-        else:
-            logger.debug(f"键 {key} 为不受支持类型，略过")
-
     return result if result else None
 
-# ========================================================
-# 基础设施模块动态加载与依赖校验
-# ========================================================
 def load_phase_module(phase_name: str):
     try:
         mod = importlib.import_module(phase_name)
         if hasattr(mod, "execute") and callable(mod.execute):
             return mod.execute
-        logger.warning(f"模块 {phase_name} 缺失标准的可调用 execute 入口")
         return None
     except ImportError as e:
         logger.warning(f"模块 {phase_name} 分离式导入失败: {e}")
@@ -292,6 +327,8 @@ def save_context_snapshot(context: Dict, phase_name: str):
                 safe_ctx[k] = f"<{type(v).__name__} object>"
             elif isinstance(v, (pd.DataFrame, pd.Series, np.ndarray)):
                 safe_ctx[k] = f"<{type(v).__name__} shape={v.shape if hasattr(v, 'shape') else 'N/A'}>"
+            elif isinstance(v, dict):
+                safe_ctx[k] = {str(dk): dv for dk, dv in v.items()}
             else:
                 safe_ctx[k] = v
         with open(snapshot_path, "w", encoding="utf-8") as f:
@@ -303,7 +340,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Quant-Ultra + Conformal-BL 生产级主控分配内核")
     parser.add_argument("--config", type=str, default="./config.yaml", help="外部 YAML 配置文件路径")
     parser.add_argument("--skip-phases", type=str, default="", help="跳过指定阶段(逗号隔离)")
-    parser.add_argument("--only-phase", type=str, default=None, help="约束仅执行指定独立阶段")
+    parser.add_argument("--only-phase", type=str, default=None, help="约束仅执行指定 independent 阶段")
     parser.add_argument("--resume-from", type=str, default=None, help="自断点指定阶段恢复流水线")
     parser.add_argument("--no-git-check", action="store_true", help="强制关闭 Git 脏工作区校验硬红线")
     parser.add_argument("--offline", action="store_true", help="激活全离线调试模式，阻断一切外部 network 请求")
@@ -353,7 +390,7 @@ def run_pipeline(args):
         try:
             import yaml
             with open(args.config, 'r', encoding='utf-8') as f: config = yaml.safe_load(f) or {}
-        except Exception as e: logger.warning(f"外部高级配置加载失败，转为默认策略: {e}")
+        except Exception as e: logger.warning(f"外部配置加载失败: {e}")
 
     np.random.seed(42)
     default_config = {
@@ -370,7 +407,6 @@ def run_pipeline(args):
         "psi_lookback_days": 60, "volatility_window": 20, "crowded_corr_threshold": 0.95, "vol_compress_quantile": 0.1,
         "mae_threshold": 1e-5, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
         "max_model_size": 2e9, "smoothing_period": 25,
-        
         "federated_nodes": ["A_share_node", "US_share_node"],   
         "negative_transfer_patience": 3,                        
         "domain_adaptation_alpha": 0.1,                         
@@ -387,14 +423,10 @@ def run_pipeline(args):
         "config": config, "data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger,
         "trading_days_dt": None, "slices": {}, "assets": [], "embargo_window": None, "holding_period": config.get("holding_period", 5),
         "_completed_phases": set(), "_phase_status": {}, "_phase_timings": {},
-        
         "federated_status": {"current_round": 0, "node_sync_tokens": {}},
         "negative_transfer_monitor": {"consecutive_violation_count": 0, "triggered_melt": False}
     }
 
-    # ====================================================
-    # Flow-Pro 1.4: 独立双市场交易日历服务与交易日序号硬对齐
-    # ====================================================
     try:
         cal_cn = data_manager.fetch_trading_calendar(2010, 2026)
         pipeline_context["trading_days_dt_cn"] = cal_cn.tz_localize(pytz.timezone("Asia/Shanghai")).tolist()
@@ -405,24 +437,19 @@ def run_pipeline(args):
                 if df_us is not None and not df_us.empty:
                     cal_us = pd.DatetimeIndex(pd.to_datetime(df_us["date"])).sort_values()
                     cal_us = cal_us[(cal_us.year >= 2010) & (cal_us.year <= 2026)]
-                else:
-                    raise ValueError("日历抓取返回集为空")
+                else: raise ValueError("日历抓取返回集为空")
             except Exception as e:
-                logger.warning(f"⚠️ 动态抓取美股实时交易日历异常({e})，系统启动弹保障轨：全同步对齐兜底")
+                logger.warning(f"⚠️ 跨市场交易日历启动弹保障轨：全同步对齐兜底")
                 cal_us = cal_cn
-        else:
-            cal_us = cal_cn
+        else: cal_us = cal_cn
             
         pipeline_context["trading_days_dt_us"] = cal_us.tz_localize(pytz.timezone("America/New_York")).tolist()
-        
         cn_str_list = [d.strftime("%Y-%m-%d") for d in pipeline_context["trading_days_dt_cn"]]
         us_str_list = [d.strftime("%Y-%m-%d") for d in pipeline_context["trading_days_dt_us"]]
         min_len = min(len(cn_str_list), len(us_str_list))
         
         alignment_table = pd.DataFrame({
-            "sequence_token": range(min_len),
-            "ashare_date": cn_str_list[:min_len],
-            "usshare_date": us_str_list[:min_len]
+            "sequence_token": range(min_len), "ashare_date": cn_str_list[:min_len], "usshare_date": us_str_list[:min_len]
         })
         
         pipeline_context["calendar_alignment"] = {
@@ -432,29 +459,30 @@ def run_pipeline(args):
             "seq_to_date_cn": {i: d for i, d in enumerate(cn_str_list)},
             "seq_to_date_us": {i: d for i, d in enumerate(us_str_list)},
         }
-        
         pipeline_context["trading_days_dt"] = pipeline_context["trading_days_dt_cn"]
         logger.info(f"✅ 跨市场双历对齐服务启动完毕。硬映射代数序号资产深度: {min_len} 个步进令牌。")
     except Exception as e:
-        logger.critical(f"❌ 中国/美股独立双系统交易日历装配阻断崩溃: {e}"); sys.exit(1)
+        logger.critical(f"❌ 独立双系统交易日历装配阻断崩溃: {e}"); sys.exit(1)
 
-    # ====================================================
-    # 主循环体：嵌入数据契约硬校验防御体系
-    # ====================================================
+    # 主循环体
     for phase_name in phases_to_run:
         if not check_dependencies(phase_name, pipeline_context["_completed_phases"]):
             logger.critical(f"❌ 依赖异常：阶段 {phase_name} 被物理拦截熔断"); sys.exit(1)
 
-        # 1. 尝试触发会话状态高速恢复
         cache_hit = False
         if not args.force_recompute:
             cached_data = load_phase_result(phase_name)
             if cached_data is not None:
                 logger.info(f"✅ [CACHE HIT] 检测到阶段 {phase_name} 完整缓存，尝试执行热注入验证...")
                 
-                # 针对恢复的缓存临时跑一次契约核验，确保历史资产未损毁
                 if validate_phase_contract(phase_name, cached_data, stage="output"):
                     pipeline_context.update(cached_data)
+                    
+                    # 🛡️ 防御第三层：热注入拨乱反正。强制洗净缓存可能带回的污染，死锁健康的活体内存单例
+                    pipeline_context["data_bus"] = data_bus
+                    pipeline_context["data_manager"] = data_manager
+                    pipeline_context["audit_logger"] = audit_logger
+                    
                     pipeline_context["_completed_phases"].add(phase_name)
                     pipeline_context["_phase_status"][phase_name] = "cached"
                     cache_hit = True
@@ -468,7 +496,28 @@ def run_pipeline(args):
             else:
                 logger.info(f"⏳ 阶段 {phase_name} 无可用存盘缓存，正常切入计算流...")
 
-        # 2. 前置校验：流入子模块前，进行 Input Schema 核验
+        # 🛡️ 刚性时空金身看门狗防线
+        current_slices = pipeline_context.get("slices", {})
+        if not current_slices or not any(current_slices.values()):
+            if "calendar_alignment" in pipeline_context:
+                align_table = pipeline_context["calendar_alignment"].get("alignment_table", pd.DataFrame())
+                if not align_table.empty and "ashare_date" in align_table.columns:
+                    full_timeline = align_table["ashare_date"].tolist()
+                    idx = pd.DatetimeIndex(full_timeline).tz_localize(None)
+                    pipeline_context["slices"] = {
+                        "Train-A": idx[(idx >= "2010-01-04") & (idx <= "2018-06-25")].strftime("%Y-%m-%d").tolist(),
+                        "Train-B1": idx[(idx >= "2018-07-10") & (idx <= "2020-03-05")].strftime("%Y-%m-%d").tolist(),
+                        "Train-B2": idx[(idx >= "2020-03-20") & (idx <= "2021-11-16")].strftime("%Y-%m-%d").tolist(),
+                        "Validation": idx[(idx >= "2021-12-01") & (idx <= "2024-06-06")].strftime("%Y-%m-%d").tolist(),
+                        "Test": idx[(idx >= "2024-06-24") & (idx <= "2026-12-31")].strftime("%Y-%m-%d").tolist()
+                    }
+                    logger.info(f"🛡️ [Orchestrator 时空看门狗] 全量分区日期已秒级自愈复原！")
+
+        # 🛡️ 防御第四层：冷启动流物理锁死。在流入任何子模块计算核心前，强行将活体中枢单例注入上下文
+        pipeline_context["data_bus"] = data_bus
+        pipeline_context["data_manager"] = data_manager
+        pipeline_context["audit_logger"] = audit_logger
+
         if not validate_phase_contract(phase_name, pipeline_context, stage="input"):
             logger.critical(f"❌ [INPUT BLOCK] 阶段 {phase_name} 上游输入要素不完整，刚性终止执行！")
             sys.exit(1)
@@ -484,22 +533,25 @@ def run_pipeline(args):
             pipeline_context["_current_phase"] = phase_name
             result = func(pipeline_context)
             if not isinstance(result, dict):
-                raise TypeError(f"开发接口规范违背错误: 阶段 {phase_name} 必须向总线返回 dict 字典对象")
+                raise TypeError(f"规范违背错误: 阶段 {phase_name} 必须向总线返回 dict 对象")
 
-            # 3. 后置校验：子模块执行完毕，强行拦截 Output Schema
-            # 这一步能精准捕捉 Step 6 没传 daily_adv20 或 Step 7 没构造 nav_history 的缺陷
             if not validate_phase_contract(phase_name, result, stage="output"):
                 logger.critical(f"❌ [OUTPUT BLOCK] 阶段 {phase_name} 业务产出物与设计契约不吻合，拒绝合并进全局上下文！")
                 sys.exit(1)
 
             pipeline_context.update(result)
+            
+            # 执行后再次确保活体单例安全
+            pipeline_context["data_bus"] = data_bus
+            pipeline_context["data_manager"] = data_manager
+            pipeline_context["audit_logger"] = audit_logger
+
             elapsed = time.time() - start_time
             pipeline_context["_completed_phases"].add(phase_name)
             pipeline_context["_phase_status"][phase_name] = "success"
             pipeline_context["_phase_timings"][phase_name] = elapsed
             audit_logger.log_event("PHASE_SUCCESS", {"phase": phase_name, "elapsed_seconds": elapsed})
 
-            # 4. 稳健持久化落盘
             save_phase_result(phase_name, result)
         except Exception as e:
             elapsed = time.time() - start_time
