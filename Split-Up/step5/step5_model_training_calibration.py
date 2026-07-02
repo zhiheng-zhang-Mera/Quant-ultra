@@ -3,7 +3,7 @@
 Phase 5: Joint Hyperparameter Tuning, Dual-Track Cascade Calibration, and Model Fitting
 Fully compliant with Final-Flow.md [2026 Production Release]
 面向主管道总线的主入口文件，负责子组件级联调用与监控。
-🟩 增强安全栅栏：防范由于时间窗口真空引发的下游级联断层。
+🟩 增强安全栅栏：防范由于热启动变量真空引发的下游级联断层。
 """
 import logging
 import pandas as pd
@@ -23,12 +23,46 @@ def execute(pipeline_context: dict) -> dict:
     if 'num_trials' not in pipeline_context:
         pipeline_context['num_trials'] = 0
 
+    # 获取时间划分切片边界（兼容多级 Key）
+    slices = pipeline_context.get('slices', {}) or pipeline_context.get('data_slices', {})
+    
+    # 🛡️ 智能时空自愈栅栏：如果由于上游全量缓存击中导致 slices 丢失或为空，通过全局历轨轴强行物理还原
+    if not slices or not any(slices.values()):
+        logger.warning("🚨 [时空断层自愈] 检测到上游全部缓存击中（热启动）导致 slices 视区为空！启动硬核时空分区恢复程序...")
+        
+        full_timeline = []
+        # 优先从跨市场对齐底座提取
+        if "calendar_alignment" in pipeline_context:
+            align_table = pipeline_context["calendar_alignment"].get("alignment_table", pd.DataFrame())
+            if not align_table.empty and "ashare_date" in align_table.columns:
+                full_timeline = align_table["ashare_date"].tolist()
+        # 备用：从基础原生交易日历提取
+        if not full_timeline and "trading_days_dt_cn" in pipeline_context:
+            full_timeline = pipeline_context["trading_days_dt_cn"]
+            
+        if full_timeline:
+            # 强行过滤并剔除隐式时区，还原为纯净物理轴
+            idx = pd.DatetimeIndex(full_timeline).tz_localize(None)
+            
+            # 严格按照 Step 2 设计的物理边界时间指纹一键还原切片
+            slices = {
+                "Train-A": idx[(idx >= "2010-01-04") & (idx <= "2018-06-25")].strftime("%Y-%m-%d").tolist(),
+                "Train-B1": idx[(idx >= "2018-07-10") & (idx <= "2020-03-05")].strftime("%Y-%m-%d").tolist(),
+                "Train-B2": idx[(idx >= "2020-03-20") & (idx <= "2021-11-16")].strftime("%Y-%m-%d").tolist(),
+                "Validation": idx[(idx >= "2021-12-01") & (idx <= "2024-06-06")].strftime("%Y-%m-%d").tolist(),
+                "Test": idx[(idx >= "2024-06-24") & (idx <= "2026-12-31")].strftime("%Y-%m-%d").tolist()
+            }
+            pipeline_context['slices'] = slices
+            logger.info(f"✅ [时空自愈] 物理分区成功无损复原：Train-A({len(slices['Train-A'])}天), Train-B1({len(slices['Train-B1'])}天), Train-B2({len(slices['Train-B2'])}天), Validation({len(slices['Validation'])}天), Test({len(slices['Test'])}天)")
+        else:
+            raise RuntimeError("❌ 致命断层：全局总线历轨完全丢失，无法执行时空恢复。")
+
     # 构建全局交易日期日历（用于数据集切分索引）
-    slices = pipeline_context.get('slices', {})
     all_dates = []
     for partition in ['Train-A', 'Train-B1', 'Train-B2', 'Validation', 'Test']:
         if partition in slices:
             all_dates.extend(slices[partition])
+            
     if all_dates:
         all_dates = sorted(set(all_dates))
         pipeline_context['trading_days_dt'] = pd.DatetimeIndex(all_dates)

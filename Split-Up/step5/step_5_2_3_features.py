@@ -129,4 +129,3 @@ def run_feature_filtering(context: dict):
 
     context['selected_features'] = selected
     logger.info(f"[Step 5.3] Feature subspace locked under Federated distillation constraints. Retained Indices: {selected}")
-}
