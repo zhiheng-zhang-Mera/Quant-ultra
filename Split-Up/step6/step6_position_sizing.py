@@ -1,8 +1,6 @@
 import logging
-import os
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from .config import DEFAULT_CONFIG
 from .directional_mask import step_m_1_directional_mask
 from .bl_fusion import step_m_2_black_litterman_fusion
@@ -12,7 +10,7 @@ logger = logging.getLogger("PositionSizing")
 
 def execute(pipeline_context: dict) -> dict:
     logger.info("=" * 60)
-    logger.info("Phase 6: 纯多头现货不确定性头寸分配与个人化凸优化 [联邦合规升级]")
+    logger.info("Phase 6: 纯多头现货不确定性头寸分配与个人化凸优化 [联邦纯净化计算版]")
     logger.info("=" * 60)
 
     config = pipeline_context.get('config', {}).copy()
@@ -35,27 +33,12 @@ def execute(pipeline_context: dict) -> dict:
 
     assets = local_context['assets']
     n_assets = len(assets)
-    
-    # ------------------ 会话缓存校验体系（响应 README 挂起任务） ------------------
-    # 以测试集的边界日期令牌构建缓存唯一标志符
-    cache_id = f"phase6_records_{test_dates[0]}_{test_dates[-1]}".replace("-", "")
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # 定位到 Split-Up/
-    parquet_dir = os.path.join(base_dir, "Phase Result", "parquet", "Phase 6")
-    feather_dir = os.path.join(base_dir, "Phase Result", "feather", "Phase 6")
-    
-    parquet_path = os.path.join(parquet_dir, f"{cache_id}.parquet")
-    feather_path = os.path.join(feather_dir, f"{cache_id}.feather")
-    
-    update_required = config.get('update_required_phase6', False)
-    
-    if os.path.exists(parquet_path) and not update_required:
-        logger.info(f"[会话缓存命中] 发现历史已落盘头寸分配记录，执行快速直通短路：{parquet_path}")
-        weight_df = pd.read_parquet(parquet_path)
-        pipeline_context['daily_weights'] = weight_df
-        pipeline_context['target_weights'] = weight_df.iloc[-1].to_dict()
-        pipeline_context['allocation_weights_ready'] = True
-        return pipeline_context
-    # -------------------------------------------------------------------------
+
+    # =========================================================================
+    # 💡 架构演进说明：
+    # 彻底移除本地手写的 Phase Result 读写盘逻辑、cache_id 拼接与路径生成。
+    # 模块的生命周期、跳过判定及双格式落盘全量上交给 main.py Orchestrator 集中托管。
+    # =========================================================================
 
     weight_records = []
     interval_records = []
@@ -70,6 +53,7 @@ def execute(pipeline_context: dict) -> dict:
         local_context['data_bus']._cache.clear()
         logger.info("[总线防火墙激活] 内存脏残值清除完成，数据流防火墙硬对齐启动。")
 
+    # 执行核心前向递推优化循环
     for idx, date in enumerate(test_dates):
         date_dt = pd.to_datetime(date) if isinstance(date, str) else date
         local_context['current_date'] = date_dt
@@ -97,21 +81,13 @@ def execute(pipeline_context: dict) -> dict:
     q_low_df = pd.DataFrame([low for low, _ in interval_records], index=test_dates, columns=assets)
     q_high_df = pd.DataFrame([high for _, high in interval_records], index=test_dates, columns=assets)
 
-    # ------------------ 会话缓存双格式持久化落盘（响应 README 挂起任务） ------------------
-    os.makedirs(parquet_dir, exist_ok=True)
-    os.makedirs(feather_dir, exist_ok=True)
+    # 构造原子阶段仅需向主控返回的资产字典（由 main.py 统一、安全写盘）
+    result_update = {
+        'daily_weights': weight_df,
+        'daily_intervals': {'q_low': q_low_df, 'q_high': q_high_df},
+        'target_weights': {assets[i]: prev_weights[i] for i in range(n_assets)},
+        'allocation_weights_ready': True
+    }
     
-    # 固化落盘供本 Python 链条内部消费的 Parquet 格式
-    weight_df.to_parquet(parquet_path)
-    # 固化落盘供未来 C 语言消费的 Feather 格式（重置索引确保原生存储特征平稳）
-    weight_df.reset_index().to_feather(feather_path)
-    logger.info(f"[双格式持久化完成] 成功建立物理缓存防线: {parquet_path} 与 {feather_path}")
-    # -------------------------------------------------------------------------
-
-    pipeline_context['daily_weights'] = weight_df
-    pipeline_context['daily_intervals'] = {'q_low': q_low_df, 'q_high': q_high_df}
-    pipeline_context['target_weights'] = {assets[i]: prev_weights[i] for i in range(n_assets)}
-    pipeline_context['allocation_weights_ready'] = True
-    
-    logger.info(f"✅ Step 6 凸优化多头头寸分配面板全量计算完成，落盘维度: {weight_df.shape}！")
-    return pipeline_context
+    logger.info(f"✅ Step 6 凸优化多头头寸分配面板全量计算完成，向总线提交维度: {weight_df.shape}！")
+    return result_update
