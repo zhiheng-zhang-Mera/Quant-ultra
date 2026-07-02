@@ -3,8 +3,10 @@
 Phase 5: Joint Hyperparameter Tuning, Dual-Track Cascade Calibration, and Model Fitting
 Fully compliant with Final-Flow.md [2026 Production Release]
 面向主管道总线的主入口文件，负责子组件级联调用与监控。
+🟩 增强安全栅栏：防范由于时间窗口真空引发的下游级联断层。
 """
 import logging
+import pandas as pd
 
 from .step_5_1_cv import run_walk_forward_cv
 from .step_5_2_3_features import generate_fractional_features, run_feature_filtering
@@ -20,6 +22,19 @@ def execute(pipeline_context: dict) -> dict:
 
     if 'num_trials' not in pipeline_context:
         pipeline_context['num_trials'] = 0
+
+    # 构建全局交易日期日历（用于数据集切分索引）
+    slices = pipeline_context.get('slices', {})
+    all_dates = []
+    for partition in ['Train-A', 'Train-B1', 'Train-B2', 'Validation', 'Test']:
+        if partition in slices:
+            all_dates.extend(slices[partition])
+    if all_dates:
+        all_dates = sorted(set(all_dates))
+        pipeline_context['trading_days_dt'] = pd.DatetimeIndex(all_dates)
+        logger.info(f"📅 全局日历构建完成，共 {len(all_dates)} 个交易日。")
+    else:
+        raise RuntimeError("slices 中未找到任何分区日期，无法构建全局日历。")
 
     # 5.1 执行净化向前行走交叉验证，探寻最优记忆参数 $d^*$
     run_walk_forward_cv(pipeline_context)
