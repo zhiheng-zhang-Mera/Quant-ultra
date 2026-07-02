@@ -1,16 +1,11 @@
 import numpy as np
 import pandas as pd
-import cvxpy as cp
-import akshare as ak
 import logging
 from datetime import datetime, timedelta
 from sklearn.covariance import LedoitWolf
-from typing import Optional, Set
+from typing import Optional
 
 logger = logging.getLogger("PositionSizing.Utils")
-
-# 模块级物理缓存，防止在每日循环内发生几十万次完全重复的个股总股本网络抓取请求
-_TOTAL_SHARES_CACHE = {}
 
 def _fractional_diff_series(series: np.ndarray, d: float) -> np.ndarray:
     n = len(series)
@@ -81,28 +76,6 @@ def _get_features_for_date(asset: str, date: datetime, context: dict) -> Optiona
     current_feat = current_feat[selected]
     return scaler.transform(current_feat.reshape(1, -1)).flatten()
 
-def _fetch_borrowable_stocks(date: datetime) -> Set[str]:
-    try:
-        date_str = date.strftime("%Y%m%d")
-        df = ak.stock_borrow_analysis(date=date_str)
-        if df.empty:
-            logger.debug(f"[融券列表审计] 日期 {date.strftime('%Y-%m-%d')} AkShare 融券分析接口返回空数据。")
-            return set()
-        df = df[df['融券余量'] > 0]
-        codes = df['代码'].astype(str).tolist()
-        result = set()
-        for c in codes:
-            if len(c) != 6:
-                continue
-            if c.startswith('6'):
-                result.add(f"{c}.SH")
-            elif c.startswith('0') or c.startswith('3'):
-                result.add(f"{c}.SZ")
-        return result
-    except Exception as e:
-        logger.warning(f"[网络级融券获取失败] 日期 {date.strftime('%Y-%m-%d')} 接口异常: {e}，今日默认清空券池。")
-        return set()
-
 def _compute_robust_covariance(bus, assets, date, lookback=252):
     returns = []
     end_date_str = date.strftime('%Y-%m-%d')
@@ -136,29 +109,30 @@ def _compute_robust_covariance(bus, assets, date, lookback=252):
         logger.error(f"[LedoitWolf 估计崩溃] 日期 {end_date_str} 矩阵拟合失败: {e}，触发安全防御。")
         return np.eye(len(assets)) * 0.01
 
-def _compute_shares_upper(bus, asset: str, date: datetime, nav: float, config: dict) -> float:
-    max_shares_pct = config.get('max_shares_pct', 0.045)
-    if asset in _TOTAL_SHARES_CACHE:
-        total_shares = _TOTAL_SHARES_CACHE[asset]
-    else:
-        try:
-            pure_code = asset.split('.')[0]
-            info = ak.stock_individual_info_em(symbol=pure_code)
-            total_shares = info[info['item']=='总股本']['value'].values[0]
-            _TOTAL_SHARES_CACHE[asset] = total_shares
-        except Exception as e:
-            logger.debug(f"[{asset}] 无法抓取总股本元数据: {e}，启用刚性默认上限。")
-            return max_shares_pct
+def _compute_individual_shares_upper(bus, asset: str, date: datetime, nav: float, config: dict) -> float:
+    """
+    针对个人账户流动性进行资金量双重硬约束防线（废除原大股东举牌4.5%条款）
+    单票权重上限 = min(10%, 10% * ADV_20 / 账户总权益)
+    """
+    lookback_adv = config.get('lookback_adv', 20)
+    end_date_str = date.strftime('%Y-%m-%d')
+    start_date_str = (date - timedelta(days=45)).strftime('%Y-%m-%d')
+    
     try:
-        price = bus.query_by_pit(asset, date, "total_return_price")
-        if price is None or price <= 0:
-            return max_shares_pct
-        market_value = total_shares * price
-        max_weight = (max_shares_pct * market_value) / nav if nav > 0 else max_shares_pct
-        return min(max_weight, max_shares_pct)
+        hist = bus.load_asset_history(asset, start_date=start_date_str, end_date=end_date_str)
+        if hist is not None and not hist.empty:
+            adv_20 = hist['amount'].tail(lookback_adv).mean()
+        else:
+            adv_20 = 0.0
     except Exception as e:
-        logger.warning(f"[{asset}] 股本比例换算异常: {e}，锁死刚性上限。")
-        return max_shares_pct
+        logger.debug(f"[{asset}] 无法抽取流式交易额数据: {e}，安全降级至固定10%红线。")
+        return 0.10
+
+    if adv_20 <= 0 or nav <= 0:
+        return 0.10
+        
+    liquidity_weight_cap = 0.10 * (adv_20 / nav)
+    return min(0.10, liquidity_weight_cap)
 
 def _compute_market_weights(bus, assets, date):
     caps = []
