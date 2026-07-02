@@ -5,6 +5,7 @@ Enhanced with:
 1. Phase Result Caching (Parquet + Symmetric Feather Index Resetting)
 2. Dual-Market Trading Calendar Alignment Service (Flow-Pro 1.4 Hard Synchronization)
 3. Federated Learning & Negative Transfer Melt Control Infrastructure (Flow-Pro 5.1)
+4. Data Schema Guard (解决A-1/A-12跨阶段契约断裂与一票否决诊断缺失问题)
 """
 import sys
 import logging
@@ -70,6 +71,33 @@ PHASE_DEPENDENCIES: Dict[str, Set[str]] = {
     "step9.step9_live_mlops": {"step1.step1_data_foundation", "step2.step2_data_slicing", "step3.step3_pit_setup", "step4.step4_labeling_weighting", "step5.step5_model_training_calibration", "step6.step6_position_sizing", "step7.step7_fsm_backtest", "step8.step8_audit_stress_test"},
 }
 
+# ========================================================
+# 对齐审查报告 4.1：全局显式数据契约生命周期定义 (Schema Guard)
+# ========================================================
+PHASE_INPUT_SCHEMA: Dict[str, Set[str]] = {
+    "step1.step1_data_foundation": set(),
+    "step2.step2_data_slicing": {"assets"},
+    "step3.step3_pit_setup": {"slices"},
+    "step4.step4_labeling_weighting": {"feature_panel_shared", "slices"},
+    "step5.step5_model_training_calibration": {"feature_panel_shared", "y_clf_all", "sample_weights", "calendar_alignment"},
+    "step6.step6_position_sizing": {"fractional_features_cube", "direction_classifier", "quantile_models"},
+    "step7.step7_fsm_backtest": {"daily_weights", "calendar_alignment"},
+    "step8.step8_audit_stress_test": {"daily_weights", "daily_adv20", "daily_nav", "violations", "audit_logger"},
+    "step9.step9_live_mlops": {"nav_history", "audit_summary", "config"}
+}
+
+PHASE_OUTPUT_SCHEMA: Dict[str, Set[str]] = {
+    "step1.step1_data_foundation": {"assets", "adv_data", "theoretical_aum_limit"},
+    "step2.step2_data_slicing": {"slices", "embargo_window"},
+    "step3.step3_pit_setup": {"feature_panel_shared", "feature_panel_private_a", "feature_panel_private_us", "online_regime_state"},
+    "step4.step4_labeling_weighting": {"y_clf_all", "y_reg_all", "sample_weights"},
+    "step5.step5_model_training_calibration": {"direction_classifier", "quantile_models", "gamma_star", "q_error_threshold_dict", "selected_features", "fractional_features_cube"},
+    "step6.step6_position_sizing": {"daily_weights", "daily_intervals", "daily_adv20"},
+    "step7.step7_fsm_backtest": {"daily_nav", "daily_returns", "violations", "final_nav", "nav_history"},
+    "step8.step8_audit_stress_test": {"audit_passed", "audit_summary"},
+    "step9.step9_live_mlops": {"reconciliation_mae", "recon_passed", "psi_consecutive_breaches", "enforce_crowded_allocation_cap"}
+}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d | %(levelname)s | %(name)s | %(message)s",
@@ -88,6 +116,31 @@ ENV_FINGERPRINT = {
     "run_timestamp": RUN_TIMESTAMP,
     "working_dir": str(PROJECT_ROOT)
 }
+
+# ========================================================
+# 数据契约审计与一票否决诊断函数 (解决 A-1 / A-12 缺陷)
+# ========================================================
+def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str = "output") -> bool:
+    """刚性拦截机制：执行跨阶段数据契约的双向核验，并输出精细的诊断日志"""
+    schema_dict = PHASE_INPUT_SCHEMA if stage == "input" else PHASE_OUTPUT_SCHEMA
+    required_keys = schema_dict.get(phase_name, set())
+    
+    missing_keys = [key for key in required_keys if key not in context or context[key] is None]
+    
+    if missing_keys:
+        diag_report = {
+            "timestamp": datetime.now().isoformat(),
+            "phase": phase_name,
+            "validation_stage": stage,
+            "status": "CRITICAL_CONTRACT_BREAK",
+            "missing_data_assets": missing_keys,
+            "current_context_available_keys": list([k for k in context.keys() if not k.startswith("_")]),
+            "remediation_guidance": f"请检查该阶段子模块的 execute 返回字典，确保显式包含且不为None: {missing_keys}"
+        }
+        logger.critical(f"🚨 [CONTRACT VIOLATION] 阶段 {phase_name} {stage} 数据契约断裂！诊断详情如下:\n"
+                        f"{json.dumps(diag_report, indent=2, ensure_ascii=False)}")
+        return False
+    return True
 
 # ========================================================
 # 阶段结果稳健缓存层（Parquet + Feather 修复版）
@@ -128,7 +181,6 @@ def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
                 
                 # 2. Feather 刚性严禁具名索引。在此处执行重置转换为纯 Arrow 列存储（C语言消费规范对齐）
                 if isinstance(value, pd.DataFrame):
-                    # 记录原始 index 名字，以便加载时精准还原
                     metadata[key]["index_names"] = list(value.index.names)
                     value.reset_index().to_feather(feather_path)
                 else:
@@ -183,14 +235,12 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
                 except Exception as e:
                     logger.warning(f"读取 Parquet 主轨失败，切往 Feather 灾备灾备: {e}")
             
-            # Feather 灾备读取逻辑与还原
             feather_dir = CACHE_ROOT / "feather" / f"Phase_{PHASE_MODULES.index(phase_name)+1}"
             feather_path = feather_dir / f"{key}.feather"
             if feather_path.exists():
                 try:
                     df_raw = pd.read_feather(feather_path)
                     idx_names = meta.get("index_names", [])
-                    # 智能还原被剥离的具名索引
                     valid_idx = [col for col in idx_names if col in df_raw.columns]
                     if valid_idx:
                         df_raw.set_index(valid_idx, inplace=True)
@@ -255,8 +305,8 @@ def parse_args():
     parser.add_argument("--skip-phases", type=str, default="", help="跳过指定阶段(逗号隔离)")
     parser.add_argument("--only-phase", type=str, default=None, help="约束仅执行指定独立阶段")
     parser.add_argument("--resume-from", type=str, default=None, help="自断点指定阶段恢复流水线")
-    parser.add_argument("--no-git-check", action="store_true", help="强制关闭 Git 脏工作区校验红线")
-    parser.add_argument("--offline", action="store_true", help="激活全离线调试模式，阻断一切外部网络下载请求")
+    parser.add_argument("--no-git-check", action="store_true", help="强制关闭 Git 脏工作区校验硬红线")
+    parser.add_argument("--offline", action="store_true", help="激活全离线调试模式，阻断一切外部 network 请求")
     parser.add_argument("--force-recompute", action="store_true", help="降级全量缓存，强制执行边缘计算")
     return parser.parse_args()
 
@@ -321,16 +371,13 @@ def run_pipeline(args):
         "mae_threshold": 1e-5, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
         "max_model_size": 2e9, "smoothing_period": 25,
         
-        # ====================================================
-        # 跨市场联邦迁移学习专属控制硬红线配置 (Flow-Pro 5.1/5.4 规范落地)
-        # ====================================================
-        "federated_nodes": ["A_share_node", "US_share_node"],   # 分布式独立私有数据特征节点映射
-        "negative_transfer_patience": 3,                        # 触发微调回退的负迁移红线连续轮数上限
-        "domain_adaptation_alpha": 0.1,                         # DANN架构最大均值差异（MMD）损失协同项平衡系数
-        "gradient_compression_top_k": 0.1,                      # 隐私边界通信数据压缩比例约束
-        "domain_adaptation_loss_type": "MMD",                   # 跨地理区域底层规律提炼对抗对齐损失函数类型
-        "pure_ashare_baseline_loss": None,                      # 纯本地轨独立拟合性能参照系Loss锚点
-        "negative_transfer_rollback_flag": False,               # 负迁移检测自适应熔断一键物理回归本地模型硬开关
+        "federated_nodes": ["A_share_node", "US_share_node"],   
+        "negative_transfer_patience": 3,                        
+        "domain_adaptation_alpha": 0.1,                         
+        "gradient_compression_top_k": 0.1,                      
+        "domain_adaptation_loss_type": "MMD",                   
+        "pure_ashare_baseline_loss": None,                      
+        "negative_transfer_rollback_flag": False,               
     }
     for k, v in default_config.items():
         if k not in config: config[k] = v
@@ -341,23 +388,19 @@ def run_pipeline(args):
         "trading_days_dt": None, "slices": {}, "assets": [], "embargo_window": None, "holding_period": config.get("holding_period", 5),
         "_completed_phases": set(), "_phase_status": {}, "_phase_timings": {},
         
-        # 联邦底层通信信道和防劣化监控变量初始化
         "federated_status": {"current_round": 0, "node_sync_tokens": {}},
         "negative_transfer_monitor": {"consecutive_violation_count": 0, "triggered_melt": False}
     }
 
     # ====================================================
-    # Flow-Pro 1.4: 独立双市场交易日历服务与交易日序号硬对齐机制
+    # Flow-Pro 1.4: 独立双市场交易日历服务与交易日序号硬对齐
     # ====================================================
     try:
-        # 1. 组装中国交易日历独立服务核心时序
         cal_cn = data_manager.fetch_trading_calendar(2010, 2026)
         pipeline_context["trading_days_dt_cn"] = cal_cn.tz_localize(pytz.timezone("Asia/Shanghai")).tolist()
         
-        # 2. 组装美股交易日历独立服务核心时序
         if hasattr(data_manager, "_ak") and not args.offline:
             try:
-                # 在线模式下通过获取标普500指数底层实际标的交易日期作为真实美股历轨
                 df_us = data_manager._ak.index_us_stock_sina(symbol=".INX")
                 if df_us is not None and not df_us.empty:
                     cal_us = pd.DatetimeIndex(pd.to_datetime(df_us["date"])).sort_values()
@@ -368,12 +411,10 @@ def run_pipeline(args):
                 logger.warning(f"⚠️ 动态抓取美股实时交易日历异常({e})，系统启动弹保障轨：全同步对齐兜底")
                 cal_us = cal_cn
         else:
-            # 离线模式及无网络环境默认采用同步镜像序列对齐兜底
             cal_us = cal_cn
             
         pipeline_context["trading_days_dt_us"] = cal_us.tz_localize(pytz.timezone("America/New_York")).tolist()
         
-        # 3. 核心升级：废弃自然日对齐，全量构建交易日序号双向映射（美股第 N 个交易日映射 A股第 N 个交易日）
         cn_str_list = [d.strftime("%Y-%m-%d") for d in pipeline_context["trading_days_dt_cn"]]
         us_str_list = [d.strftime("%Y-%m-%d") for d in pipeline_context["trading_days_dt_us"]]
         min_len = min(len(cn_str_list), len(us_str_list))
@@ -392,34 +433,46 @@ def run_pipeline(args):
             "seq_to_date_us": {i: d for i, d in enumerate(us_str_list)},
         }
         
-        # 默认回测引擎时序推进轴绑定 A 股独立底层
         pipeline_context["trading_days_dt"] = pipeline_context["trading_days_dt_cn"]
         logger.info(f"✅ 跨市场双历对齐服务启动完毕。硬映射代数序号资产深度: {min_len} 个步进令牌。")
     except Exception as e:
         logger.critical(f"❌ 中国/美股独立双系统交易日历装配阻断崩溃: {e}"); sys.exit(1)
 
     # ====================================================
-    # 主循环体：支持级联缓存回溯的流程调度控制核
+    # 主循环体：嵌入数据契约硬校验防御体系
     # ====================================================
     for phase_name in phases_to_run:
         if not check_dependencies(phase_name, pipeline_context["_completed_phases"]):
             logger.critical(f"❌ 依赖异常：阶段 {phase_name} 被物理拦截熔断"); sys.exit(1)
 
-        # 1. 尝试触发会话状态高速恢复（若未开启强制重算）
+        # 1. 尝试触发会话状态高速恢复
+        cache_hit = False
         if not args.force_recompute:
             cached_data = load_phase_result(phase_name)
             if cached_data is not None:
-                logger.info(f"✅ [CACHE HIT] 检测到阶段 {phase_name} 完整缓存，正在热注入进程...")
-                pipeline_context.update(cached_data)
-                pipeline_context["_completed_phases"].add(phase_name)
-                pipeline_context["_phase_status"][phase_name] = "cached"
-                continue
+                logger.info(f"✅ [CACHE HIT] 检测到阶段 {phase_name} 完整缓存，尝试执行热注入验证...")
+                
+                # 针对恢复的缓存临时跑一次契约核验，确保历史资产未损毁
+                if validate_phase_contract(phase_name, cached_data, stage="output"):
+                    pipeline_context.update(cached_data)
+                    pipeline_context["_completed_phases"].add(phase_name)
+                    pipeline_context["_phase_status"][phase_name] = "cached"
+                    cache_hit = True
+                    continue
+                else:
+                    logger.warning(f"⚠️ 阶段 {phase_name} 磁盘缓存未通过输出契约验证，降级为强制重算轨道...")
+
+        if not cache_hit:
+            if args.force_recompute:
+                logger.info(f"⚡ 外部指令强制覆盖缓存，重新解算阶段: {phase_name} (--force-recompute)")
             else:
                 logger.info(f"⏳ 阶段 {phase_name} 无可用存盘缓存，正常切入计算流...")
-        else:
-            logger.info(f"⚡ 外部指令强制覆盖缓存，重新解算阶段: {phase_name} (--force-recompute)")
 
-        # 2. 调度执行特定数据段/回测执行算子
+        # 2. 前置校验：流入子模块前，进行 Input Schema 核验
+        if not validate_phase_contract(phase_name, pipeline_context, stage="input"):
+            logger.critical(f"❌ [INPUT BLOCK] 阶段 {phase_name} 上游输入要素不完整，刚性终止执行！")
+            sys.exit(1)
+
         func = load_phase_module(phase_name)
         if func is None:
             pipeline_context["_phase_status"][phase_name] = "skipped"
@@ -433,6 +486,12 @@ def run_pipeline(args):
             if not isinstance(result, dict):
                 raise TypeError(f"开发接口规范违背错误: 阶段 {phase_name} 必须向总线返回 dict 字典对象")
 
+            # 3. 后置校验：子模块执行完毕，强行拦截 Output Schema
+            # 这一步能精准捕捉 Step 6 没传 daily_adv20 或 Step 7 没构造 nav_history 的缺陷
+            if not validate_phase_contract(phase_name, result, stage="output"):
+                logger.critical(f"❌ [OUTPUT BLOCK] 阶段 {phase_name} 业务产出物与设计契约不吻合，拒绝合并进全局上下文！")
+                sys.exit(1)
+
             pipeline_context.update(result)
             elapsed = time.time() - start_time
             pipeline_context["_completed_phases"].add(phase_name)
@@ -440,7 +499,7 @@ def run_pipeline(args):
             pipeline_context["_phase_timings"][phase_name] = elapsed
             audit_logger.log_event("PHASE_SUCCESS", {"phase": phase_name, "elapsed_seconds": elapsed})
 
-            # 3. 稳健持久化，同时生成未来 C 语言消费级的 Feather 文件及 Python Parquet 矩阵
+            # 4. 稳健持久化落盘
             save_phase_result(phase_name, result)
         except Exception as e:
             elapsed = time.time() - start_time
@@ -452,7 +511,7 @@ def run_pipeline(args):
         save_context_snapshot(pipeline_context, phase_name)
 
     audit_logger.flush()
-    logger.info("🏁 QUANT-ULTRA ALL AGENTS WORKFLOW REPLAY COMPLETED")
+    logger.info("🏁 QUANT-ULTRA ALL AGENTS WORKFLOW REPLAY COMPLETED WITH CONTRACT ASSURANCES")
 
 if __name__ == '__main__':
     args = parse_args()
