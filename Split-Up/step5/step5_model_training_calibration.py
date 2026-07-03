@@ -5,6 +5,7 @@ Fully compliant with Final-Flow.md [2026 Production Release]
 面向主管道总线的主入口文件，负责子组件级联调用与监控。
 🟩 增强安全栅栏：防范由于热启动变量真空引发的下游级联断层。
 """
+from datetime import date
 import logging
 import pandas as pd
 
@@ -25,7 +26,14 @@ def execute(pipeline_context: dict) -> dict:
 
     # 获取时间划分切片边界（兼容多级 Key）
     slices = pipeline_context.get('slices', {}) or pipeline_context.get('data_slices', {})
-    
+    print(f"🔹{date.today().strftime('%Y-%m-%d')} [Phase 5] 当前切片视区：{slices}")
+
+    # 🍏 【新增代码：数据契约对齐】双轨跨市场拓扑向下兼容解包，提取 A 股主战场切片序列
+    if isinstance(slices, dict) and ("CN" in slices or "US" in slices):
+        logger.info("🌐 [数据契约对齐] 检测到上游跨市场双轨切片拓扑，自动提取 CN (A股主战场) 扁平化时空切片...")
+        slices = slices.get("CN", {})
+        pipeline_context['slices'] = slices  # 同步回写全局总线上下文，防范下游子模块级联断层
+
     # 🛡️ 智能时空自愈栅栏：如果由于上游全量缓存击中导致 slices 丢失或为空，通过全局历轨轴强行物理还原
     if not slices or not any(slices.values()):
         logger.warning("🚨 [时空断层自愈] 检测到上游全部缓存击中（热启动）导致 slices 视区为空！启动硬核时空分区恢复程序...")
