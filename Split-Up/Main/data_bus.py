@@ -139,45 +139,109 @@ class PITDataBus:
     def get_benchmark_code(self) -> str: return "000300.SH"
 
     def get_free_float_market_cap(self, asset: str, date: datetime) -> float:
-        if self.get_node_by_asset(asset) == "US_share_node": return 500000.0  # 美股节点默认常数大市值底座
-        cache_key = f"{asset}_{date.strftime('%Y%m%d')}"
-        if cache_key in self._mcap_cache: return self._mcap_cache[cache_key]
-        try:
-            code = f"sh.{asset.split('.')[0]}" if asset.endswith('.SH') else f"sz.{asset.split('.')[0]}"
-            rs = self.manager._bs.query_history_k_data_plus(code=code, fields="date,free_float,close", start_date=date.strftime("%Y-%m-%d"), end_date=date.strftime("%Y-%m-%d"), adjustflag="2")
-            if rs is None or rs.error_code != "0" or not rs.next(): raise Exception("BaoStock 错误")
-            row = rs.get_row_data()
-            mcap = (float(row[1]) * float(row[2])) / 1e4
-            self._mcap_cache[cache_key] = mcap
-            return mcap
-        except Exception as e:
-            return self._handle_failure("get_free_float_market_cap", asset, e, fallback_value=0.0)
+        if self.get_node_by_asset(asset) == "US_share_node": 
+            return 500000.0  # 美股节点默认常数大市值底座
+            
+        # 1. 快速检查点状日线缓存是否命中
+        date_str = date.strftime('%Y-%m-%d')
+        cache_key = f"{asset}_{date_str}"
+        if cache_key in self._mcap_cache: 
+            return self._mcap_cache[cache_key]
+        
+        # 2. 🍏【核心提速】检查资产是否已经完成了全量历史自由流通市值的内存预载
+        asset_series_key = f"series_{asset}"
+        if asset_series_key not in self._mcap_cache:
+            try:
+                code = f"sh.{asset.split('.')[0]}" if asset.endswith('.SH') else f"sz.{asset.split('.')[0]}"
+                self._logger.info(f"📡 [数据总线] 正在为内层优化器一次性全量预载资产自由流通市值时序: {asset}")
+                
+                # 刚性打破单日点状枷锁，一次性全量拉取全历史时序
+                rs = self.manager._bs.query_history_k_data_plus(
+                    code=code, 
+                    fields="date,free_float,close", 
+                    start_date="2010-01-01", 
+                    end_date="2026-12-31", 
+                    adjustflag="2"
+                )
+                if rs is None or rs.error_code != "0": 
+                    raise RuntimeError(f"BaoStock 全量时序加载失败，错误码: {rs.error_code if rs else 'None'}")
+                
+                data = []
+                while rs.next(): 
+                    data.append(rs.get_row_data())
+                
+                if data:
+                    df_mcap = pd.DataFrame(data, columns=["date", "free_float", "close"])
+                    df_mcap["mcap"] = (pd.to_numeric(df_mcap["free_float"]) * pd.to_numeric(df_mcap["close"])) / 1e4
+                    # 转化为哈希字典，将后续内层循环的检索耗时降为绝对的 0 毫秒
+                    self._mcap_cache[asset_series_key] = dict(zip(df_mcap["date"], df_mcap["mcap"]))
+                else:
+                    self._mcap_cache[asset_series_key] = {}
+            except Exception as e:
+                self._logger.warning(f"⚠️ 预加载资产 {asset} 市值历史发生故障: {e}，启用安全垫兜底")
+                self._mcap_cache[asset_series_key] = {}
+
+        # 3. 从全量内存哈希时序字典中瞬时切片读取
+        asset_mcap_dict = self._mcap_cache[asset_series_key]
+        if date_str in asset_mcap_dict:
+            val = asset_mcap_dict[date_str]
+            self._mcap_cache[cache_key] = val
+            return val
+            
+        # 4. 健壮性防线：若当前日期非交易日缺失快照，执行高效的 Asof 向前安全填充
+        if asset_mcap_dict:
+            sorted_dates = sorted(asset_mcap_dict.keys())
+            idx = pd.Index(sorted_dates).searchsorted(date_str, side='right') - 1
+            if idx >= 0:
+                val = asset_mcap_dict[sorted_dates[idx]]
+                self._mcap_cache[cache_key] = val
+                return val
+                
+        return self._handle_failure("get_free_float_market_cap", asset, Exception("无可用市值时序"), fallback_value=0.0)
 
     def get_sector(self, asset: str) -> str:
-        if asset in self._sector_cache: return self._sector_cache[asset]
-        if self.get_node_by_asset(asset) == "US_share_node": return "科技与成长"
+        if asset in self._sector_cache: 
+            return self._sector_cache[asset]
+        if self.get_node_by_asset(asset) == "US_share_node": 
+            return "科技与成长"
         try:
-            df = self.manager._ak.stock_industry_sw()
-            row = df[df["股票代码" if "股票代码" in df.columns else "代码"] == asset.split('.')[0]]
-            for col in ['申万行业', '行业', '申万一级行业']:
-                if col in row.columns:
-                    self._sector_cache[asset] = row.iloc[0][col]
-                    return row.iloc[0][col]
+            # 🍏【核心提速】全局懒加载单例：避免每只股票遇到新行业都去重复拉取海量网络数据
+            if not hasattr(self, "_global_sw_df") or self._global_sw_df is None:
+                self._logger.info("📡 [数据总线] 正在初始化拉取全局申万行业映射单例大表...")
+                self._global_sw_df = self.manager._ak.stock_industry_sw()
+            
+            code_pure = asset.split('.')[0]
+            code_col = "股票代码" if "股票代码" in self._global_sw_df.columns else "代码"
+            row = self._global_sw_df[self._global_sw_df[code_col] == code_pure]
+            
+            if not row.empty:
+                for col in ['申万行业', '行业', '申万一级行业']:
+                    if col in row.columns:
+                        res = row.iloc[0][col]
+                        self._sector_cache[asset] = res
+                        return res
             raise Exception("未知行业")
         except Exception as e:
             return self._handle_failure("get_sector", asset, e, fallback_value="未知")
 
     def is_marginable(self, asset: str) -> bool:
-        if self.get_node_by_asset(asset) == "US_share_node": return True
-        if asset in self._margin_cache: return self._margin_cache[asset]
+        if self.get_node_by_asset(asset) == "US_share_node": 
+            return True
+        if asset in self._margin_cache: 
+            return self._margin_cache[asset]
         try:
-            all_codes = set(self.manager._ak.stock_margin_sse(start_date="", end_date="")['证券代码']) | set(self.manager._ak.stock_margin_sz(start_date="", end_date="")['证券代码'])
-            is_margin = asset.split('.')[0] in all_codes
+            # 🍏【核心提速】全局单例集合：两融白名单一次性拉取并转化为高效 Set 物理结构
+            if not hasattr(self, "_global_margin_set") or self._global_margin_set is None:
+                self._logger.info("📡 [数据总线] 正在初始化拉取沪深两融全局成分股白名单...")
+                sse_set = set(self.manager._ak.stock_margin_sse(start_date="", end_date="")['证券代码'])
+                szse_set = set(self.manager._ak.stock_margin_sz(start_date="", end_date="")['证券代码'])
+                self._global_margin_set = sse_set | szse_set
+                
+            is_margin = asset.split('.')[0] in self._global_margin_set
             self._margin_cache[asset] = is_margin
             return is_margin
         except Exception as e:
             return self._handle_failure("is_marginable", asset, e, fallback_value=False)
-
     def get_short_rate(self, asset: str) -> float: return 0.08 / 252
 
     def compute_market_risk_aversion(self, end_date: str, window_years=5) -> float:
