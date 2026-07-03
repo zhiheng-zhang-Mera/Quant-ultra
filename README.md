@@ -12,33 +12,11 @@
 - Stores the splited version of code
 - All files are seperated and splited from the old "Phase-pipeline-flow" code
 - Code files are more moduleized, easier for locating bug and maintaince
-- **On hold** to add logic for each session/phase:
-    - 1) During each phase initialization:
-        - Check finished result cache 
-            - if **not exist**      -> process normally, store result in new folder by date
-            - if **Update Required**-> process normally, store result in new folder by date
-            - if **Update Not Need**-> load stored file, skip current process step/sub-step.
-    - 2) Saving phase/sessional result, saving general processing time
-        - After normal process progress, save result to local folders
-        - Saving format: 
-            - parquet (for python script)
-            - feather (for future C language)
-        - Saving path:
-            - Split-Up (Root) 
-                - Phase Result
-                    - parquet
-                        - Phase 1
-                            - Step 1.1
-                            - Step 1.2
-                            - ...
-                        - Phase 2
-                        - ...
-                    - feather
-                        - Phase 1
-                        - Phase 2
-                        - ...
-                - Main
-                - Step 1
-                - Step 2
-                - Step 3
-                - ...
+
+  
+## **On hold** to add logic:
+ - Extra logging during phase sequence for more explanability
+ - Remove redundent debugging purpose logger
+ - Adjust data retriving part, seems using pre-settled & hard-coded now (from debugging log)
+ - (Not sure) Model training maybe not updated because of cache loading mechanism(?)
+ - **Add a final phase 10 for compiling a report to show all results and reading guide**
