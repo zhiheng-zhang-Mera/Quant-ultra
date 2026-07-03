@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 step7/step7_fsm_backtest.py
-有限状态机交易回测中枢 [2026 生产级规范化净化版]
-修复标准 execute 接口命名错位，彻底移除自建本地 I/O
+有限状态机交易回测中枢 [2026 生产级规范化净化版 - 刚性契约对齐版]
+修复标准 execute 接口命名错位，彻底移除自建本地 I/O，完美对齐主控输出 Schema
 """
 import logging
 import numpy as np
@@ -20,7 +20,6 @@ from .execution_fsm import (
 logger = logging.getLogger("FSMBacktest.Engine")
 
 class FSMEngine:
-    # ... [保持 FSMEngine 类内部数理逻辑及有限状态机核心不产生任何变动，此处略去以防混淆] ...
     def __init__(self, context):
         self.context = context
         self.bus = context['data_bus']
@@ -151,14 +150,16 @@ def execute(pipeline_context: dict) -> dict:
     engine = FSMEngine(pipeline_context)
     engine.run_engine_pipeline()
     
-    # 构建要交回给总线并存储的纯脏数据资产
+    # 🌟 核心修复点：构建完美对齐 PHASE_OUTPUT_SCHEMA 契约的饱满字典
     result_update = {
         'daily_nav': pipeline_context['daily_nav'],
         'daily_returns': pipeline_context['daily_returns'],
         'violations': pipeline_context['violations'].astype(int),
         'final_nav': float(pipeline_context['final_nav']),
+        # 刚性注入 nav_history 键，完全对齐主控 Schema Guard，供 Step 9 MLOps 级联消费
+        'nav_history': pipeline_context['daily_nav'], 
         'fsm_backtest_ready': True
     }
     
-    logger.info("✅ Step 7 状态机前向时序模拟全量收敛，回传指标由主控一键落盘。")
+    logger.info("✅ Step 7 状态机前向时序模拟全量收敛，完美通过契约校验，交由主控合并落盘。")
     return result_update
