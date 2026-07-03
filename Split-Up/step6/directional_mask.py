@@ -1,5 +1,7 @@
 import logging
 from datetime import datetime
+import numpy as np
+import pandas as pd
 from .utils import _get_features_for_date
 
 logger = logging.getLogger("PositionSizing.DirectionalMask")
@@ -17,13 +19,23 @@ def step_m_1_directional_mask(context: dict, date: datetime) -> dict:
     long_n, neutral_n = 0, 0
     
     for sym in assets:
+        logger.info(f"[Step M.1] 处理资产 {sym} 的方向性信号掩码, 总资产数: {len(assets)}, 当前索引: {assets.index(sym)+1}/{len(assets)}")
         feat = _get_features_for_date(sym, date, context)
         if feat is None:
             masks[sym] = 0
             neutral_n += 1
             continue
         try:
-            prob = clf.predict_proba(feat.reshape(1, -1))[0]
+            # 🍏 方式 A：如果训练时使用了特征名，将一维特征动态包装为带有与模型一致的列名的 DataFrame
+            if hasattr(clf, "feature_name_") and clf.feature_name_ is not None:
+                feat_df = pd.DataFrame(feat.reshape(1, -1), columns=clf.feature_name_)
+                prob = clf.predict_proba(feat_df)[0]
+            else:
+                # 🍏 方式 B：若不确定，采用局部上下文看门狗，强行在预测瞬间屏蔽警告
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=UserWarning)
+                    prob = clf.predict_proba(feat.reshape(1, -1))[0]
             # 兼容处理分类器的输出概率维度：[负向收益概率, 中性概率, 正向多头概率]
             prob_neg = prob[0]
             prob_pos = prob[2] if len(prob) == 3 else prob[1]

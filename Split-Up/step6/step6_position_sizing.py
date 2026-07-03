@@ -63,20 +63,26 @@ def execute(pipeline_context: dict) -> dict:
         local_context['current_date'] = date_dt
         
         # 顺序执行原子现货资产管道串联（内部子算子直接根据 date_dt 检索预留的特征矩阵）
+        logger.info(f"[Step 6] 日期 {date_dt.strftime('%Y-%m-%d')} | 执行 M.1 方向性信号掩码计算...")
         masks = step_m_1_directional_mask(local_context, date_dt)
         local_context['directional_symbol_masks'] = masks
         
+        logger.info(f"[Step 6] 日期 {date_dt.strftime('%Y-%m-%d')} | M.2 Black-Litterman 融合完成]")
         R_BL, Sigma, q_low, q_high = step_m_2_black_litterman_fusion(local_context, date_dt, prev_weights)
         local_context['R_BL'] = R_BL
         local_context['Sigma_robust'] = Sigma
         
+        logger.info(f"[Step 6] 日期 {date_dt.strftime('%Y-%m-%d')} | M.3 凸优化求解器启动 | 上期权重: {prev_weights}")
         # 传入个人总本金底座以执行个人流动性双重截断
         weights = step_m_3_convex_optimization(local_context, date_dt, individual_account_equity, prev_weights)
 
         weight_records.append(weights)
         interval_records.append((q_low, q_high))
         prev_weights = weights
-        
+
+        logger.info(f"[Step 6] 日期 {date_dt.strftime('%Y-%m-%d')} | M.3 凸优化求解器完成 | 本期权重: {weights} | 约束区间: [{q_low}, {q_high}]")
+        logger.info(f"[Step 6] 日期 {date_dt.strftime('%Y-%m-%d')} | 对第 {idx + 1}/{total_days} 个交易日的头寸分配递推完成。")
+
         if (idx + 1) % 50 == 0 or (idx + 1) == total_days:
             logger.info(f" ⌛ [头寸计算中] 递推状态：{idx + 1} / {total_days} 个交易日收敛完成...")
 
