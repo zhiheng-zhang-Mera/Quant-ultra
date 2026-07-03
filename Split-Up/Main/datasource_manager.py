@@ -111,28 +111,49 @@ class FreeDataSourceManager:
         return False
 
     def fetch_index_historical(self, symbol: str, start_date: str, end_date: str, freq: str = "d") -> Optional[pd.DataFrame]:
-        cache_key = f"index_{symbol}_{start_date}_{end_date}_{freq}.parquet"
+        # 🍏 【核心优化】严禁使用动态日期作文件名！改用全局大文件本地缓存，彻底消除逐日回测的 Cache Miss
+        cache_key = f"index_{symbol}_history_master.parquet"
         cache_path = self.cache_dir / cache_key
+        
+        df = None
         if cache_path.exists():
             try:
-                if (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days < 7:
-                    df = pd.read_parquet(cache_path)
-                    if not df.empty: return df
-            except: pass
-        try:
-            code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
-            df = self._ak.stock_zh_index_hist(symbol=code, period="daily",
-                                              start_date=start_date.replace("-", ""),
-                                              end_date=end_date.replace("-", ""))
-            if not df.empty:
-                df.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low",
-                                   "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True, errors="ignore")
-                df["date"] = pd.to_datetime(df["date"])
-                df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
-                df.to_parquet(cache_path, index=False)
-                return df
-        except Exception as e:
-            self._logger.warning(f"AkShare 指数获取失败 {symbol}: {e}")
+                df = pd.read_parquet(cache_path)
+            except:
+                cache_path.unlink(missing_ok=True)
+                
+        # 若本地无大文件主缓存，则仅在第一次请求时穿透公网一次性拉取全量历史
+        if df is None or df.empty:
+            if self.offline_debug:
+                return None
+            try:
+                code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+                self._logger.info(f"📡 [指数主轨] 正在通过新版 AkShare 通道一次性初始化大盘指数全量历史: {symbol}")
+                
+                # 🍏 适配新版 AkShare 标准指数历史行情接口，取代已被官方删除的 stock_zh_index_hist
+                if hasattr(self._ak, "index_zh_a_hist"):
+                    df_raw = self._ak.index_zh_a_hist(symbol=code, period="daily", 
+                                                      start_date="20050101", 
+                                                      end_date=datetime.now().strftime("%Y%m%d"))
+                else:
+                    # 备用兼容东财/新浪镜像轨
+                    df_raw = self._ak.stock_zh_index_hist_csindex(symbol=code, period="daily", start_date="20050101", end_date=datetime.now().strftime("%Y%m%d"))
+                
+                if df_raw is not None and not df_raw.empty:
+                    df_raw.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low",
+                                           "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True, errors="ignore")
+                    df_raw["date"] = pd.to_datetime(df_raw["date"])
+                    df = df_raw[["date", "open", "high", "low", "close", "volume", "amount"]]
+                    df.sort_values("date", ascending=True, inplace=True)
+                    df.to_parquet(cache_path, index=False)
+            except Exception as e:
+                self._logger.warning(f"⚠️ AkShare 新版大盘指数全量获取失败 {symbol}: {e}，将启用安全均值防御")
+                return None
+
+        # 🍏 【高效切片】直接从高弹性的本地内存/磁盘主缓存中按照当前交易日动态切片返回
+        if df is not None and not df.empty:
+            mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
+            return df.loc[mask].copy()
         return None
 
     def fetch_us_historical(self, symbol: str, start_date: str, end_date: str, freq: str = "d") -> Optional[pd.DataFrame]:

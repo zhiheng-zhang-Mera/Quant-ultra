@@ -36,6 +36,8 @@ from Main.audit_logger import AuditLogger
 from Main.data_bus import PITDataBus
 
 warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -207,15 +209,32 @@ def save_phase_result(phase_name: str, result: Dict[str, Any]) -> None:
                 logger.error(f"❌ 固化高维复合元组资产键 [{key}] 遭遇异常: {e}")
                 metadata[key]["type"] = "unsupported"
         else:
-            json_path = parquet_dir / f"{key}.json"
+            # 🛡️ 刚性双轨拦截：优先尝试纯净原生 JSON 序列化（不带破坏性的 default=str）
             try:
+                json.dumps(value, ensure_ascii=False)
+                # 纯净序列化成功 -> 说明是标准基础 JSON 类型（如 list, dict, short, int），安全写盘
+                json_path = parquet_dir / f"{key}.json"
                 with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(value, f, ensure_ascii=False, indent=2, default=str)
+                    json.dump(value, f, ensure_ascii=False, indent=2)
                 metadata[key]["type"] = "json"
                 metadata[key]["json"] = str(json_path.relative_to(CACHE_ROOT))
-            except Exception as e:
-                logger.warning(f"键 {key} 无法序列化为 JSON: {e}")
-                metadata[key]["type"] = "unsupported"
+            except Exception:
+                # 纯净序列化失败 -> 判定为机器学习模型、Scaler算子等高维复杂活体单例，刚性切往高保真 Pickle 轨
+                import pickle
+                pkl_path = parquet_dir / f"{key}.pkl"
+                try:
+                    with open(pkl_path, "wb") as f:
+                        pickle.dump(value, f)
+                    metadata[key]["type"] = "pickle"
+                    metadata[key]["pkl"] = str(pkl_path.relative_to(CACHE_ROOT))
+                    logger.info(f"💾 [高保真活体固化] 资产键 [{key}] 无法通过原生JSON校验，已通过 Pickle 独立安全持久化")
+                except Exception as pkl_e:
+                    logger.error(f"❌ 固化高级活体对象资产键 [{key}] 遭遇物理故障: {pkl_e}")
+                    # 极端降级兜底：维持原有文本化逻辑，防止中断写盘主控制流
+                    json_path = parquet_dir / f"{key}.json"
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(value, f, ensure_ascii=False, indent=2, default=str)
+                    metadata[key]["type"] = "unsupported"
 
     meta_path = parquet_dir / "metadata.json"
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -298,6 +317,16 @@ def load_phase_result(phase_name: str) -> Optional[Dict[str, Any]]:
                         result[key] = json.load(f)
                 except Exception as e:
                     logger.warning(f"读取 JSON 键 {key} 失败: {e}")
+        elif meta.get("type") == "pickle":
+            pkl_path = parquet_dir / f"{key}.pkl"
+            if pkl_path.exists():
+                try:
+                    import pickle
+                    with open(pkl_path, "rb") as f:
+                        result[key] = pickle.load(f)
+                    logger.info(f"💾 [活体注入激活] 成功从二进制轨道恢复高级对象: {key} (类型: {type(result[key]).__name__}")
+                except Exception as e:
+                    logger.error(f"读取 Pickle 键 {key} 失败: {e}")
     return result if result else None
 
 def load_phase_module(phase_name: str):
