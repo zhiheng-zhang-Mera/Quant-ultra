@@ -18,4 +18,13 @@ DEFAULT_RESIDUAL_RATE = 0.0        # 退市资产清算残值率 (根据契约�
 STATIC_KAPPA_IMPACT = 0.001        # 10bp 冲击基准线
 STATIC_ALPHA_IMPACT = 0.5          # 弹性系数
 
+# 追高防御与个体持仓限制
 GAP_UP_THRESHOLD = 0.07            # 隔夜高开追高防御阈值 (7%)
+MAX_SINGLE_TICKET_PROP = 0.10      # 个人单票绝对持仓权重上限 (10%)
+
+# 资产池特异性整手单元映射规则
+STAR_MARKET_LOT = 200              # 科创板 (688) 交易整手单元
+MAIN_BOARD_LOT = 100               # 普通主板/创业板/科创板通用整手单元
+
+# 回测账户初始资金（若上下文未提供）
+INITIAL_CASH = 10_000_000.0

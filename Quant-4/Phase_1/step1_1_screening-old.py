@@ -39,7 +39,7 @@ def _worker_core(symbol: str, start_date: str, end_date: str, data_bus, now, lim
         success = True
         return {'symbol': symbol, 'hist_df': hist_df, 'adv': adv, 'list_date': list_date, 'board': board}
     except Exception as e:
-        logger.debug(f"评估资产流动性失败 {symbol}: {e}")
+        logger.debug(f"Evaluate asset liquidity failed for {symbol} | 评估资产流动性失败: {e}")
         return None
     finally:
         if limiter: limiter.release(success)
@@ -55,7 +55,6 @@ def run_screening(context: dict, data_bus, data_manager):
     if not past_days: raise RuntimeError("Timeline sequence axis broken. | 交易时序轴发生断裂")
     latest_trading_day = past_days[-1]
     context['effective_latest_trading_day'] = latest_trading_day
-    logger.info("[TIMING] Effective latest trading day resolved: %s", latest_trading_day.strftime('%Y-%m-%d'))
 
     screening_cache = data_manager.cache_dir / "screening_results.parquet"
     if screening_cache.exists():
@@ -65,28 +64,21 @@ def run_screening(context: dict, data_bus, data_manager):
                 context['assets'] = df_cache['symbol'].tolist()
                 context['adv_data'] = {row['symbol']: row['adv'] for _, row in df_cache.iterrows()}
                 logger.info("[OP] Trigger Local Checkpoint Recovery | [SOURCE] Local Parquet Cache Database | [RESULT] Hydrated context for %s symbols | [SIGNIFICANCE] Bypasses heavy historical computation and IO traps completely", len(context['assets']))
-                logger.info("[操作] 触发本地检查点恢复 | [来源] 本地 Parquet 缓存数据库 | [结果] 成功还原 %s 只标的的上下文 | [意义] 完全绕过沉重的历史重算与网络 IO 陷阱", len(context['assets']))
+                logger.info("[操作] 触发本地检查点恢复 | [来源] 本地 Parquet 缓存数据库 | [结果] 成功还原 %s 只标的的上下文 | [意义] 完全绕过沉重的历史重算与网络 IO 陷阱")
                 return
-        except Exception as e: 
-            logger.warning(f"Failed to ingest screen snapshot: {e}")
+        except Exception as e: logger.warning(f"Failed to ingest screen snapshot: {e}")
 
     symbols = data_bus.get_universe()
     symbols = [s for s in symbols if s.split('.')[0].isdigit() or s.endswith('.US')]
-    logger.info("[DATA] Total raw symbols from universe: %s, after filtering (A-share + US) usable: %s", len(data_bus.get_universe()), len(symbols))
-    logger.info("[DATA] 原始标的池总数: %s, 经双市场过滤后可用的标的数: %s", len(data_bus.get_universe()), len(symbols))
     
     end_date = now.strftime('%Y-%m-%d')
     start_date = (now - timedelta(days=400)).strftime('%Y-%m-%d')
-    logger.info("[RANGE] Data pull window: %s to %s", start_date, end_date)
-    
     limiter = AdaptiveConcurrencyLimiter() if HAS_PSUTIL else None
     max_workers = CONFIG.get("ADAPTIVE_MAX_WORKERS", 4) if HAS_PSUTIL else CONFIG.get("DOWNLOAD_WORKERS", 8)
-    logger.info("[PARALLEL] Using max_workers=%s, adaptive=%s", max_workers, HAS_PSUTIL)
     
     raw_results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {executor.submit(_worker_core, sym, start_date, end_date, data_bus, now, limiter): sym for sym in symbols}
-        logger.info("[TASK] Submitted %s screening tasks to thread pool", len(future_map))
         for future in tqdm(as_completed(future_map), total=len(symbols), desc="[分布式流动性初筛]"):
             res = future.result()
             if res:
@@ -94,32 +86,19 @@ def run_screening(context: dict, data_bus, data_manager):
                 context.setdefault('asset_histories', {})[res['symbol']] = res['hist_df']
 
     if limiter: limiter.stop()
-    logger.info("[RESULT] Raw screening completed, %s assets passed the basic data availability check", len(raw_results))
 
     filtered_list = []
     ipo_safety_days = context['config'].get("ipo_safety_days", 20)
     min_adv_threshold = context['config'].get("min_adv_threshold", 1e7)
 
-    ipo_rejected = 0
-    adv_rejected = 0
     for item in raw_results:
         days_listed = (now - item['list_date']).days if item['list_date'] else 999
         if item['adv'] >= min_adv_threshold and days_listed >= ipo_safety_days:
             filtered_list.append(item)
-        else:
-            if item['adv'] < min_adv_threshold:
-                adv_rejected += 1
-            if days_listed < ipo_safety_days:
-                ipo_rejected += 1
 
     context['assets'] = [x['symbol'] for x in filtered_list]
     context['adv_data'] = {x['symbol']: x['adv'] for x in filtered_list}
-    logger.info("[FILTER] Final filtered assets: %s (rejected: ADV insufficient %s, IPO not mature %s)", len(filtered_list), adv_rejected, ipo_rejected)
-    logger.info("[FILTER] 最终筛选后资产数: %s (流动性不足剔除: %s, 次新股保护剔除: %s)", len(filtered_list), adv_rejected, ipo_rejected)
 
-    # ====================================================
-    # 容量前置估算模型构建 (Flow-Pro 1.1 刚性落地)
-    # ====================================================
     if filtered_list:
         max_part_rate = context['config'].get("max_participation_rate", 0.05)
         expected_turnover = context['config'].get("expected_turnover", 0.05)
@@ -131,12 +110,7 @@ def run_screening(context: dict, data_bus, data_manager):
         
         logger.info("[OP] Inverse Prudent Capacity Base | [SOURCE] Micro Liquidity Friction Matrix | [RESULT] AUM Limit Constant: %s CNY | [SIGNIFICANCE] Pinpoints investment scale choke points under strict turnover boundaries", theoretical_aum_limit)
         logger.info("[操作] 反推审慎容量基准 | [来源] 微观流动性摩擦矩阵 | [结果] 个人资产安全规模上限: %s 元 | [意义] 在严格的换手率边界下，精准锁定位资产池中窄通道流动性瓶颈上限")
-        # 额外输出容量分布统计
-        logger.info("[DIST] Capacity distribution: min=%.2f, median=%.2f, max=%.2f (CNY)", min(capacities), pd.Series(capacities).median(), max(capacities))
 
         df_out = pd.DataFrame(filtered_list).drop(columns=['hist_df'], errors='ignore')
         df_out['cache_date'] = latest_trading_day.strftime('%Y-%m-%d')
         df_out.to_parquet(screening_cache, index=False)
-        logger.info("[CACHE] Screening results cached to %s (records=%s)", screening_cache, len(df_out))
-    else:
-        logger.warning("[WARN] No assets passed screening, capacity estimation skipped")
