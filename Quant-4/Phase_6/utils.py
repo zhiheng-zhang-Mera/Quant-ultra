@@ -32,17 +32,37 @@ def _get_features_for_date(asset: str, date: datetime, context: dict) -> np.ndar
     return raw_vec
 
 def _compute_robust_covariance(bus, assets: list, date: datetime, lookback: int = 252) -> np.ndarray:
-    """使用 Ledoit-Wolf 经验收缩估计器解算高维横截面资产协方差，防止协方差矩阵奇异逆崩溃"""
+    """使用 Ledoit-Wolf 经验收缩估计器解算高维横截面资产协方差，全面适配在途高速内存切片"""
     end_date_str = date.strftime('%Y-%m-%d')
     start_date_str = (date - timedelta(days=int(lookback * 1.5))).strftime('%Y-%m-%d')
     
+    # 提取高速预载句柄
+    bulk_cache = bus.context.get('bulk_history_cache') if hasattr(bus, 'context') else None
+    if not bulk_cache and 'bulk_history_cache' in bus.__dict__: # 针对 context 传递链多样性适配
+        bulk_cache = bus.bulk_history_cache
+        
     ret_series_list = []
+    ts_target = pd.Timestamp(date)
+
     for sym in assets:
-        df = bus.load_asset_history(sym, start_date=start_date_str, end_date=end_date_str)
+        df = None
+        # ⭐ 核心性能提升点：优先撞击全量在途内存表，将 I/O 耗时彻底清零
+        if bulk_cache and sym in bulk_cache:
+            df_full = bulk_cache[sym]
+            df = df_full.loc[start_date_str:end_date_str] # 毫秒级内存检索
+        else:
+            df = bus.load_asset_history(sym, start_date=start_date_str, end_date=end_date_str)
+            
         if df is not None and not df.empty:
             col = 'actual_log_return' if 'actual_log_return' in df.columns else 'log_return'
-            s = df[col].reindex(pd.date_range(start_date_str, end_date_str)).fillna(0.0).tail(lookback)
-            ret_series_list.append(s.values)
+            # 采用极致平滑的 tail 截取
+            s = df[col].tail(lookback)
+            if len(s) < lookback:
+                # 长度不达标时执行刚性零值对齐补齐
+                pad = np.zeros(lookback - len(s))
+                ret_series_list.append(np.concatenate([pad, s.values]))
+            else:
+                ret_series_list.append(s.values)
         else:
             ret_series_list.append(np.zeros(lookback))
             
@@ -51,8 +71,15 @@ def _compute_robust_covariance(bus, assets: list, date: datetime, lookback: int 
     
     try:
         lw = LedoitWolf().fit(X_clean)
-        logger.info("[OP] Standardize Shrinkage Covariance | [SOURCE] Matrix Return Subspace | [RESULT] Robust Cov Shape: %s | [SIGNIFICANCE] Eliminates eigenvalue dispersion to secure matrix inversion", lw.covariance_.shape)
-        logger.info("[操作] 解算稳健收缩协方差 | [来源] 资产历史收益率长时序子空间 | [结果] Ledoit-Wolf 矩阵维度: %s | [意义] 物理压缩特征值离散度，为 Black-Litterman 逆矩阵提供坚固数值地基")
+        
+        if not hasattr(_compute_robust_covariance, "_call_count"):
+            _compute_robust_covariance._call_count = 0
+        _compute_robust_covariance._call_count += 1
+        
+        if _compute_robust_covariance._call_count == 1 or _compute_robust_covariance._call_count % 100 == 0:
+            logger.info("[OP] Standardize Shrinkage Covariance | [RESULT] Robust Cov Shape: %s | [DAYS] %d", 
+                        lw.covariance_.shape, _compute_robust_covariance._call_count)
+            
         return lw.covariance_
     except Exception:
         return np.eye(len(assets)) * 0.01
@@ -69,17 +96,28 @@ def _compute_market_weights(bus, assets: list, date: datetime) -> np.ndarray:
     return mcap_arr / (total_mcap if total_mcap > 0 else 1.0)
 
 def _compute_individual_shares_upper(bus, asset: str, date: datetime, nav: float, config: dict) -> float:
-    """针对个人账户微观流动性冲击设置双重限额防线：权重上限 = min(10%, 10% * ADV_20 / 账户可用总权益)"""
+    """个人流动性优化限额：双重限额防线（全时序内存切片提速版）"""
     lookback_adv = config.get('lookback_adv', 20)
     end_date_str = date.strftime('%Y-%m-%d')
     start_date_str = (date - timedelta(days=45)).strftime('%Y-%m-%d')
     
+    bulk_cache = bus.context.get('bulk_history_cache') if hasattr(bus, 'context') else None
+    adv_20 = 0.0
+    
     try:
-        hist = bus.load_asset_history(asset, start_date=start_date_str, end_date=end_date_str)
-        adv_20 = hist['amount'].tail(lookback_adv).mean() if (hist is not None and not hist.empty) else 0.0
-    except Exception: adv_20 = 0.0
+        df = None
+        if bulk_cache and asset in bulk_cache:
+            df = bulk_cache[asset].loc[start_date_str:end_date_str] # 内存切片
+        else:
+            df = bus.load_asset_history(asset, start_date=start_date_str, end_date=end_date_str)
+            
+        if df is not None and not df.empty:
+            col = 'amount' if 'amount' in df.columns else 'volume'
+            adv_20 = df[col].tail(lookback_adv).mean()
+    except Exception: 
+        adv_20 = 0.0
         
-    if pd.isna(adv_20) or adv_20 <= 0: adv_20 = 20000000.0  # 灾备自愈 2000 万均值底座
+    if pd.isna(adv_20) or adv_20 <= 0: adv_20 = 20000000.0  # 灾备自愈均值底座
         
     liq_upper = (adv_20 * 0.10) / (nav if nav > 0 else config.get('individual_account_equity', 1e7))
     final_bound = float(np.clip(liq_upper, 0.01, 0.10))

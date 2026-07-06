@@ -47,6 +47,13 @@ def step_m_1_directional_mask(context: dict, date: datetime) -> dict:
             logger.debug(f"Direction asset check fail on {sym}: {e}")
             masks[sym] = 0; neutral_count += 1
             
-    logger.info("[OP] Filter Conditional odds Gates | [SOURCE] Phase_5 Real-time Classifier Model | [RESULT] Total Long Checklist: %s, Neutralized Shunts: %s | [SIGNIFICANCE] Forms categorical state gates for multi-stage allocation", long_count, neutral_count)
-    logger.info("[操作] 执行条件胜率门控筛选 | [来源] 阶段5活体机器学习分类网络 | [结果] 多头激发计入数: %s, 判定中性拦截数: %s | [意义] 完成横截面预测胜率置信度合规初筛，为级联矩阵提供条件状态掩码")
+    # 性能优化：引入交易日级别的动态看门狗，每 100 天释放一次控制台 stdout 锁
+    if not hasattr(step_m_1_directional_mask, "_call_count"):
+        step_m_1_directional_mask._call_count = 0
+    step_m_1_directional_mask._call_count += 1
+    
+    if step_m_1_directional_mask._call_count == 1 or step_m_1_directional_mask._call_count % 100 == 0:
+        logger.info("[OP] Filter Conditional odds Gates | [SOURCE] Phase_5 Real-time Classifier Model | [RESULT] Total Long Checklist: %s, Neutralized Shunts: %s | [SIGNIFICANCE] Forms categorical state gates for multi-stage allocation (Total days: %d)", long_count, neutral_count, step_m_1_directional_mask._call_count)
+        logger.info("[操作] 执行条件胜率门控筛选 | [来源] 阶段5活体机器学习分类 network | [结果] 多头激发计入数: %s, 判定中性拦截数: %s | [意义] 完成横截面预测胜率置信度合规初筛，为级联矩阵提供条件状态掩码 (当前累计执行: %d 天)", long_count, neutral_count, step_m_1_directional_mask._call_count)
+        
     return masks

@@ -38,12 +38,84 @@ class FSMEngine:
         self.impairment_factor = {sym: 1.0 for sym in self.assets}
         self.impairment_applied = {sym: False for sym in self.assets}
 
-        # 权重数据
-        self.daily_weights = context['daily_weights']
-        self.daily_intervals = context.get('daily_intervals')  # 包含 q_low, q_high
+        # ==============================================================================
+        # 🛡️ 注入时序轴时区自适应动态锚定引擎，彻底消除 tz-naive 与 tz-aware 冲突
+        # ==============================================================================
+        # 主动提取 DataBus 内部期望的物理时区令牌，默认兜底为 UTC
+        target_tz = getattr(self.bus, '_tz', 'UTC')
+
+        self.daily_weights = context['daily_weights'].copy()
+        self.daily_weights.index = pd.to_datetime(self.daily_weights.index)
+        if self.daily_weights.index.tz is None:
+            self.daily_weights.index = self.daily_weights.index.tz_localize(target_tz)
+        else:
+            self.daily_weights.index = self.daily_weights.index.tz_convert(target_tz)
+        
+        self.daily_intervals = context.get('daily_intervals')
         if self.daily_intervals is not None:
-            self.q_low = self.daily_intervals['q_low']
-            self.q_high = self.daily_intervals['q_high']
+            self.daily_intervals = self.daily_intervals.copy()
+            self.daily_intervals.index = pd.to_datetime(self.daily_intervals.index)
+            if self.daily_intervals.index.tz is None:
+                self.daily_intervals.index = self.daily_intervals.index.tz_localize(target_tz)
+            else:
+                self.daily_intervals.index = self.daily_intervals.index.tz_convert(target_tz)
+        # ==============================================================================
+        
+        # ==============================================================================
+        # 🛡️ 自适应截面维度对齐引擎，彻底封杀 MultiIndex 错位与上游命名漂移
+        # ==============================================================================
+        self.q_low = None
+        self.q_high = None
+        
+        if self.daily_intervals is not None:
+            cols = self.daily_intervals.columns
+            is_multi = isinstance(cols, pd.MultiIndex)
+
+            # 声明模糊容灾令牌候选池（完美抵抗 CQR 标定层的契约脱靶）
+            LOW_CANDIDATES = ['q_low', 'q_lower', 'lower', 'low', 'q_0.05', 'q_0.025']
+            HIGH_CANDIDATES = ['q_high', 'q_upper', 'upper', 'high', 'q_0.95', 'q_0.975']
+
+            target_low_attr = None
+            target_high_attr = None
+
+            if is_multi:
+                # 【多重索引自愈】遍历所有列层级，精准定位分位数 Metric 所在的物理轴
+                for level in range(cols.nlevels):
+                    level_tags = cols.get_level_values(level).unique()
+                    matched_low = [c for c in LOW_CANDIDATES if c in level_tags]
+                    if matched_low:
+                        target_low_attr = matched_low[0]
+                        matched_high = [c for c in HIGH_CANDIDATES if c in level_tags]
+                        target_high_attr = matched_high[0] if matched_high else None
+                        
+                        # 使用横截面交叉切片算子 .xs() 完美提取并重组为 (Date, Asset) 维度的纯净矩阵
+                        self.q_low = self.daily_intervals.xs(target_low_attr, level=level, axis=1)
+                        if target_high_attr:
+                            self.q_high = self.daily_intervals.xs(target_high_attr, level=level, axis=1)
+                        break
+            else:
+                # 【单层索引兜底】常规列名模糊寻优
+                for c in LOW_CANDIDATES:
+                    if c in cols:
+                        target_low_attr = c
+                        break
+                for c in HIGH_CANDIDATES:
+                    if c in cols:
+                        target_high_attr = c
+                        break
+                
+                if target_low_attr:
+                    self.q_low = self.daily_intervals[target_low_attr]
+                if target_high_attr:
+                    self.q_high = self.daily_intervals[target_high_attr]
+
+            # 打印对齐遥测监控日志
+            if target_low_attr:
+                logger.info("[ALIGN] Successfully aligned conformal interval low axis via: '%s'", target_low_attr)
+            else:
+                available_info = list(cols)[:5] if not is_multi else [list(cols.get_level_values(i)[:3]) for i in range(cols.nlevels)]
+                logger.warning("[ALIGN] Conformal Interval Missing or Unrecognized. Structure: %s. Disabling Violation Check.", available_info)
+        # ==============================================================================
 
         self.current_date = None
         self.prev_weights = {sym: 0.0 for sym in self.assets}
@@ -80,8 +152,7 @@ class FSMEngine:
         return float(self.cash + mv)
 
     def _check_is_delisted(self, sym) -> bool:
-        """退市判断，可扩展为从数据总线查询"""
-        # 此处简化为查询 delisting_date 是否存在且小于当前日期
+        """退市判断"""
         del_date = self.bus.query_by_pit(sym, self.current_date, "delisting_date")
         if del_date is not None and pd.Timestamp(del_date) <= pd.Timestamp(self.current_date):
             return True
@@ -156,13 +227,13 @@ class FSMEngine:
             ret = (nav_after - prev_nav) / prev_nav if prev_nav > 0 else 0.0
             self.daily_returns_list.append((date_str, ret))
 
-            # ---- 6. 置信区间违规检测（若提供 q_low/q_high） ----
+            # ---- 6. 置信区间违规检测（若成功提炼出 q_low/q_high） ----
             violation = 0
-            if hasattr(self, 'q_low') and self.q_low is not None:
-                # 计算当前持仓加权平均区间
+            if getattr(self, 'q_low', None) is not None and getattr(self, 'q_high', None) is not None:
                 total_weight = sum(adjusted_weights.values())
                 if total_weight > 0:
                     w_vec = np.array([adjusted_weights.get(s, 0.0) for s in self.assets])
+                    # 此时的 q_low 已经是解耦开的以 Asset 为列、Date 为行的纯净 DataFrame，.get 完美无缝运行
                     low_vec = np.array([self.q_low.loc[date].get(s, 0.0) for s in self.assets])
                     high_vec = np.array([self.q_high.loc[date].get(s, 0.0) for s in self.assets])
                     port_low = np.average(low_vec, weights=w_vec)

@@ -5,7 +5,7 @@ Phase 9 Pipeline Orchestrator - Production Release & Immutable Asset Ledger
 import logging
 from datetime import datetime
 import pandas as pd
-from Phase_9.shadow_recon import run_shadow_reconciliation
+from Phase_9.shadow_reconciliation import run_shadow_reconciliation
 from Phase_9.tiered_updater import evaluate_distribution_drift
 from Phase_9.telemetry_alerts import process_nested_risk_telemetry
 from Phase_9.config import CACHE_PARQUET_DIR, CACHE_FEATHER_DIR
