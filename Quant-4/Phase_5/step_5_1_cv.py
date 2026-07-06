@@ -11,6 +11,7 @@ import lightgbm as lgb
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, mean_squared_error
 from Phase_5.config import BASE_LGB_PARAMS, D_MIN_SEARCH_SPACE, CV_FOLDS, NEGATIVE_TRANSFER_PATIENCE
+from Phase_5.maths_utils import compute_whitebox_features, fractional_diff_series
 
 logger = logging.getLogger("ModelTraining.CV")
 
@@ -34,7 +35,7 @@ def run_walk_forward_cv(context: dict):
     step = max(1, len(master_timeline) // sample_size)
     cv_timeline = master_timeline[::step]
     
-    from Phase_5.math_utils import compute_whitebox_features, fractional_diff_series
+    
     
     raw_ohlcv_dict = {}
     for sym in assets:
@@ -46,9 +47,12 @@ def run_walk_forward_cv(context: dict):
     monitor = context.get("negative_transfer_monitor", {"consecutive_violation_count": 0, "triggered_melt": False})
     patience = context['config'].get("negative_transfer_patience", NEGATIVE_TRANSFER_PATIENCE)
 
+    best_scaler = None
+
     for d in D_MIN_SEARCH_SPACE:
         scores = []
         violation_count = 0
+        current_iteration_scaler = None
         
         # 顺次推进时空净化褶皱 (Purged Walk-Forward Slices)
         fold_len = len(cv_timeline) // CV_FOLDS
@@ -85,6 +89,7 @@ def run_walk_forward_cv(context: dict):
             scaler = StandardScaler()
             X_tr_scaled = scaler.fit_transform(X_tr_mat)
             X_val_scaled = scaler.transform(X_val_mat)
+            current_iteration_scaler = scaler
 
             # 评估基准 A股 主战场自适应性能
             lgb_params = BASE_LGB_PARAMS.copy()
@@ -121,7 +126,7 @@ def run_walk_forward_cv(context: dict):
     context['best_d'] = best_d
     context['best_lgb_params'] = best_params
     context['negative_transfer_monitor'] = monitor
-    context['feature_scaler'] = scaler
+    context['feature_scaler'] = best_scaler
     
     param_hash = hashlib.sha256(json.dumps(best_params, sort_keys=True).encode()).hexdigest()[:16]
     logger.info("[OP] Lock Optimized Graph Fingerprint | [SOURCE] Walk Forward Grid Evaluator | [RESULT] Optimal d*: %s, Score: %.4f, Hash: %s | [SIGNIFICANCE] Guarantees model trace alignment across nodes", best_d, best_score, param_hash)
