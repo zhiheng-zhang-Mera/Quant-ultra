@@ -29,7 +29,7 @@ def generate_fractional_features(context: dict):
     diff_cube = np.zeros((T, N, F))
     alive_mask_matrix = np.zeros((T, N), dtype=bool)
     
-    from Phase_5.math_utils import compute_whitebox_features, fractional_diff_series
+    from Phase_5.maths_utils import compute_whitebox_features, fractional_diff_series
 
     for idx, sym in enumerate(assets):
         df = bus.load_asset_history(sym, start_date="2010-01-01", end_date=master_timeline[-1].strftime("%Y-%m-%d"))
@@ -47,7 +47,11 @@ def generate_fractional_features(context: dict):
         
         # 同步注入真实上市存活状态标记，杜绝空指针
         if 'alive_mask' in context and sym in context['alive_mask'].columns:
-            alive_mask_matrix[:, idx] = context['alive_mask'][sym].reindex(master_timeline).fillna(False).values
+            res_mask = context['alive_mask'][sym].reindex(master_timeline).fillna(False)
+            if isinstance(res_mask, pd.DataFrame):
+                alive_mask_matrix[:, idx] = res_mask.any(axis=1).values
+            else:
+                alive_mask_matrix[:, idx] = res_mask.values
         else:
             alive_mask_matrix[:, idx] = df_diff_aligned.notna().any(axis=1).values
 

@@ -12,8 +12,6 @@ logger = logging.getLogger("MLOps.ShadowRecon")
 def run_shadow_reconciliation(context: dict) -> dict:
     """
     高精度影子对账快速重放协议。
-    [回测态] 对比凸优化目标权重与有限状态机（FSM）模拟持仓。
-    [实盘态] 对比目标权重与真实券商柜台连接器（counterparty_gateway）API持仓。
     """
     logger.info("[OP] Initiate Shadow Reconciliation Pipeline | [SOURCE] Master Portfolio Target weights | [RESULT] Activating bi-track routing | [SIGNIFICANCE] Validates physical execution matching to prevent accounting leaks")
     logger.info("[操作] 启动确定性影子对账管线 | [来源] 主控制流目标分配权重 | [结果] 正在激活双轨模态分流 | [意义] 校对模型目标与物理成交之间的一致性，防止隐性滑点资产流失")
@@ -23,9 +21,6 @@ def run_shadow_reconciliation(context: dict) -> dict:
     is_live = context.get('is_live', False)
     mae_ceiling = context.get('config', {}).get('reconciliation_mae_ceiling', DEFAULT_MLOPS_CONFIG['reconciliation_mae_ceiling'])
 
-    # ====================================================
-    # 核心解耦：根据实盘与回测模态分流，剥离对FSM引擎的硬性依赖
-    # ====================================================
     if is_live:
         gateway = context.get('counterparty_gateway')
         if gateway is None:
@@ -42,16 +37,14 @@ def run_shadow_reconciliation(context: dict) -> dict:
             logger.error(f"Failed to fetch real-time broker holdings: {e}")
             executed_weights = {k: 0.0 for k in target_weights.keys()}
     else:
-        # 回测态：无缝对比 Phase_7 FSM 实际模拟持仓
+        # 回测态：无缝对比 Phase_7 FSM 实际模拟持仓，完美修复类型覆盖 Bug
         fsm_engine = context.get('fsm_engine')
         if fsm_engine is not None:
             total_val = fsm_engine.calc_nav()
             for asset in context.get('assets', []):
                 p = fsm_engine.bus.query_by_pit(asset, fsm_engine.current_date, "total_return_price") or 0.0
                 executed_val = fsm_engine.holdings.get(asset, 0.0) * p
-                executed_weights = executed_val / (total_val if total_val > 0 else 1.0)
-                executed_weights = float(executed_weights)
-                executed_weights[asset] = executed_weights
+                executed_weights[asset] = float(executed_val / (total_val if total_val > 0 else 1.0))
         else:
             executed_weights = {k: 0.0 for k in target_weights.keys()}
 

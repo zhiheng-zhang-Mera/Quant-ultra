@@ -38,7 +38,19 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         # 🛡️ 多头凸优化绝对防御红线：底端物理界限刚性死锁 >= 0.0，彻底根除空头信号越界生成
         constraints.append(w[i] >= 0.0)
 
-    sector_map = context.setdefault('sector_map', {s: bus.get_sector(s) for s in assets})
+    # ----------------------------------------------------
+    # 【修复核心防御线：破除 setdefault 贪婪求值陷阱】
+    # ----------------------------------------------------
+    if 'sector_map' not in context:
+        try:
+            context['sector_map'] = {s: bus.get_sector(s) for s in assets}
+        except Exception as e:
+            logger.warning("[GUARD] Pre-loaded sector_map missing and bus.get_sector failed. Falling back to default '综合'. Error: %s", e)
+            logger.warning("[守护] 缺失预载行业映射且底层 bus.get_sector 异常！触发三级容灾自愈，刚性强制降级至统一'综合'行业。错误: %s", e)
+            context['sector_map'] = {s: "综合" for s in assets}
+            
+    sector_map = context['sector_map']
+
     for sec in set(sector_map.values()):
         idx = [i for i, sym in enumerate(assets) if sector_map.get(sym) == sec]
         if idx: constraints.append(cp.sum(w[idx]) <= sector_limit)

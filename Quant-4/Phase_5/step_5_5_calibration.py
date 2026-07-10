@@ -28,8 +28,15 @@ def run_cascade_calibration(context: dict):
     d = context['best_d']
     y_reg_all = context['y_reg_all']
 
-    from Phase_5.math_utils import compute_whitebox_features, fractional_diff_series
+    from Phase_5.maths_utils import compute_whitebox_features, fractional_diff_series
     
+    # 【修复核心防御线】将原始时间截面强转为标准 DatetimeIndex，彻底抹平类型断层，扼杀隐式数据洗空暗雷
+    b1_timeline = pd.DatetimeIndex(b1_dates)
+    b2_timeline = pd.DatetimeIndex(b2_dates)
+    
+    if b2_timeline.empty:
+        raise ValueError("Train-B2 timeline partition vacuum. Check historical dataset splits.")
+
     # ----------------------------------------------------
     # 1. 在 Train-B1 分区通过组合非对称效用矩阵寻找最优行权门槛 $\gamma^*$
     # ----------------------------------------------------
@@ -46,8 +53,12 @@ def run_cascade_calibration(context: dict):
     # 2. 在 Train-B2 分区 100% 独立基于目标域标的进行非参数 CQR 误差排序
     # ----------------------------------------------------
     error_dict = {sym: [] for sym in assets}
+    
+    # 提取终点日期字符串，由于升级为了 DatetimeIndex，此处调用绝对安全
+    b2_end_str = b2_timeline[-1].strftime("%Y-%m-%d")
+
     for sym in assets:
-        df = bus.load_asset_history(sym, start_date="2010-01-01", end_date=b2_dates[-1].strftime("%Y-%m-%d") if b2_dates else None)
+        df = bus.load_asset_history(sym, start_date="2010-01-01", end_date=b2_end_str)
         if df is None or df.empty: continue
         
         feats_raw = compute_whitebox_features(df)
@@ -55,7 +66,9 @@ def run_cascade_calibration(context: dict):
         for f_col in range(feats_raw.shape[1]):
             feats_diff[:, f_col] = fractional_diff_series(feats_raw[:, f_col], d)
             
-        df_diff = pd.DataFrame(feats_diff, index=df.index).reindex(b2_dates).dropna()
+        # 【对齐防御】确保 DataFrame 索引与 reindex 目标均为标准 DatetimeIndex
+        df_index_dt = pd.DatetimeIndex(df.index)
+        df_diff = pd.DataFrame(feats_diff, index=df_index_dt).reindex(b2_timeline).dropna()
         if df_diff.empty: continue
 
         X_b2 = df_diff.values[:, selected]
@@ -73,7 +86,8 @@ def run_cascade_calibration(context: dict):
             q_low, q_high = min(q_low, q_mid), max(q_high, q_mid)
             
             y_true = None
-            for key in [(dt, sym), (dt_str, sym)]:
+            # 结合 Step 5.4 的多轨兼容改造，全方位无盲区提取标签值
+            for key in [(dt, sym), (dt_str, sym), (dt.date(), sym)]:
                 if key in y_reg_all: y_true = y_reg_all[key]; break
             if y_true is not None:
                 # 计算违反两端屏障的共形广义局部绝对误差积分
@@ -87,10 +101,10 @@ def run_cascade_calibration(context: dict):
             recent = errors[-min(error_window, len(errors)):]
             error_thresholds[sym] = np.percentile(recent, 95) if recent else 0.0
         else:
-            # 灾备自愈：全量提取纯净目标域（A股主节点）外生误差中位数作为全系统防御垫
+            # 灾备自愈：全量提取纯净目标域外生误差中位数作为全系统防御垫
             all_errs = [e for s, errs in error_dict.items() if bus.get_node_by_asset(s) == "A_share_node" for e in errs]
             error_thresholds[sym] = np.median(all_errs) if all_errs else 0.015
 
     context['q_error_threshold_dict'] = error_thresholds
     logger.info("[OP] Calibrate CQR Conformal Quantiles | [SOURCE] Train-B2 Clean Conformal Register | [RESULT] Coverage dictionary tokens initialized for %s symbols | [SIGNIFICANCE] Guarantees 95%% strictly finite empirical risk bounds", len(error_thresholds))
-    logger.info("[操作] 共形标定 CQR 误差分位数 | [来源] Train-B2 存留纯目标域标的账本 | [结果] 误差防御分位数映射表成功建立，覆盖: %s 只标的 | [意义] 为每只成分股分配独立的外生符合性误差安全垫，在无参数分布假设下强行锁死下游 95%% 经验覆盖率红线")
+    logger.info("[操作] 共形标定 CQR 误差分位数 | [来源] Train-B2 存留纯目标域标的账本 | [结果] 误差防御分位数映射表成功建立，覆盖: %s 只标的 | [意义] 为每只成分股分配独立的外生符合性误差安全垫，在无参数分布假设下强行锁死下游 95%% 经验覆盖率红线", len(error_thresholds))

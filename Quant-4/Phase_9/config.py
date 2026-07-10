@@ -29,3 +29,16 @@ CACHE_FEATHER_DIR = PROJECT_ROOT / "Phase Result" / "feather" / "Phase 9"
 
 os.makedirs(CACHE_PARQUET_DIR, exist_ok=True)
 os.makedirs(CACHE_FEATHER_DIR, exist_ok=True)
+
+# 统一封装 MLOps 顶层核心配置契约，阻断下游组件 ImportError 触雷
+DEFAULT_MLOPS_CONFIG = {
+    'reconciliation_mae_ceiling': MAE_THRESHOLD,
+    'volatility_window': VOLATILITY_WINDOW,
+    'vol_compress_quantile': VOL_COMPRESS_QUANTILE,
+    'crowded_corr_threshold': CROWDED_CORR_THRESHOLD,
+    'enforce_crowded_allocation_cap': CROWDED_RISK_CAP,
+    'lookback_psi_window': LOOKBACK_WINDOW_PSI,
+    'psi_drift_crit_threshold': PSI_THRESHOLD,
+    'psi_consecutive_days_trigger': PSI_CONSECUTIVE_DAYS,
+    'model_smoothing_period': SMOOTHING_PERIOD
+}
