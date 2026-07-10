@@ -22,7 +22,19 @@ def run_stress_test(context: dict) -> None:
             start = pd.Timestamp(start_str)
             end = pd.Timestamp(end_str)
             
-            # 严格提取影子闭合时间截面，不改变任何外围日历结构
+            # 🛡️ 刚性自愈栅栏：动态检测并对齐时区敏感度，消灭 tz-naive 与 tz-aware 比较死锁
+            if nav_series.index.tz is not None:
+                if start.tz is None:
+                    start = start.tz_localize(nav_series.index.tz)
+                else:
+                    start = start.tz_convert(nav_series.index.tz)
+                    
+                if end.tz is None:
+                    end = end.tz_localize(nav_series.index.tz)
+                else:
+                    end = end.tz_convert(nav_series.index.tz)
+            
+            # 严格提取影子闭合时间截面，确保时空平移安全性
             window_nav = nav_series.loc[start:end]
             
             if len(window_nav) < 2:

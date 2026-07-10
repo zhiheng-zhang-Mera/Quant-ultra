@@ -1,0 +1,215 @@
+# -*- coding: utf-8 -*-
+"""
+Quant-Ultra Flow - Phase_7 Finite State Machine Backtest Core Engine
+"""
+import logging
+import numpy as np
+import pandas as pd
+from Phase_7.config import (
+    DEFAULT_HANDLING_FEE, DEFAULT_MANAGEMENT_FEE, DEFAULT_STAMP_TAX,
+    DEFAULT_SLIPPAGE_BPS, GAP_UP_THRESHOLD, INITIAL_CASH,
+    STAR_MARKET_LOT, MAIN_BOARD_LOT, MAX_SINGLE_TICKET_PROP
+)
+from Phase_7.market_utils import get_prices_for_date, get_previous_close_price
+from Phase_7.risk_guard import compute_individual_position_limit
+from Phase_7.execution_fsm import process_state_4_execution, process_state_5_equity, process_state_6_reconciliation
+
+logger = logging.getLogger("FSMBacktest.Engine")
+
+class FSMEngine:
+    def __init__(self, context: dict):
+        self.context = context
+        self.bus = context['data_bus']
+        self.assets = context['assets']
+        self.config = context.get('config', {}).copy()
+        self._load_config_layer()
+
+        # 账户状态
+        self.cash = float(self.config.get('initial_cash', INITIAL_CASH))
+        self.holdings = {sym: 0.0 for sym in self.assets}
+        self.price_cache = {}
+        self.nav_series = []
+        self.daily_returns_list = []
+        self.violations_list = []
+
+        # 停牌相关
+        self.halt_counter = {sym: 0 for sym in self.assets}
+        self.halt_status = {sym: False for sym in self.assets}
+        self.impairment_factor = {sym: 1.0 for sym in self.assets}
+        self.impairment_applied = {sym: False for sym in self.assets}
+
+        # 权重数据
+        self.daily_weights = context['daily_weights']
+        self.daily_intervals = context.get('daily_intervals')  # 包含 q_low, q_high
+        if self.daily_intervals is not None:
+            self.q_low = self.daily_intervals['q_low']
+            self.q_high = self.daily_intervals['q_high']
+
+        self.current_date = None
+        self.prev_weights = {sym: 0.0 for sym in self.assets}
+
+    def _load_config_layer(self):
+        """加载默认配置，补全缺失项"""
+        self.config.setdefault('handling_fee', DEFAULT_HANDLING_FEE)
+        self.config.setdefault('management_fee', DEFAULT_MANAGEMENT_FEE)
+        self.config.setdefault('stamp_tax', DEFAULT_STAMP_TAX)
+        self.config.setdefault('slippage_bps', DEFAULT_SLIPPAGE_BPS)
+        self.config.setdefault('gap_up_threshold', GAP_UP_THRESHOLD)
+        self.config.setdefault('max_single_ticket_prop', MAX_SINGLE_TICKET_PROP)
+        self.config.setdefault('star_market_lot', STAR_MARKET_LOT)
+        self.config.setdefault('main_board_lot', MAIN_BOARD_LOT)
+        self.config.setdefault('halt_days_limit', 20)
+        self.config.setdefault('impairment_rate', 0.1)
+        self.config.setdefault('default_residual_rate', 0.0)
+
+    def _get_lot_size(self, sym):
+        """根据股票代码返回整手股数"""
+        if sym.startswith('688'):
+            return self.config.get('star_market_lot', 200)
+        else:
+            return self.config.get('main_board_lot', 100)
+
+    def calc_nav(self) -> float:
+        """计算当前净值，考虑停牌减值"""
+        mv = 0.0
+        prices = get_prices_for_date(self.assets, self.current_date, self.bus, self.price_cache)
+        for sym in self.assets:
+            p = prices.get(sym) or 0.0
+            factor = self.impairment_factor.get(sym, 1.0)
+            mv += self.holdings[sym] * p * factor
+        return float(self.cash + mv)
+
+    def _check_is_delisted(self, sym) -> bool:
+        """退市判断，可扩展为从数据总线查询"""
+        # 此处简化为查询 delisting_date 是否存在且小于当前日期
+        del_date = self.bus.query_by_pit(sym, self.current_date, "delisting_date")
+        if del_date is not None and pd.Timestamp(del_date) <= pd.Timestamp(self.current_date):
+            return True
+        return False
+
+    def _sell_asset_action(self, sym, shares, price):
+        """执行卖出，包含冲击、税费"""
+        adv = self.bus.query_by_pit(sym, self.current_date, "adv")
+        adv = adv if (adv is not None and adv > 0) else 1e7
+        turnover = (shares * price) / adv
+        impact = 0.001 * (turnover ** 0.5)  # 使用静态冲击系数
+        exec_price = price * (1.0 - impact)  # 卖出时价格向下偏移
+        cost = shares * exec_price
+        fee = (self.config['handling_fee'] + self.config['management_fee']) * cost
+        stamp = self.config['stamp_tax'] * cost
+        self.cash += (cost - fee - stamp)
+        self.holdings[sym] -= shares
+        logger.debug("[SELL] %s %d shares @ %.4f (impact %.4f)", sym, shares, exec_price, impact)
+
+    def run_engine_pipeline(self):
+        test_dates = self.daily_weights.index
+        if len(test_dates) == 0:
+            raise ValueError("Empty test dates.")
+
+        logger.info("FSM Engine started. Initial cash: %.2f", self.cash)
+        prev_nav = self.cash
+
+        for t_idx, date in enumerate(test_dates):
+            self.current_date = date
+            date_str = date.strftime('%Y-%m-%d')
+
+            # ---- 1. 获取价格 ----
+            prices = get_prices_for_date(self.assets, date, self.bus, self.price_cache)
+
+            # ---- 2. 原始目标权重 ----
+            raw_weights = self.daily_weights.loc[date].to_dict()
+            adjusted_weights = {}
+
+            # ---- 3. 风险过滤：追高防御 + 单票限额 ----
+            for sym in self.assets:
+                w = raw_weights.get(sym, 0.0)
+                if w > 0:
+                    # 追高防御
+                    prev_close = get_previous_close_price(sym, date, self.bus, self.price_cache)
+                    p_curr = prices.get(sym)
+                    if p_curr is not None and prev_close is not None and prev_close > 0:
+                        gap = (p_curr - prev_close) / prev_close
+                        if gap >= self.config['gap_up_threshold']:
+                            logger.debug("[GAP] %s gap up %.2f%% > threshold, weight set to 0", sym, gap*100)
+                            w = 0.0
+                    # 单票限额
+                    if w > 0:
+                        limit = compute_individual_position_limit(sym, prev_nav, date, self.bus, self.config)
+                        if w > limit:
+                            logger.debug("[LIMIT] %s weight %.4f > %.4f, clipped", sym, w, limit)
+                            w = limit
+                adjusted_weights[sym] = w
+
+            # 重归一化（如果总权重 > 1）
+            total_w = sum(adjusted_weights.values())
+            if total_w > 1.0:
+                adjusted_weights = {k: v / total_w for k, v in adjusted_weights.items()}
+
+            # ---- 4. 执行状态机 ----
+            process_state_4_execution(self, adjusted_weights, prices)
+            process_state_5_equity(self)
+            process_state_6_reconciliation(self, prices, prev_nav)
+
+            # ---- 5. 收盘净值与收益 ----
+            nav_after = self.calc_nav()
+            self.nav_series.append(nav_after)
+            ret = (nav_after - prev_nav) / prev_nav if prev_nav > 0 else 0.0
+            self.daily_returns_list.append((date_str, ret))
+
+            # ---- 6. 置信区间违规检测（若提供 q_low/q_high） ----
+            violation = 0
+            if hasattr(self, 'q_low') and self.q_low is not None:
+                # 计算当前持仓加权平均区间
+                total_weight = sum(adjusted_weights.values())
+                if total_weight > 0:
+                    w_vec = np.array([adjusted_weights.get(s, 0.0) for s in self.assets])
+                    low_vec = np.array([self.q_low.loc[date].get(s, 0.0) for s in self.assets])
+                    high_vec = np.array([self.q_high.loc[date].get(s, 0.0) for s in self.assets])
+                    port_low = np.average(low_vec, weights=w_vec)
+                    port_high = np.average(high_vec, weights=w_vec)
+                    if not (port_low <= ret <= port_high):
+                        violation = 1
+                        logger.debug("[VIOL] %s ret %.4f outside [%.4f, %.4f]", date_str, ret, port_low, port_high)
+            self.violations_list.append((date_str, violation))
+
+            self.prev_weights = adjusted_weights.copy()
+            prev_nav = nav_after
+
+            # 每季度打印一次进度
+            if t_idx % 60 == 0:
+                logger.info("Progress: %s, NAV=%.2f", date_str, nav_after)
+
+        logger.info("FSM Engine finished. Final NAV: %.2f", self.nav_series[-1] if self.nav_series else self.cash)
+
+        # 保存结果到 context
+        self.context['daily_nav'] = pd.Series(self.nav_series, index=test_dates)
+        self.context['daily_returns'] = pd.Series(dict(self.daily_returns_list))
+        self.context['violations'] = pd.Series(dict(self.violations_list))
+        self.context['final_nav'] = self.nav_series[-1] if self.nav_series else self.cash
+        self.context['backtest_ready'] = True
+
+
+def execute(pipeline_context: dict) -> dict:
+    """
+    标准管道入口。原地更新 pipeline_context 并返回。
+    """
+    logger.info("=" * 60)
+    logger.info("[PHASE-7] Deploying Finite State Machine Backtester")
+    logger.info("=" * 60)
+
+    engine = FSMEngine(pipeline_context)
+    engine.run_engine_pipeline()
+
+    # 更新上下文
+    pipeline_context.update({
+        'daily_nav': pipeline_context['daily_nav'],
+        'daily_returns': pipeline_context['daily_returns'],
+        'violations': pipeline_context['violations'],
+        'final_nav': float(pipeline_context['final_nav']),
+        'fsm_engine': engine,          # 供后续阶段使用
+        'nav_history': pipeline_context['daily_nav'].to_dict(),
+    })
+
+    logger.info("[PHASE-7] Completed. Final NAV: %.2f", pipeline_context['final_nav'])
+    logger.info("=" * 60)
+    return pipeline_context

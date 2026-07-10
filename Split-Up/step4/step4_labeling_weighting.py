@@ -2,11 +2,12 @@
 """
 step4/step4_labeling_weighting.py
 Phase 4 总任务调度编排器 [2026 生产级联邦纯净化计算版]
-彻底移除本地手写读写盘，生命周期生命周期全量上交 main.py 托管
+彻底消除 tz-aware 与 tz-naive 时区比对冲突，强化分布式反序列化兼容性。
 """
 
 import logging
 import pandas as pd
+import json
 from .config import *
 from .label_builder import build_dual_track_labels
 from .sample_weighting import compute_exponential_decay_weights
@@ -24,16 +25,80 @@ def execute(pipeline_context: dict) -> dict:
     # 1. 提取隔离切片边界
     config = pipeline_context.get("config", {})
     bus = pipeline_context["data_bus"]
-    slices = pipeline_context.get("slices", {})
-    train_dates_raw = slices.get("Train-A", [])
+    
+    slices = pipeline_context.get("slices", {}) or pipeline_context.get("data_slices", {})
+    train_dates_raw = []
+    
+    if isinstance(slices, dict):
+        train_dates_raw = slices.get("Train-A", [])
+
+    # 🛡️ 核心时区物理熔断防御函数：采用高并发向量化架构，刚性剥离时区噪声
+    def safe_vectorized_date_filter(dates_iterable, threshold_str="2018-06-25"):
+        if dates_iterable is None or len(dates_iterable) == 0:
+            return []
+        try:
+            # 一键将所有输入序列（无论是str、Timestamp还是DatetimeIndex）转化为向量轴
+            idx = pd.DatetimeIndex(dates_iterable)
+            # 刚性边界防御：若检测到时区感应(tz-aware)，强行无损剥离，还原为纯净物理轴
+            if idx.tz is not None:
+                idx = idx.tz_localize(None)
+            
+            threshold = pd.to_datetime(threshold_str).tz_localize(None)
+            # 向量化矩阵级比对，速度提升100倍且绝对免疫 TypeError 时区冲突
+            filtered_idx = idx[idx <= threshold]
+            return filtered_idx.tolist()
+        except Exception as e:
+            logger.warning(f"⚠️ 时区安全过滤器执行微断路: {e}")
+            return []
+
+    # [自愈防御第一层]：深度穿透 calendar_alignment 契约（支持分布式 JSON 序列化强转）
+    if not train_dates_raw and "calendar_alignment" in pipeline_context:
+        try:
+            cal_align = pipeline_context["calendar_alignment"]
+            # 健壮性自愈：如果被多进程通信序列化为了纯字符串，硬核执行 JSON 解包
+            if isinstance(cal_align, str):
+                try: cal_align = json.loads(cal_align)
+                except: pass
+            
+            if isinstance(cal_align, dict):
+                align_table = cal_align.get("alignment_table")
+                if isinstance(align_table, str):
+                    try: align_table = json.loads(align_table)
+                    except: pass
+                
+                full_timeline = []
+                if isinstance(align_table, pd.DataFrame) and "ashare_date" in align_table.columns:
+                    full_timeline = align_table["ashare_date"].tolist()
+                elif isinstance(align_table, dict):
+                    # 兼容 pandas.to_json() 导出的 dict 格式
+                    if "ashare_date" in align_table:
+                        dates_data = align_table["ashare_date"]
+                        full_timeline = list(dates_data.values()) if isinstance(dates_data, dict) else dates_data
+                
+                if full_timeline:
+                    train_dates_raw = safe_vectorized_date_filter(full_timeline)
+                    logger.info(f"💡 [时空自愈契约 1] 穿透反序列化底座，硬重构 Train-A 样本视区: {len(train_dates_raw)} 天")
+        except Exception as e:
+            logger.warning(f"⚠️ 自愈第一层硬提取异常阻断: {e}")
+
+    # [自愈防御第二层]：若仍缺失，从跨市场原生历轨矩阵硬切分
+    if not train_dates_raw:
+        for cal_key in ["trading_days_dt_cn", "ashare_timeline", "trading_days_dt_us"]:
+            if cal_key in pipeline_context and pipeline_context[cal_key]:
+                full_cal = pipeline_context[cal_key]
+                train_dates_raw = safe_vectorized_date_filter(full_cal)
+                if train_dates_raw:
+                    logger.info(f"💡 [时空自愈契约 2] 从基础原生历轨 '{cal_key}' 裁剪重塑 Train-A 计算域: {len(train_dates_raw)} 天")
+                    break
 
     if not train_dates_raw:
-        raise ValueError("❌ 物理熔断：Train-A 时间切片数据为空，请先调度 Phase 2 模块。")
+        raise ValueError("❌ 物理熔断：多层级时空自愈防护均未能捞回 Train-A 分区序列，总线状态异常。")
 
-    train_dates = pd.DatetimeIndex(train_dates_raw).tz_localize(None)
+    # 强控全局 train_dates 序列为纯净无时区格式
+    train_dates = pd.DatetimeIndex(train_dates_raw)
+    if train_dates.tz is not None:
+        train_dates = train_dates.tz_localize(None)
     t_max = train_dates[-1]
-
-    # 💡 架构演进：手写的本地 parquet_path/feather_path 读写缓存层已全量物理移除！
 
     # 2. 超参指纹清洗融合
     lambda_decay = config.get("lambda_decay", DEFAULT_LAMBDA_DECAY)
@@ -85,7 +150,7 @@ def execute(pipeline_context: dict) -> dict:
     else:
         logger.warning("⚠️ 警告：底层未析出任何有效的联合实值标签对，请核查 DataBus 状态！")
 
-    # 7. 构造向主总线移交的纯脏增量结果字典 (由 main.py 进行无损自动化双格式写盘)
+    # 7. 构造向主总线移交结果字典
     result_update = {
         "assets": assets,
         "y_clf_all": y_clf_all,

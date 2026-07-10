@@ -31,11 +31,31 @@ def run_cascade_calibration(context: dict):
 
     from .math_utils import compute_whitebox_features, fractional_diff_series
 
-    raw_all_dates = sorted(set(context['train_a_dates'] + b1_dates + b2_dates))
+    # 🛡️ 【修复控制流：消灭隐藏 KeyError】从标准契约拓扑提取 Train-A 物理时间序列
+    train_a_dates = slices.get('Train-A', [])
+    logger.info(f"[Step 5.5] Train-A dates extracted: {len(train_a_dates)} days from {train_a_dates[0] if train_a_dates else 'N/A'} to {train_a_dates[-1] if train_a_dates else 'N/A'}.")
+    print(f"[Step 5.5] Train-A dates extracted: {len(train_a_dates)} days from {train_a_dates[0] if train_a_dates else 'N/A'} to {train_a_dates[-1] if train_a_dates else 'N/A'}.")
+    
+    # 🛡️ 弹性双轨兜底防线：如果前置缓存反序列化导致根节点切片丢失，启动物理还原
+    if not train_a_dates:
+        logger.warning("🚨 [校准时空警报] context['slices'] 中缺失 'Train-A' 轴！激活二轨日历自愈补全...")
+        if 'trading_days_dt' in context and context['trading_days_dt'] is not None:
+            idx = pd.DatetimeIndex(context['trading_days_dt']).tz_localize(None)
+            train_a_dates = idx[(idx >= "2010-01-04") & (idx <= "2018-06-25")].strftime("%Y-%m-%d").tolist()
+
+    if not train_a_dates:
+        raise KeyError("❌ 致命断层：全局总线中 slices['Train-A'] 与 trading_days_dt 完全瘫痪，无法构建拟合时序轴。")
+
+    # 对齐后重新装配总时间轴指纹
+    raw_all_dates = sorted(set(train_a_dates + b1_dates + b2_dates))
     master_timeline = pd.DatetimeIndex(raw_all_dates)
+
     start_dt = master_timeline[0]
     end_dt = master_timeline[-1]
     
+    print(f"[Step 5.5] Cascade calibration will process {len(master_timeline)} time points from {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')} for {len(assets)} assets.")
+    logger.info(f"[Step 5.5] Cascade calibration will process {len(master_timeline)} time points from {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')} for {len(assets)} assets.")
+
     asset_raw_feat = {}
     T_all, N, F = len(master_timeline), len(assets), 5
     
@@ -163,4 +183,4 @@ def run_cascade_calibration(context: dict):
     context['q_error_threshold_dict'] = error_thresholds
     context['tau_BL'] = tau_BL
     logger.info("[Step 5.5] Cascade calibration block executed 100% compliant with target domain outer loop rules.")
-}
+    

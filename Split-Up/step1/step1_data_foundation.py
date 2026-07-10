@@ -51,17 +51,27 @@ def execute(pipeline_context: dict) -> dict:
     
     # 建立资产的上市及退市时间物理边界特征字典
     asset_bounds = {}
+    logger.info(f"正在抓取每只标的的上市与退市时间边界,一共 {len(total_assets)} 只标的。")
+    counter = 0
     for sym in total_assets:
+        counter += 1
+        print(f" {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ⏳ 正在抓取 {sym} 的上市与退市时间边界... ({counter}/{len(total_assets)})")
         try:
             # 读取 Parquet 文件的元数据或首尾两行，提取生存边界
             hist = data_manager.fetch_historical(sym, "2010-01-01", "2026-07-02")
             if hist is not None and not hist.empty:
+                # 若历史数据非空，则提取最早和最晚的交易日期作为上市与退市时间
                 asset_bounds[sym] = (hist['date'].min(), hist['date'].max())
             else:
+                # 若历史数据为空，则默认设置为未来时间，避免误判
                 asset_bounds[sym] = (pd.to_datetime("2030-01-01"), pd.to_datetime("2030-01-01"))
-        except Exception:
+            print(f"  ✅ {sym} 上市时间: {asset_bounds[sym][0]}, 退市时间: {asset_bounds[sym][1]}")
+        except Exception as e:
+            logger.warning(f"⚠️ 抓取 {sym} 的上市与退市时间边界时发生异常: {e}")
             asset_bounds[sym] = (pd.to_datetime("2030-01-01"), pd.to_datetime("2030-01-01"))
-
+        counter += 1
+        
+    logger.info("资产上市与退市时间边界抓取完成，开始构建 alive_mask 矩阵...")
     for date_str in ashare_timeline:
         current_dt = pd.to_datetime(date_str)
         row_mask = []
@@ -73,12 +83,14 @@ def execute(pipeline_context: dict) -> dict:
             else:
                 row_mask.append(False)
         alive_mask_records.append(row_mask)
-        
+    logger.info("alive_mask 矩阵构建完成，已成功物理锁死生存者偏差。")
+
     alive_mask_df = pd.DataFrame(alive_mask_records, index=ashare_timeline, columns=total_assets)
     
     # 构建静态冲击常数与容量名义矩阵略...
     theoretical_aum_limit = 50000000.0
     adv_data_mock = pd.DataFrame(20000000.0, index=ashare_timeline, columns=total_assets)
+    logger.info("静态冲击常数与容量名义矩阵构建完成，已嵌入全局上下文契约。")
 
     # 封装返回给主控总线，实现 Schema 硬校验合规
     result = {

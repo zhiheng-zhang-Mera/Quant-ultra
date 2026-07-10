@@ -66,7 +66,8 @@ def _get_features_for_date(asset: str, date: datetime, context: dict) -> Optiona
         return None
     raw_feat = _compute_whitebox_features(df)
     if np.isnan(raw_feat).any():
-        raw_feat = pd.DataFrame(raw_feat).fillna(method='ffill').values
+        #raw_feat = pd.DataFrame(raw_feat).fillna(method='ffill').values
+        raw_feat = pd.DataFrame(raw_feat).ffill().values
         if np.isnan(raw_feat).any():
             raw_feat = np.nan_to_num(raw_feat, nan=0.0)
     diff_feat = np.zeros_like(raw_feat)

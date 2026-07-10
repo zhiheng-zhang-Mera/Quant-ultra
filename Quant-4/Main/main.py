@@ -1,0 +1,195 @@
+# -*- coding: utf-8 -*-
+import sys
+import logging
+import argparse
+import traceback
+import importlib
+import yaml
+from datetime import datetime
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import pytz
+
+CURRENT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = CURRENT_DIR.parent.resolve()
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from Main.env_config import get_git_hash, get_git_status, LOG_DIR
+from Main.datasource_manager import FreeDataSourceManager
+from Main.audit_logger import AuditLogger
+from Main.data_bus import PITDataBus
+from Main.schema_contracts import PHASE_MODULES, PHASE_DEPENDENCIES, validate_phase_contract
+from Main.context_io import save_phase_result, load_phase_result, save_context_snapshot
+
+RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.FileHandler(LOG_DIR / f"orchestrator_{RUN_TIMESTAMP}.log", encoding="utf-8"), logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("Orchestrator")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Quant-Ultra Workflow Engine Core")
+    parser.add_argument("--config", type=str, default="./config.yaml", help="外部 YAML 配置文件路径")
+    parser.add_argument("--skip-phases", type=str, default="", help="跳过指定阶段(逗号隔离)")
+    parser.add_argument("--only-phase", type=str, default=None, help="约束仅执行指定独立阶段")
+    parser.add_argument("--resume-from", type=str, default=None, help="自断点指定阶段恢复流水线")
+    parser.add_argument("--no-git-check", action="store_true", help="强制关闭 Git 脏工作区校验硬红线")
+    parser.add_argument("--offline", action="store_true", help="激活全离线调试模式")
+    parser.add_argument("--force-recompute", action="store_true", help="降级全量缓存强制执行")
+    return parser.parse_args()
+
+def run_pipeline(args):
+    logger.info("[OP] Boot Pipeline Framework | [SOURCE] Command Line Args Parse Node | [RESULT] System settings initialized | [SIGNIFICANCE] Entering master orchestrator deployment lifecycle", vars(args))
+    logger.info("[操作] 引导流水线框架启动 | [来源] 命令行参数解析节点 | [结果] 系统底层配置就绪 | [意义] 进入主控编排器的核心部署生命周期")
+
+    if get_git_status() == "DIRTY" and not args.no_git_check:
+        logger.critical("🚨 检测到生产工作区存留未提交修改，刚性熔断禁止启动回测！ | Git Dirty Check Failed")
+        sys.exit(1)
+
+    # ---- 完整默认配置 ----
+    default_config = {
+        "adv_window": 20, "min_adv_threshold": 1e7, "ipo_safety_days": 20, "max_participation_rate": 0.05,
+        "expected_turnover": 0.05, "max_single_stock_weight": 0.05, "default_residual_rate": 0.0,
+        "impact_alpha": 0.5, "impact_kappa_base": 0.05, "spread_lookback_days": 60, "stock_cap_pct": 0.045,
+        "total_shares_source": "free_float", "short_rate_default": 0.08/252, "short_rate_source": "fixed",
+        "tau_BL": 0.02, "omega_min": 1e-8, "omega_max": 0.01, "gamma_risk_initial": 2.5, "sector_limit": 0.3,
+        "epsilon": 0.001, "transaction_cost_coeff": 0.0003, "lambda_decay": 0.01, "vol_window": 20,
+        "threshold_multiplier": 0.5, "min_vol_obs": 5, "error_threshold_window": 252, "embargo_min": 5,
+        "holding_period": 5, "max_leverage": 2.0, "d_min_search": [0.1, 0.3, 0.5, 0.7, 0.9], "vif_threshold": 30,
+        "cluster_select_ratio": 0.8, "lgb_params": {"n_estimators": 100, "num_leaves": 31, "learning_rate": 0.05, "deterministic": True, "num_threads": 1, "random_state": 42, "verbosity": -1},
+        "train_b1_grid_gamma": np.linspace(0.3, 0.7, 9).tolist(), "error_min_samples": 50, "cv_folds": 3,
+        "psi_lookback_days": 60, "volatility_window": 20, "crowded_corr_threshold": 0.95, "vol_compress_quantile": 0.1,
+        "mae_threshold": 1e-5, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
+        "max_model_size": 2e9, "smoothing_period": 25,
+        "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
+        "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
+        "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
+    }
+    config = default_config.copy()
+    if args.config and Path(args.config).exists():
+        try:
+            with open(args.config, 'r', encoding='utf-8') as f:
+                user_cfg = yaml.safe_load(f) or {}
+                config.update(user_cfg)
+            logger.info("[OP] Load External Config | [SOURCE] YAML File Parser | [RESULT] Merged custom parameters successfully | [SIGNIFICANCE] Overrides default kernel hyperparameters")
+        except Exception as e:
+            logger.warning(f"外部配置加载失败: {e}")
+
+    # ---- 核心组件 ----
+    data_manager = FreeDataSourceManager(offline_debug=args.offline)
+    audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
+    data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
+
+    # ---- 双市场日历对齐 ----
+    sh_tz = pytz.timezone("Asia/Shanghai")
+    ny_tz = pytz.timezone("America/New_York")
+    cal_cn = data_manager.fetch_trading_calendar(2010, 2026)
+    cn_str_list = [d.strftime("%Y-%m-%d") for d in cal_cn]
+    trading_days_dt_cn = cal_cn.tz_localize(sh_tz).tolist() if cal_cn.tz is None else cal_cn.tz_convert(sh_tz).tolist()
+    try:
+        cal_us = data_manager.fetch_us_trading_calendar(2010, 2026)
+        us_str_list = [d.strftime("%Y-%m-%d") for d in cal_us]
+        trading_days_dt_us = cal_us.tz_localize(ny_tz).tolist() if cal_us.tz is None else cal_us.tz_convert(ny_tz).tolist()
+    except Exception as e:
+        logger.warning(f"⚠️ 美股日历获取失败，使用A股日历对齐兜底: {e}")
+        us_str_list = cn_str_list.copy()
+        trading_days_dt_us = trading_days_dt_cn.copy()
+    min_len = min(len(cn_str_list), len(us_str_list))
+    alignment_table = pd.DataFrame({
+        "sequence_token": range(min_len),
+        "ashare_date": cn_str_list[:min_len],
+        "usshare_date": us_str_list[:min_len]
+    })
+    calendar_alignment = {
+        "alignment_table": alignment_table,
+        "date_to_seq_cn": {d: i for i, d in enumerate(cn_str_list)},
+        "date_to_seq_us": {d: i for i, d in enumerate(us_str_list)},
+        "seq_to_date_cn": {i: d for i, d in enumerate(cn_str_list)},
+        "seq_to_date_us": {i: d for i, d in enumerate(us_str_list)},
+    }
+    trading_days_dt = trading_days_dt_cn
+
+    # ---- 切片看门狗 ----
+    full_timeline = cn_str_list
+    idx = pd.DatetimeIndex(full_timeline).tz_localize(None)
+    slices = {
+        "Train-A": idx[(idx >= "2010-01-04") & (idx <= "2018-06-25")].strftime("%Y-%m-%d").tolist(),
+        "Train-B1": idx[(idx >= "2018-07-10") & (idx <= "2020-03-05")].strftime("%Y-%m-%d").tolist(),
+        "Train-B2": idx[(idx >= "2020-03-20") & (idx <= "2021-11-16")].strftime("%Y-%m-%d").tolist(),
+        "Validation": idx[(idx >= "2021-12-01") & (idx <= "2024-06-06")].strftime("%Y-%m-%d").tolist(),
+        "Test": idx[(idx >= "2024-06-24") & (idx <= "2026-12-31")].strftime("%Y-%m-%d").tolist()
+    }
+
+    pipeline_context = {
+        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash()},
+        "config": config,
+        "data_bus": data_bus,
+        "data_manager": data_manager,
+        "audit_logger": audit_logger,
+        "assets": data_bus.get_universe(),
+        "trading_days_dt": trading_days_dt,
+        "calendar_alignment": calendar_alignment,
+        "slices": slices,
+        "_completed_phases": set(),
+    }
+
+    # ---- 阶段调度 ----
+    skips = {x.strip() for x in args.skip_phases.split(",") if x.strip()}
+    if args.only_phase:
+        target = args.only_phase if "." in args.only_phase else f"Phase_{args.only_phase.split('_')[0]}.{args.only_phase}"
+        phases_to_run = []
+        def collect_deps(p):
+            for dep in PHASE_DEPENDENCIES.get(p, set()):
+                if dep not in phases_to_run:
+                    collect_deps(dep)
+            if p not in phases_to_run:
+                phases_to_run.append(p)
+        collect_deps(target)
+        phases_to_run = [p for p in PHASE_MODULES if p in phases_to_run and p not in skips]
+    elif args.resume_from:
+        target = args.resume_from if "." in args.resume_from else f"Phase_{args.resume_from.split('_')[0]}.{args.resume_from}"
+        phases_to_run = [p for p in PHASE_MODULES[PHASE_MODULES.index(target):] if p not in skips]
+    else:
+        phases_to_run = [p for p in PHASE_MODULES if p not in skips]
+
+    for phase in phases_to_run:
+        cache_hit = False
+        if not args.force_recompute:
+            cached = load_phase_result(phase, PHASE_MODULES)
+            if cached and validate_phase_contract(phase, cached, "output"):
+                pipeline_context.update(cached)
+                pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
+                pipeline_context["_completed_phases"].add(phase)
+                cache_hit = True
+                logger.info("[OP] Trigger Hot Cache Injection | [SOURCE] Binary Serialization Node | [RESULT] Phase memory fully restored | [SIGNIFICANCE] Enforces rigid singleton safety locks", phase)
+                continue
+
+        if not validate_phase_contract(phase, pipeline_context, "input"):
+            sys.exit(1)
+
+        logger.info(f"⏳ Executing computational block: {phase}")
+        try:
+            mod = importlib.import_module(phase)
+            res = mod.execute(pipeline_context)
+            if not isinstance(res, dict):
+                raise TypeError("Output must return a dictionary mapping object.")
+            if validate_phase_contract(phase, res, "output"):
+                pipeline_context.update(res)
+                pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
+                pipeline_context["_completed_phases"].add(phase)
+                save_phase_result(phase, res, PHASE_MODULES)
+        except Exception as e:
+            logger.critical(f"🚨 CRITICAL COLLAPSE at step [{phase}]: {e}\n{traceback.format_exc()}")
+            sys.exit(1)
+
+        save_context_snapshot(pipeline_context, phase, RUN_TIMESTAMP, LOG_DIR)
+
+    logger.info("🏁 ALL QUANT AGENTS EXECUTED SUCCESSFULLY WITH CONTRACT ASSURANCES")
+
+if __name__ == '__main__':
+    run_pipeline(parse_args())

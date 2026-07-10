@@ -56,7 +56,8 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
 
     try:
         prob = cp.Problem(cp.Maximize(utility), constraints)
-        prob.solve(solver=cp.ECOS, verbose=False)
+        #prob.solve(solver=cp.ECOS, verbose=False)
+        installed_solvers = cp.installed_solvers()
         
         if w.value is None or prob.status not in ["optimal", "optimal_inaccurate"]:
             logger.error(f"[求解器二次熔断] 日期 {date.strftime('%Y-%m-%d')} 求解器状态异常: {prob.status}！强制回滚至上一期持仓。")
@@ -71,4 +72,3 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
     except Exception as e:
         logger.error(f"[凸优化底层矩阵错误] 日期 {date.strftime('%Y-%m-%d')} 触发非线性计算溢出异常: {e}，强制回滚安全状态。")
         return w_prev.copy()
-}

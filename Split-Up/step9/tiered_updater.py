@@ -31,7 +31,8 @@ def evaluate_distribution_drift(context: dict) -> dict:
     elif current_date_str is None:
         current_date_str = datetime.now().strftime("%Y-%m-%d")
         
-    if feature_cube horizon_data is None if isinstance(feature_cube, type(None)) else False:
+    # 🛡️ 语法纠正：彻底移除受损的文本污染，还原降级自愈栅栏条件
+    if feature_cube is None:
         # 若高维魔方未就绪，向阶段3共享面板降级融合
         feature_cube = context.get('feature_panel_shared')
 
