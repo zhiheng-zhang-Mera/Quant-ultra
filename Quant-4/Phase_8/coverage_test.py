@@ -13,7 +13,8 @@ logger = logging.getLogger("AuditStressTest.Coverage")
 
 def christoffersen_lr_core(viol_series: pd.Series) -> float:
     """条件独立性似然比检验计算核心（含一阶马尔可夫转移矩阵计数）"""
-    if len(viol_series) < 10:
+    n = len(viol_series)
+    if n < 10:
         return 1.0
     
     n00 = n01 = n10 = n11 = 0
@@ -43,7 +44,7 @@ def christoffersen_lr_core(viol_series: pd.Series) -> float:
 
 def run_christoffersen_test(context: dict) -> None:
     """Christoffersen 联合无条件与条件独立覆盖审计总入口"""
-    logger.info("[OP] Initialize Christoffersen Safety Probe | [SOURCE] FSM Risk Violation Logs | [RESULT] Triggering multi-regime LR sweeps | [SIGNIFICANCE] Confirms whether strategy drawdown anomalies cluster in time")
+    # logger.info("[OP] Initialize Christoffersen Safety Probe | [SOURCE] FSM Risk Violation Logs | [RESULT] Triggering multi-regime LR sweeps | [SIGNIFICANCE] Confirms whether strategy drawdown anomalies cluster in time")
     logger.info("[操作] 初始化 Christoffersen 安全探针 | [来源] 状态机交易超限违规记录日志 | [结果] 正在启动多轨体制似然比扫描 | [意义] 证明极值回撤事件在时间轴上是否呈现聚集性，防止雪崩式爆仓")
     
     config = context.get('config', {})
@@ -82,18 +83,18 @@ def run_christoffersen_test(context: dict) -> None:
             if len(ser) >= 10:
                 regime_pvals[name] = christoffersen_lr_core(ser)
             else:
-                logger.warning("[OP] Evaluate Local Independent Regime | [SOURCE] Slice: %s | [RESULT] Length too short (%s) | [SIGNIFICANCE] Safely skip LR calculation for this subspace", name, len(ser))
-                logger.warning("[操作] 评估局部局部独立体制 | [来源] 体制子切片: %s | [结果] 样本点过少 (%s) | [意义] 安全跳过该局部子空间的似然比解算，防范高维稀疏误差")
+                # logger.warning("[OP] Evaluate Local Independent Regime | [SOURCE] Slice: %s | [RESULT] Length too short (%s) | [SIGNIFICANCE] Safely skip LR calculation for this subspace", name, len(ser))
+                logger.warning("[操作] 评估局部局部独立体制 | [来源] 体制子切片: %s | [结果] 样本点过少 (%s) | [意义] 安全跳过该局部子空间的似然比解算，防范高维稀疏误差", name, len(ser))
                 regime_pvals[name] = 1.0
 
         context["christoffersen_regime_pvals"] = regime_pvals
         all_pvals_ok = all(p >= pval_threshold for p in regime_pvals.values())
         context["christoffersen_pass"] = bool(unconditional_pass and all_pvals_ok)
 
-        logger.info("[OP] Finish Christoffersen Risk Audit | [SOURCE] Multi-Regime LR Results | [RESULT] Emp Coverage: %.4f (Required: %.4f), Regime p-vals: %s | [SIGNIFICANCE] Guards portfolio against systematic clustered tail events", emp_cov, min_coverage, regime_pvals)
-        logger.info("[操作] 终结 Christoffersen 联合风险审计 | [来源] 多体制似然比汇总大表 | [结果] 无条件覆盖率: %.4f (保底线: %.4f), 各体制下独立性p值: %s | [意义] 严防系统性回撤在特定高波动或低流动性极端体制下发生链式聚集爆发")
+        # logger.info("[OP] Finish Christoffersen Risk Audit | [SOURCE] Multi-Regime LR Results | [RESULT] Emp Coverage: %.4f (Required: %.4f), Regime p-vals: %s | [SIGNIFICANCE] Guards portfolio against systematic clustered tail events", emp_cov, min_coverage, regime_pvals)
+        logger.info("[操作] 终结 Christoffersen 联合风险审计 | [来源] 多体制似然比汇总大表 | [结果] 无条件覆盖率: %.4f (保底线: %.4f), 各体制下独立性p值: %s | [意义] 严防系统性回撤在特定高波动或低流动性极端体制下发生链式聚集爆发", emp_cov, min_coverage, regime_pvals)
 
     except Exception as e:
-        logger.error("[OP] Execute Coverage Audit | [SOURCE] LR Estimator Engine | [RESULT] Failure: %s | [SIGNIFICANCE] Veto filter triggered to protect master pipeline", str(e))
-        logger.error("[操作] 执行条件覆盖率审计 | [来源] 似然比估值核心引擎 | [结果] 算法失败: %s | [意义] 触发风控强熔断一票否决，阻止该策略进入投产阶段")
+        # logger.error("[OP] Execute Coverage Audit | [SOURCE] LR Estimator Engine | [RESULT] Failure: %s | [SIGNIFICANCE] Veto filter triggered to protect master pipeline", str(e))
+        logger.error("[操作] 执行条件覆盖率审计 | [来源] 似然比估值核心引擎 | [结果] 算法失败: %s | [意义] 触发风控强熔断一票否决，阻止该策略进入投产阶段", str(e))
         context["christoffersen_pass"] = False

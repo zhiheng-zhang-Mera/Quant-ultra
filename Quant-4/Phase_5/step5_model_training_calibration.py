@@ -3,6 +3,7 @@
 Phase 5: Joint Hyperparameter Tuning, Dual-Track Cascade Calibration, and Model Fitting
 """
 import logging
+from datetime import datetime
 import pandas as pd
 from Phase_5.step_5_1_cv import run_walk_forward_cv
 from Phase_5.step_5_2_3_features import generate_fractional_features, run_feature_filtering
@@ -13,7 +14,7 @@ logger = logging.getLogger("ModelTraining")
 
 def execute(pipeline_context: dict) -> dict:
     logger.info("=" * 60)
-    logger.info("[OP] Enter Phase_5 Master Lifecycle | [SOURCE] Central Workflow Orchestrator Loop | [RESULT] Commencing Joint Federated Machine Learning | [SIGNIFICANCE] Solves structural cross-market distribution drift under rigid security contract guards")
+    # logger.info("[OP] Enter Phase_5 Master Lifecycle | [SOURCE] Central Workflow Orchestrator Loop | [RESULT] Commencing Joint Federated Machine Learning | [SIGNIFICANCE] Solves structural cross-market distribution drift under rigid security contract guards")
     logger.info("[操作] 锁锁 Phase_5 生命周期主控大关口 | [来源] 中央流水线编排控制循环 | [结果] 开始联合联邦机器学习与双轨级联标定工作流 | [意义] 在防渗透安全契约栅栏下，彻底贯通多源长记忆解算与不稳态时序共形推断")
     logger.info("=" * 60)
 
@@ -30,7 +31,7 @@ def execute(pipeline_context: dict) -> dict:
                 "Train-B1": idx[(idx >= "2018-07-10") & (idx <= "2020-03-05")].strftime("%Y-%m-%d").tolist(),
                 "Train-B2": idx[(idx >= "2020-03-20") & (idx <= "2021-11-16")].strftime("%Y-%m-%d").tolist(),
                 "Validation": idx[(idx >= "2021-12-01") & (idx <= "2024-06-06")].strftime("%Y-%m-%d").tolist(),
-                "Test": idx[(idx >= "2024-06-24") & (idx <= "2026-12-31")].strftime("%Y-%m-%d").tolist()
+                "Test": idx[(idx >= "2024-06-24") & (idx <= datetime.now().strftime("%Y-%m-%d"))].strftime("%Y-%m-%d").tolist()
             }
             pipeline_context['slices'] = slices
         else:

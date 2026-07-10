@@ -59,8 +59,8 @@ def generate_fractional_features(context: dict):
     context['alive_mask_matrix'] = alive_mask_matrix
     context['trading_days_dt'] = master_timeline
     
-    logger.info("[OP] Construct Fractional Dimension Cube | [SOURCE] Parallel Multi-Market Parser | [RESULT] High-Dim Cube Dimension: %s | [SIGNIFICANCE] Solidifies spatial input graphs for multi-domain adapters", diff_cube.shape)
-    logger.info("[操作] 构建三维分数阶立体特征矩阵 | [来源] 并行多市场数据解析器 | [结果] 高维数据立方体维度 footprint: %s | [意义] 为跨域对齐适配器准备饱满、对齐的立体时空截面数据底座")
+    # logger.info("[OP] Construct Fractional Dimension Cube | [SOURCE] Parallel Multi-Market Parser | [RESULT] High-Dim Cube Dimension: %s | [SIGNIFICANCE] Solidifies spatial input graphs for multi-domain adapters", diff_cube.shape)
+    logger.info("[操作] 构建三维分数阶立体特征矩阵 | [来源] 并行多市场数据解析器 | [结果] 高维数据立方体维度 footprint: %s | [意义] 为跨域对齐适配器准备饱满、对齐的立体时空截面数据底座", diff_cube.shape)
 
 def run_feature_filtering(context: dict):
     from Phase_5.dataset_utils import build_partition_dataset
@@ -104,5 +104,5 @@ def run_feature_filtering(context: dict):
     else: selected = keep_idx
 
     context['selected_features'] = selected
-    logger.info("[OP] Filter Orthogonal Feature Subspaces | [SOURCE] Conformal Multi-Collinearity Evaluator | [RESULT] Retained Vector Indices: %s | [SIGNIFICANCE] Purges linear dependency redundancy to guard optimization kernels", selected)
-    logger.info("[操作] 过滤正交特征子空间 | [来源] 多重共线性诊断网格 | [结果] 最终留存有效特征轴序号: %s | [意义] 物理消除高度共线性引发的协方差黑洞，保护下游布莱克-利特曼逆矩阵计算的数值稳定性")
+    # logger.info("[OP] Filter Orthogonal Feature Subspaces | [SOURCE] Conformal Multi-Collinearity Evaluator | [RESULT] Retained Vector Indices: %s | [SIGNIFICANCE] Purges linear dependency redundancy to guard optimization kernels", selected)
+    logger.info("[操作] 过滤正交特征子空间 | [来源] 多重共线性诊断网格 | [结果] 最终留存有效特征轴序号: %s | [意义] 物理消除高度共线性引发的协方差黑洞，保护下游布莱克-利特曼逆矩阵计算的数值稳定性", selected)

@@ -59,7 +59,7 @@ def fit_model_bundle(context: dict):
     # 【核心修复：自主重构兜底引擎】
     # 如果标准组件因为上游存活矩阵时区污染而切空，启动穿透式矩阵重建，强行夺回数据血缘
     if X_a is None or X_a.shape[0] < 10:
-        logger.warning("[GUARD] build_partition_dataset returned insufficient elements. Launching Autonomous Dataset Reconstruction Engine...")
+        # logger.warning("[GUARD] build_partition_dataset returned insufficient elements. Launching Autonomous Dataset Reconstruction Engine...")
         logger.warning("[守护] build_partition_dataset 返回样本不足。启动自适应时空数据全量重构引擎...")
         
         cube = context.get('fractional_features_cube')
@@ -112,7 +112,7 @@ def fit_model_bundle(context: dict):
                 X_a = np.array(X_fallback)
                 y_clf_a = np.array(y_clf_fallback)
                 y_reg_a = np.array(y_reg_fallback)
-                logger.info(f"[GUARD] Fallback reconstruction successful. Recovered rows: {X_a.shape[0]}")
+                # logger.info(f"[GUARD] Fallback reconstruction successful. Recovered rows: {X_a.shape[0]}")
                 logger.info(f"[守护] 强行穿透重构成功。成功夺回特征样本行数: {X_a.shape[0]}")
 
     # 二级刚性卡点验证
@@ -136,8 +136,8 @@ def fit_model_bundle(context: dict):
             X_us_scaled = scaler.transform(X_us)
             
             mmd_weights = _compute_rbf_mmd_weights(X_a_scaled, X_us_scaled)
-            logger.info("[OP] Align Hilbert Kernel Space | [SOURCE] Remote Source Matrix vs Home Target Profile | [RESULT] Computed MMD Weight Shape: %s | [SIGNIFICANCE] Resolves distribution drift via adaptive instance matching", mmd_weights.shape)
-            logger.info("[操作] 执行希尔伯特空间核对齐 | [来源] 境外源域矩阵与本土目标域截面 | [结果] 计算出 RBF 核 MMD 重要性系数维度: %s | [意义] 在统计学意义上拉齐海内外样本分布，消除非对称异构特征引发的样本选择偏差")
+            # logger.info("[OP] Align Hilbert Kernel Space | [SOURCE] Remote Source Matrix vs Home Target Profile | [RESULT] Computed MMD Weight Shape: %s | [SIGNIFICANCE] Resolves distribution drift via adaptive instance matching", mmd_weights.shape)
+            logger.info("[操作] 执行希尔伯特空间核对齐 | [来源] 境外源域矩阵与本土目标域截面 | [结果] 计算出 RBF 核 MMD 重要性系数维度: %s | [意义] 在统计学意义上拉齐海内外样本分布，消除非对称异构特征引发的样本选择偏差", mmd_weights.shape)
         except Exception as e:
             logger.warning(f"Domain covariance map alignment failed: {e}; force constant unit matrix fallback.")
             mmd_weights = np.ones(X_a_scaled.shape[0])
@@ -168,5 +168,5 @@ def fit_model_bundle(context: dict):
         quantile_models[q] = reg
         
     context['quantile_models'] = quantile_models
-    logger.info("[OP] Fit Non-Linear Model Bundles | [SOURCE] Hilbert Weighted Feature Matrices | [RESULT] Unified Classifier & Quantile Regressors Saved | [SIGNIFICANCE] Forms the mathematical backbone for down-stream conformal allocations", X_a_scaled.shape)
+    # logger.info("[OP] Fit Non-Linear Model Bundles | [SOURCE] Hilbert Weighted Feature Matrices | [RESULT] Unified Classifier & Quantile Regressors Saved | [SIGNIFICANCE] Forms the mathematical backbone for down-stream conformal allocations", X_a_scaled.shape)
     logger.info("[操作] 拟合非线性模型阵列 | [来源] 经核加权的多域特征子空间 | [结果] 统一方向分类器与分位数回归簇保存成功 | [意义] 完成多维复杂逻辑网络的联合拟合，为下游级联决策标定与共形推断提供高保真预测载体")

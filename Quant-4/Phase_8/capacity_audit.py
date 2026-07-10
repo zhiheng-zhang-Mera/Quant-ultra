@@ -15,7 +15,7 @@ def run_capacity_audit(context: dict) -> None:
     个体账户静态容量边界终审算子。
     摒弃两融或大股东举牌条款。代入既定 1000 万本金，在平方根冲击模型下测算极端换手大单参与率。
     """
-    logger.info("[OP] Deploy Account Capacity Auditor | [SOURCE] Personal Wealth Baseline | [RESULT] Initializing static impact evaluation | [SIGNIFICANCE] Replaces dynamic looping to guarantee deterministic execution analysis")
+    # logger.info("[OP] Deploy Account Capacity Auditor | [SOURCE] Personal Wealth Baseline | [RESULT] Initializing static impact evaluation | [SIGNIFICANCE] Replaces dynamic looping to guarantee deterministic execution analysis")
     logger.info("[操作] 部署个人账户容量终审器 | [来源] 个体本金资产底座 | [结果] 正在初始化静态市场冲击评估 | [意义] 废除动态资产缩放外循环，确保大单参与率及滑点评估具备确定性的工程分析结果")
     
     config = context.get('config', {})
@@ -35,7 +35,7 @@ def run_capacity_audit(context: dict) -> None:
             # 灾备自愈：无可用 ADV 表时，自动初始化对齐 2000 万均值底座，阻断除零异常
             assets = context.get('assets', list(weights.columns)) if weights is not None else []
             adv20_df = pd.DataFrame(20000000.0, index=weights.index, columns=assets)
-            logger.warning("[OP] Probe ADV Matrix | [SOURCE] Data Bus Cache Router | [RESULT] Absent! Switched to 20M defensive fallback pool | [SIGNIFICANCE] Guards math kernels against zero divisor traps")
+            # logger.warning("[OP] Probe ADV Matrix | [SOURCE] Data Bus Cache Router | [RESULT] Absent! Switched to 20M defensive fallback pool | [SIGNIFICANCE] Guards math kernels against zero divisor traps")
             logger.warning("[操作] 探测日均成交额矩阵 | [来源] 数据总线缓存路由 | [结果] 未命中！安全切往2000万均值降级灾备池 | [意义] 防范截面个股流动性空置导致的除零溢出致命陷阱")
 
         # 1. 求解每日个股理论订单规模 (CNY)
@@ -60,9 +60,9 @@ def run_capacity_audit(context: dict) -> None:
         context["capacity_audit_pass"] = capacity_pass
 
         logger.info("[OP] Finalize Capacity Conformal Audit | [SOURCE] Square-root Slippage Ledger | [RESULT] Base Equity: %.2f, Max Part: %.4f%%, Total Slippage Drag: %.2f CNY, Pass: %s | [SIGNIFICANCE] Guarantees strategy execution validity inside real market spreads", total_equity, global_max_part*100, global_total_loss_nav, capacity_pass)
-        logger.info("[操作] 终结容量共形审计 | [来源] 平方根滑点损耗账本 | [结果] 账户本金: %.2f, 峰值参与率: %.4f%%, 累计非线性滑点总耗: %.2f 元, 审查通过: %s | [意义] 证明大额资金换仓订单在真实交易环境下的承载可行性，拒接高频滑点磨损导致的策略隐性亏损")
+        logger.info("[操作] 终结容量共形审计 | [来源] 平方根滑点损耗账本 | [结果] 账户本金: %.2f, 峰值参与率: %.4f%%, 累计非线性滑点总耗: %.2f 元, 审查通过: %s | [意义] 证明大额资金换仓订单在真实交易环境下的承载可行性，拒接高频滑点磨损导致的策略隐性亏损", total_equity, global_max_part*100, global_total_loss_nav, capacity_pass)
 
     except Exception as e:
-        logger.error("[OP] Analyze Portfolio Capacity Bounds | [SOURCE] Liquidity Estimator Kernel | [RESULT] Failure: %s | [SIGNIFICANCE] Forced capacity rejection to enforce extreme defense rules", str(e))
-        logger.error("[操作] 分析组合容量边界 | [来源] 流动性估值内核 | [结果] 算法失败: %s | [意义] 强制判为容量不通过，启用最高级一票否决风控拒接本策略上线")
+        # logger.error("[OP] Analyze Portfolio Capacity Bounds | [SOURCE] Liquidity Estimator Kernel | [RESULT] Failure: %s | [SIGNIFICANCE] Forced capacity rejection to enforce extreme defense rules", str(e))
+        logger.error("[操作] 分析组合容量边界 | [来源] 流动性估值内核 | [结果] 算法失败: %s | [意义] 强制判为容量不通过，启用最高级一票否决风控拒接本策略上线", str(e))
         context["capacity_audit_pass"] = False

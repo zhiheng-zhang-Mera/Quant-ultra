@@ -120,7 +120,7 @@ def run_walk_forward_cv(context: dict):
             monitor["consecutive_violation_count"] += 1
             if monitor["consecutive_violation_count"] >= patience:
                 monitor["triggered_melt"] = True
-                logger.warning("[OP] Intercept Negative Transfer Leak | [SOURCE] Federated Verification Fold Inspector | [RESULT] Melt Status: Triggered Rule Breaker | [SIGNIFICANCE] Forced rollback to pure home-domain baseline matrix to secure code paths")
+                # logger.warning("[OP] Intercept Negative Transfer Leak | [SOURCE] Federated Verification Fold Inspector | [RESULT] Melt Status: Triggered Rule Breaker | [SIGNIFICANCE] Forced rollback to pure home-domain baseline matrix to secure code paths")
                 logger.warning("[操作] 拦截机器学习负迁移过拟合 | [来源] 跨市场联邦验证集巡检器 | [结果] 熔断状态: 强行拉起安全保险断电装置 | [意义] 拦截有害的海外特征噪声倾倒，强制回退至纯本土主战场基准矩阵以死锁净值安全性")
 
     context['best_d'] = best_d
@@ -129,5 +129,5 @@ def run_walk_forward_cv(context: dict):
     context['feature_scaler'] = best_scaler
     
     param_hash = hashlib.sha256(json.dumps(best_params, sort_keys=True).encode()).hexdigest()[:16]
-    logger.info("[OP] Lock Optimized Graph Fingerprint | [SOURCE] Walk Forward Grid Evaluator | [RESULT] Optimal d*: %s, Score: %.4f, Hash: %s | [SIGNIFICANCE] Guarantees model trace alignment across nodes", best_d, best_score, param_hash)
-    logger.info("[操作] 锁定最优模型指纹 | [来源] 向前行走网格评估器 | [结果] 选定微分阶数 d*: %s, 交叉准确率: %.4f, 权重哈希: %s | [意义] 固化长记忆特征转化根基，确保多计算节点逻辑血缘强对齐")
+    # logger.info("[OP] Lock Optimized Graph Fingerprint | [SOURCE] Walk Forward Grid Evaluator | [RESULT] Optimal d*: %s, Score: %.4f, Hash: %s | [SIGNIFICANCE] Guarantees model trace alignment across nodes", best_d, best_score, param_hash)
+    logger.info("[操作] 锁定最优模型指纹 | [来源] 向前行走网格评估器 | [结果] 选定微分阶数 d*: %s, 交叉准确率: %.4f, 权重哈希: %s | [意义] 固化长记忆特征转化根基，确保多计算节点逻辑血缘强对齐，防止潜在的跨市场负迁移过拟合", best_d, best_score, param_hash)

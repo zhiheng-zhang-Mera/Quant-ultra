@@ -25,8 +25,10 @@ def compute_individual_position_limit(sym, nav, current_date, data_bus, config):
 
         liq_cap = (adv_20 * 0.10) / nav
         upper = float(np.clip(liq_cap, 0.01, 0.10))
-        logger.debug("[RISK] %s limit: %.4f (ADV_20=%.2e, NAV=%.2e)", sym, upper, adv_20, nav)
+        # logger.debug("[RISK] %s limit: %.4f (ADV_20=%.2e, NAV=%.2e)", sym, upper, adv_20, nav)
+        logger.info("[风险] %s 单票最大持仓权重上限: %.4f (ADV_20=%.2e, NAV=%.2e)", sym, upper, adv_20, nav)
         return upper
     except Exception as e:
-        logger.warning("[RISK] Exception for %s: %s, returning 10%%", sym, e)
+        # logger.warning("[RISK] Exception for %s: %s, returning 10%%", sym, e)
+        logger.warning("[风险] %s 计算单票最大持仓权重上限时发生异常: %s, 返回默认值 10%%", sym, e)
         return 0.10

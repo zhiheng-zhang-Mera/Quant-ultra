@@ -25,7 +25,8 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
                 price = prices.get(sym) or 0.0
                 residual = engine.config.get('default_residual_rate', DEFAULT_RESIDUAL_RATE)
                 engine.cash += engine.holdings[sym] * residual * price
-                logger.info("[DELIST] %s liquidated at residual rate %.2f", sym, residual)
+                # logger.info("[DELIST] %s liquidated at residual rate %.2f", sym, residual)
+                logger.info("由FSM回测引擎强制清算退市资产 | 当前资产: %s | 清算残值率: %.2f", sym, residual)
                 engine.holdings[sym] = 0.0
             continue
 
@@ -40,17 +41,19 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
                     # 一次性计提减值
                     engine.impairment_factor[sym] = 1.0 - engine.config.get('impairment_rate', 0.1)
                     engine.impairment_applied[sym] = True
-                    logger.warning("[HALT] %s halted >= %d days, impairment factor applied: %.2f",
-                                   sym, engine.config.get('halt_days_limit', 20),
-                                   engine.impairment_factor[sym])
+                    # logger.warning("[HALT] %s halted >= %d days, impairment factor applied: %.2f",
+                    #               sym, engine.config.get('halt_days_limit', 20),
+                    #               engine.impairment_factor[sym])
+                    logger.warning("由FSM回测引擎标记停牌资产并计提减值 | 当前资产: %s | 停牌天数: %d | 减值率: %.2f",
+                                   sym, engine.config.get('halt_days_limit', 20), engine.impairment_factor[sym])
         else:
             engine.halt_counter[sym] = 0
             if engine.halt_status.get(sym, False):
                 engine.halt_status[sym] = False
                 engine.impairment_factor[sym] = 1.0
                 engine.impairment_applied[sym] = False
-                logger.info("[RESUME] %s resumed trading, impairment cleared", sym)
-
+                #logger.info("[RESUME] %s resumed trading, impairment cleared", sym)
+                logger.info("由FSM回测引擎标记停牌资产恢复交易并清除减值 | 当前资产: %s", sym)
     # ---- 3. 优先处理卖出（释放现金） ----
     for sym in engine.assets:
         price = prices.get(sym)
@@ -101,11 +104,12 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
                 engine.holdings[sym] += buy_shares
                 logger.debug("[BUY] %s %d shares @ %.4f (impact %.4f)", sym, buy_shares, exec_price, slippage_impact)
 
-    logger.info("[EXEC] Order matching completed for %d assets", len(engine.assets))
-
+    # logger.info("[EXEC] Order matching completed for %d assets", len(engine.assets))
+    logger.info("由FSM回测引擎Phase 4完成撮合执行 | 涉及资产数量: %d", len(engine.assets))
 
 def process_state_5_equity(engine):
     """State 5: 权益/分红送配处理 (生产级标准抽象占位接口)"""
+    logger.info("由FSM回测引擎Phase 5处理权益分红送配")
     pass
 
 
@@ -127,8 +131,11 @@ def process_state_6_reconciliation(engine, prices: dict, prev_nav: float):
     discrepancy = abs(nav_calc - reconciled_balance)
 
     if discrepancy > 1.0:
-        logger.critical("[RECON] Ledger mismatch! Diff=%.4f, NAV=%.2f, Reconciled=%.2f",
-                        discrepancy, nav_calc, reconciled_balance)
-        raise RuntimeError(f"FSM Bookkeeping Catastrophe: Ledger unbalanced by {discrepancy} CNY.")
+        # logger.critical("[RECON] Ledger mismatch! Diff=%.4f, NAV=%.2f, Reconciled=%.2f",
+        #                discrepancy, nav_calc, reconciled_balance)
+        logger.critical("由FSM回测引擎Phase 6触发致命红线 | 账本不平衡 | 差额: %.4f | 计算净值: %.2f | 对账总额: %.2f", discrepancy, nav_calc, reconciled_balance)
+        # raise RuntimeError(f"FSM Bookkeeping Catastrophe: Ledger unbalanced by {discrepancy} CNY.")
+        raise RuntimeError(f"FSM回测引擎Phase 6账本灾难: 账本不平衡，差额为 {discrepancy} CNY。")
     else:
-        logger.debug("[RECON] Verified: NAV=%.2f, Diff=%.4f", nav_calc, discrepancy)
+        # logger.debug("[RECON] Verified: NAV=%.2f, Diff=%.4f", nav_calc, discrepancy)
+        logger.debug("由FSM回测引擎Phase 6核对账目 | 账本平衡 | 计算净值: %.2f | 差额: %.4f", nav_calc, discrepancy)

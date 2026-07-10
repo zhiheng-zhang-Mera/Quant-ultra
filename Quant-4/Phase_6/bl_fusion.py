@@ -1,53 +1,47 @@
 # -*- coding: utf-8 -*-
 """
-Quant-Ultra Flow - Step 6.2: Prior Equilibrium & Epistemic Uncertainty Black-Litterman Blender
+Quant-Ultra Flow - Step 6.2: Prior Equilibrium & Epistemic Uncertainty Black-Litterman Blender (CPU/GPU Multi-Thread Accelerated)
 """
+import os
+# ==============================================================================
+# ⚡ 硬件级超线程解禁：强制底层 C/Fortran 线性代数库吃满所有物理核心
+# ==============================================================================
+num_cores = str(os.cpu_count() or 4)
+os.environ["OMP_NUM_THREADS"] = num_cores
+os.environ["OPENBLAS_NUM_THREADS"] = num_cores
+os.environ["MKL_NUM_THREADS"] = num_cores
+os.environ["VECLIB_MAXIMUM_THREADS"] = num_cores
+os.environ["NUMEXPR_NUM_THREADS"] = num_cores
+
 import logging
 import numpy as np
+import pandas as pd
 from datetime import datetime
 from typing import Optional, Tuple
+import concurrent.futures
+
+# ==============================================================================
+# ⚡ 异构计算探针：尝试无缝挂载 GPU 级联加速引擎 (CuPy)
+# ==============================================================================
+try:
+    import cupy as cp
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
+
 from Phase_6.utils import _get_features_for_date, _compute_robust_covariance, _compute_market_weights
 
 logger = logging.getLogger("PositionSizing.BLFusion")
 
-def _robust_matrix_inverse(matrix: np.ndarray, name: str = "matrix") -> np.ndarray:
-    """
-    高确定性矩阵健壮求逆器：内嵌 Tikhonov 对角线收缩加载与奇异值伪逆双重刚性防御垫
-    """
-    try:
-        return np.linalg.inv(matrix)
-    except np.linalg.LinAlgError as e:
-        if "singular matrix" in str(e).lower():
-            # 引入警告计数器，防止极端数据退化时控制台被崩溃式日志淹没
-            if not hasattr(_robust_matrix_inverse, "_warn_count"):
-                _robust_matrix_inverse._warn_count = 0
-            _robust_matrix_inverse._warn_count += 1
-            
-            # 仅在前 5 次或每隔 100 次矩阵退化时才触发控制台打印
-            if _robust_matrix_inverse._warn_count <= 5 or _robust_matrix_inverse._warn_count % 100 == 0:
-                logger.warning("[GUARD] Singular matrix detected during native inversion of [%s]! Applying Tikhonov diagonal loading. (Total warnings: %d)", name, _robust_matrix_inverse._warn_count)
-                logger.warning("[守护] 在原生对 [%s] 执行矩阵求逆时检测到奇异矩阵！正在施加蒂霍诺夫对角线加载共形自愈调谐。(当前累计警报: %d 次)", name, _robust_matrix_inverse._warn_count)
-            
-            # 提取矩阵对角线绝对值的均值作为扰动基准，若全零则用 1e-6 强制筑底
-            diag_vals = np.abs(np.diag(matrix))
-            diag_mean = np.mean(diag_vals) if len(diag_vals) > 0 else 0.0
-            noise_base = 1e-6 if diag_mean == 0 else diag_mean * 1e-4
-            
-            healed_matrix = matrix.copy()
-            # 渐进式递增扰动级数，直至资产协方差网络特征值被完全激活至可逆空间
-            for multiplier in [1.0, 10.0, 100.0, 1000.0]:
-                try:
-                    healed_matrix += np.eye(matrix.shape[0]) * (noise_base * multiplier)
-                    return np.linalg.inv(healed_matrix)
-                except np.linalg.LinAlgError:
-                    continue
-        
-        # 终极长尾兜底：若对角加载后依然无法求逆（例如极端全零退化），强行拉起 Moore-Penrose 伪逆，死锁量化管线绝不断流
-        logger.error("[GUARD] Tikhonov loading completely failed for [%s]. Forcing Moore-Penrose pseudo-inverse fallback.", name)
-        logger.error("[守护] 蒂霍诺夫正则化对角加载完全失败 [%s]。强行拉起摩尔-彭罗斯（Moore-Penrose）伪逆执行终极断电保护。", name)
-        return np.linalg.pinv(matrix)
-
 def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if not hasattr(step_m_2_black_litterman_fusion, "_call_count"):
+        step_m_2_black_litterman_fusion._call_count = 0
+    step_m_2_black_litterman_fusion._call_count += 1
+    
+    # 减少打印频次防止 I/O 阻塞
+    if step_m_2_black_litterman_fusion._call_count % 10 == 0:
+        print(f"=== Phase 6: BL 贝叶斯融合器 | 异构计算状态: {'GPU CUDA 激进模式' if GPU_AVAILABLE else 'CPU 多核狂暴模式'} | 计算日: {date.strftime('%Y-%m-%d')} ===")
+        
     bus = context['data_bus']
     assets = context['assets']
     n = len(assets)
@@ -65,58 +59,110 @@ def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights:
     context.setdefault('smoothed_width', {})
     
     Q_view = np.zeros(n)
-    Omega_diag = np.zeros(n)
+    Omega_diag = np.ones(n) * omega_max # 刚性灾备筑底
     
+    valid_indices = []
+    valid_feats = []
+    
+    # 高速内存指针提取，避免 DataFrame 结构带来的开销
     for i, sym in enumerate(assets):
         feat = _get_features_for_date(sym, date, context)
-        if feat is None: Omega_diag[i] = omega_max; continue
+        if feat is not None:
+            valid_indices.append((i, sym))
+            valid_feats.append(feat)
             
+    if valid_feats:
+        X_batch = np.vstack(valid_feats)
         try:
-            # 抽取高维特征魔方投喂出的 95% 共形推断预期波动宽度 (High-Low Bounds)
-            q_low = quant_models[0.025].predict(feat.reshape(1, -1))[0]
-            q_mid = quant_models[0.5].predict(feat.reshape(1, -1))[0]
-            q_high = quant_models[0.975].predict(feat.reshape(1, -1))[0]
+            # ==============================================================================
+            # ⚡ 算力并发层：启用线程池 (ThreadPoolExecutor) 执行异步多路模型推理
+            # 突破 Python GIL 封锁，利用 C++ 底层释放的多核性能同时跑 3 个 XGBoost/LightGBM
+            # ==============================================================================
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                future_low = executor.submit(quant_models[0.025].predict, X_batch)
+                future_mid = executor.submit(quant_models[0.5].predict, X_batch)
+                future_high = executor.submit(quant_models[0.975].predict, X_batch)
+                
+                # 线程汇聚屏障 (Join Barrier)
+                q_low_batch = future_low.result()
+                q_mid_batch = future_mid.result()
+                q_high_batch = future_high.result()
             
-            width = max(1e-4, float(q_high - q_low))
-            
-            # 使用指数移动平滑消解微观高频预测波动区间震荡，稳定不确定性估计
             alpha = 1 - 0.5 ** (1 / halflife)
-            prev_smooth = context['smoothed_width'].get(sym, width)
-            smoothed = alpha * width + (1 - alpha) * prev_smooth
-            context['smoothed_width'][sym] = smoothed
-            
-            Omega_diag[i] = np.clip((smoothed ** 2) * tau, omega_min, omega_max)
-            # 严格遵循多头合规指导：彻底物理剥离融券成本扣减，利用现货掩码对中性观点直接调零清净
-            Q_view[i] = q_mid * masks.get(sym, 0)
-        except Exception:
-            Omega_diag[i] = omega_max
-            
+            for idx, (i, sym) in enumerate(valid_indices):
+                q_low = q_low_batch[idx]
+                q_mid = q_mid_batch[idx]
+                q_high = q_high_batch[idx]
+                
+                width = max(1e-4, float(q_high - q_low))
+                
+                prev_smooth = context['smoothed_width'].get(sym, width)
+                smoothed = alpha * width + (1 - alpha) * prev_smooth
+                context['smoothed_width'][sym] = smoothed
+                
+                Omega_diag[i] = np.clip((smoothed ** 2) * tau, omega_min, omega_max)
+                Q_view[i] = q_mid * masks.get(sym, 0)
+        except Exception as e:
+            logger.warning(f"[优化层] 并发预测矩阵崩溃，降级为默认兜底: {e}")
+            for i, sym in valid_indices:
+                Omega_diag[i] = omega_max
+                Q_view[i] = 0.0
+                
     Sigma_robust = _compute_robust_covariance(bus, assets, date, lookback=config.get('lookback_cov', 252))
     w_mkt = _compute_market_weights(bus, assets, date)
     
     try: lambda_mkt = bus.compute_market_risk_aversion(date.strftime('%Y-%m-%d'))
     except Exception: lambda_mkt = 2.5
         
-    # Black-Litterman 核心：逆推 market 一致预期超额收益先验 Pi 向量
-    Pi = lambda_mkt * (Sigma_robust @ w_mkt)
-    P_mat = np.eye(n)
-    Omega = np.diag(Omega_diag)
-    
-    # 【内生防御替换】将所有的原生 np.linalg.inv 强力替换为自愈求逆算子，彻底根治奇异矩阵退化崩溃
-    inv_Sigma_tau = _robust_matrix_inverse(tau * Sigma_robust, "tau * Sigma_robust")
-    inv_Omega = _robust_matrix_inverse(Omega, "Omega")
-    
-    # 解析联合后验预期超额收益率核心代数方程
-    inv_A = _robust_matrix_inverse(inv_Sigma_tau + P_mat.T @ inv_Omega @ P_mat, "inv_Sigma_tau + P_mat.T @ inv_Omega @ P_mat")
-    R_BL = inv_A @ (inv_Sigma_tau @ Pi + P_mat.T @ inv_Omega @ Q_view)
-    
-    # 终端降噪：引入静态计数器，防止每天调用打印一次阻塞系统
-    if not hasattr(step_m_2_black_litterman_fusion, "_call_count"):
-        step_m_2_black_litterman_fusion._call_count = 0
-    step_m_2_black_litterman_fusion._call_count += 1
-    
-    if step_m_2_black_litterman_fusion._call_count == 1 or step_m_2_black_litterman_fusion._call_count % 100 == 0:
-        logger.info("[OP] Fuse Posterior Expectations | [SOURCE] Prior Pi Array & Epistemic Uncertainty Omega | [RESULT] R_BL Vector Length: %s | [SIGNIFICANCE] Stabilizes forward-looking optimization inputs mathematically (Total days: %d)", len(R_BL), step_m_2_black_litterman_fusion._call_count)
-        logger.info("[操作] 融合求解后验期望收益率 | [来源] 均衡先验乘子与认知不确定性对角阵 Omega | [结果] 融合后的 R_BL 向量长度: %s | [意义] 完成 Black-Litterman 贝叶斯信息大综合，输出具备数学稳定性的远期预期向量 (当前累计执行: %d 天)", len(R_BL), step_m_2_black_litterman_fusion._call_count)
-        
+    # ==============================================================================
+    # ⚡ GPU 代数接管层：基于 Alternative 恒等式的 CUDA 并行矩阵求解器
+    # O(N^2) GPU 填充替代 CPU 的慢速循环，释放数万个流处理单元的矩阵运算霸权
+    # ==============================================================================
+    try:
+        if GPU_AVAILABLE:
+            # 数据从 Host (内存) 穿透至 Device (显存)
+            cp_Sigma = cp.array(Sigma_robust)
+            cp_w_mkt = cp.array(w_mkt)
+            cp_Q_view = cp.array(Q_view)
+            cp_Omega_diag = cp.array(Omega_diag)
+
+            cp_Pi = lambda_mkt * (cp_Sigma @ cp_w_mkt)
+            cp_M = tau * cp_Sigma
+            
+            # GPU 极速主对角线 O(N) 寻址与加载
+            cp_idx = cp.arange(n)
+            cp_M[cp_idx, cp_idx] += cp_Omega_diag
+            
+            # 激活 CuPy 的 CUDA 线性方程组求解器
+            cp_v = cp.linalg.solve(cp_M, cp_Q_view - cp_Pi)
+            cp_R_BL = cp_Pi + (tau * cp_Sigma) @ cp_v
+            
+            # 运算完毕，Device -> Host 无损回传
+            R_BL = cp.asnumpy(cp_R_BL)
+            Pi = cp.asnumpy(cp_Pi)
+            
+        else:
+            # [原生 CPU 满载备选流] (当 GPU 未挂载时，由上方 os.environ 接管开启 CPU 狂暴满载)
+            Pi = lambda_mkt * (Sigma_robust @ w_mkt)
+            M = tau * Sigma_robust.copy()
+            np.fill_diagonal(M, M.diagonal() + Omega_diag)
+            
+            v = np.linalg.solve(M, Q_view - Pi)
+            R_BL = Pi + (tau * Sigma_robust) @ v
+
+    except Exception as matrix_err:
+        # 三级防线：自愈降级
+        logger.warning(f"[守护] 异构代数引擎抛出奇异退化，尝试蒂霍诺夫微扰自愈... ({matrix_err})")
+        try:
+            # 即使 GPU 失败，也切回 CPU 进行高容错加载修复
+            Pi = lambda_mkt * (Sigma_robust @ w_mkt)
+            M_healed = tau * Sigma_robust.copy()
+            np.fill_diagonal(M_healed, M_healed.diagonal() + Omega_diag + 1e-4)
+            v = np.linalg.solve(M_healed, Q_view - Pi)
+            R_BL = Pi + (tau * Sigma_robust) @ v
+        except Exception:
+            logger.error("[守护] 终极熔断：代数流彻底锁死，强制无损回滚至市场均衡收益先验")
+            Pi = lambda_mkt * (Sigma_robust @ w_mkt)
+            R_BL = Pi.copy()
+            
     return R_BL, Sigma_robust, Q_view, Omega_diag
