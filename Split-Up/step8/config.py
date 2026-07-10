@@ -1,6 +1,6 @@
 """
 Phase 8 Local Configuration
-Fully compliant with Final-Flow.md [2026 Production Release]
+Fully compliant with Flow-Pro.md [2026 Pure Long Spot Release]
 """
 
 DEFAULT_CONFIG = {
@@ -14,5 +14,8 @@ DEFAULT_CONFIG = {
         "2024_microcap": ("2024-01-01", "2024-02-29"),
     },
     "min_samples_for_dsr": 20,
-    "stock_cap_pct": 0.045,
+    
+    # 刚性对齐 Flow-Pro 8.5 个人版静态本金底座与流动性安全垫配置
+    "total_equity": 10000000.0,            # 个体账户既定纯现金本金底座（默认1000万元）
+    "max_participation_threshold": 0.05,   # 静态大单参与率（Participation Rate）安全警戒硬红线（5%）
 }

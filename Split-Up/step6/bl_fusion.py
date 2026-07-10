@@ -12,6 +12,7 @@ def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights:
     n = len(assets)
     masks = context.get('directional_symbol_masks', {})
     quant_models = context.get('quantile_models')
+    
     if quant_models is None:
         logger.critical("[Orchestrator 断层] 上下文中找不到 quantile_models 分位数回归预测模型簇！")
         raise RuntimeError("quantile_models 未找到。")
@@ -49,6 +50,7 @@ def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights:
             pred_low = min(pred_low, pred_mid)
             pred_high = max(pred_high, pred_mid)
             
+            # 引入阶段五级联校准后的资产专属风险常数误差阈值
             err_thresh = context.get('q_error_threshold_dict', {}).get(sym, 0.0)
             q_low[i] = pred_low - err_thresh
             q_mid[i] = pred_mid
@@ -67,10 +69,10 @@ def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights:
             omega_ii = np.clip((smoothed ** 2) * tau, omega_min, omega_max)
             Omega_diag[i] = omega_ii
 
-            short_rate = bus.get_short_rate(sym) if masks.get(sym, 0) == -1 else 0.0
-            Q_view[i] = q_mid[i] - short_rate
+            # 严格依据 Flow-Pro 步骤 M.2，彻底剥离融券成本扣减，以多头现货掩码修正中性观点
+            Q_view[i] = q_mid[i] * masks.get(sym, 0)
         except Exception as e:
-            logger.warning(f"[{sym}] 分位数不确定性估值发生溢出: {e}，强制重置置信矩阵度量。")
+            logger.warning(f"[{sym}] 分位数不确定性估值发生溢出: {e}，强制降级重置置信度。")
             Omega_diag[i] = omega_max
 
     Sigma_robust = _compute_robust_covariance(bus, assets, date, lookback=lookback_cov)
@@ -91,7 +93,7 @@ def step_m_2_black_litterman_fusion(context: dict, date: datetime, prev_weights:
         P = np.eye(n)
         R_BL = np.linalg.inv(inv_prior + P.T @ inv_omega @ P) @ (inv_prior @ Pi + P.T @ inv_omega @ Q_view)
     except np.linalg.LinAlgError as e:
-        logger.error(f"[BL融合矩阵奇异异常] 日期 {date.strftime('%Y-%m-%d')} 求逆失败: {e}，触发物理安全熔断，强制降级使用平衡均衡市场收益 Pi。")
+        logger.error(f"[BL融合矩阵奇异异常] 日期 {date.strftime('%Y-%m-%d')} 求逆失败: {e}，触发安全防御机制，降级使用先验均衡收益 Pi。")
         R_BL = Pi.copy()
         
     return R_BL, Sigma_robust, q_low, q_high
