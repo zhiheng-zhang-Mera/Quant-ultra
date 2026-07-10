@@ -13,7 +13,7 @@ def run_shadow_reconciliation(context: dict) -> dict:
     """
     高精度影子对账快速重放协议。
     """
-    logger.info("[OP] Initiate Shadow Reconciliation Pipeline | [SOURCE] Master Portfolio Target weights | [RESULT] Activating bi-track routing | [SIGNIFICANCE] Validates physical execution matching to prevent accounting leaks")
+    # logger.info("[OP] Initiate Shadow Reconciliation Pipeline | [SOURCE] Master Portfolio Target weights | [RESULT] Activating bi-track routing | [SIGNIFICANCE] Validates physical execution matching to prevent accounting leaks")
     logger.info("[操作] 启动确定性影子对账管线 | [来源] 主控制流目标分配权重 | [结果] 正在激活双轨模态分流 | [意义] 校对模型目标与物理成交之间的一致性，防止隐性滑点资产流失")
 
     target_weights = context.get('target_weights', {})
@@ -24,7 +24,7 @@ def run_shadow_reconciliation(context: dict) -> dict:
     if is_live:
         gateway = context.get('counterparty_gateway')
         if gateway is None:
-            logger.critical("[OP] Extract Broker Gateway Interface | [SOURCE] Live Trade Routing Tunnel | [RESULT] Connection Failed: Gateway Vacuum | [SIGNIFICANCE] Directs account freeze to avoid executing under dark state")
+            # logger.critical("[OP] Extract Broker Gateway Interface | [SOURCE] Live Trade Routing Tunnel | [RESULT] Connection Failed: Gateway Vacuum | [SIGNIFICANCE] Directs account freeze to avoid executing under dark state")
             logger.critical("[操作] 提取券商柜台交互网关 | [来源] 实盘柜台网络通路 | [结果] 网关连接对象为空真空 | [意义] 检测到实盘连接断裂异常，强制冻结系统，防止盲目下单")
             raise RuntimeError("MLOps Catastrophe: Physical execution gateway absent under live mode.")
         
@@ -57,13 +57,13 @@ def run_shadow_reconciliation(context: dict) -> dict:
     recon_passed = mae <= mae_ceiling
     context['recon_passed'] = recon_passed
 
-    logger.info("[OP] Run Deterministic MAE Calculation | [SOURCE] Comparative Asset Portfolios | [RESULT] Current MAE: %.8f, Limits Ceiling: %.8f, Passed: %s | [SIGNIFICANCE] Determines whether execution drift triggers trade hold locks", mae, mae_ceiling, recon_passed)
-    logger.info("[操作] 计算确定性持仓 MAE 偏离度 | [来源] 理论与执行双端持仓明细对账 | [结果] 截面 MAE 误差: %.8f, 允许限额: %.8f, 对账通过: %s | [意义] 以高精度数学均值衡量实盘调仓损耗，不平账则立刻对系统下单实施封锁锁死")
+    # logger.info("[OP] Run Deterministic MAE Calculation | [SOURCE] Comparative Asset Portfolios | [RESULT] Current MAE: %.8f, Limits Ceiling: %.8f, Passed: %s | [SIGNIFICANCE] Determines whether execution drift triggers trade hold locks", mae, mae_ceiling, recon_passed)
+    logger.info("[操作] 计算确定性持仓 MAE 偏离度 | [来源] 理论与执行双端持仓明细对账 | [结果] 截面 MAE 误差: %.8f, 允许限额: %.8f, 对账通过: %s | [意义] 以高精度数学均值衡量实盘调仓损耗，不平账则立刻对系统下单实施封锁锁死", mae, mae_ceiling, recon_passed)
     return context
 
 def trigger_physical_hard_kill_switch(fsm_engine, counterparty_gateway) -> dict:
     """紧急特权一键清仓看门狗程序"""
-    logger.critical("[OP] Trigger Emergency Hard Kill Switch | [SOURCE] Telemetry System Command Desk | [RESULT] Executing force liquidation | [SIGNIFICANCE] Bypasses models to instantly liquidate positions into cash baseline")
+    # logger.critical("[OP] Trigger Emergency Hard Kill Switch | [SOURCE] Telemetry System Command Desk | [RESULT] Executing force liquidation | [SIGNIFICANCE] Bypasses models to instantly liquidate positions into cash baseline")
     logger.critical("[操作] 激活最高级紧急硬杀伤开关 | [来源] 生产看门狗应急控制台指令 | [结果] 正在执行全额地毯式强制平仓 | [意义] 强行超越一切优化器推演逻辑，瞬间变现全部资产，最大程度回流现金保障资金本金")
     
     report = {

@@ -14,7 +14,7 @@ def process_nested_risk_telemetry(context: dict) -> dict:
     """
     因子拥挤度度量与低波泡沫分层嵌套主动遥测预警。
     """
-    logger.info("[OP] Inspect Systematic Risk Telemetry | [SOURCE] Live Portfolio Performance stream | [RESULT] Assessing nesting alarms | [SIGNIFICANCE] Dynamically detects risk overlaps to preempt liquidity flash crashes")
+    # logger.info("[OP] Inspect Systematic Risk Telemetry | [SOURCE] Live Portfolio Performance stream | [RESULT] Assessing nesting alarms | [SIGNIFICANCE] Dynamically detects risk overlaps to preempt liquidity flash crashes")
     logger.info("[操作] 巡检系统性风险主动遥测 | [来源] 组合实盘运行净值流 | [结果] 正在评估分层嵌套预警指标 | [意义] 动态识别极端风险重叠，拦截流动性闪崩陷阱")
 
     data_bus = context.get('data_bus')
@@ -45,8 +45,8 @@ def process_nested_risk_telemetry(context: dict) -> dict:
             
             if curr_vol < hist_vol_quantile:
                 condition_b_triggered = True
-                logger.warning("[OP] Monitor Volatility Compression | [SOURCE] Sliding Return Series | [RESULT] Under limits! Vol: %.6f, Quantile Limit: %.6f | [SIGNIFICANCE] Identifies early signals of extreme bubble compression", curr_vol, hist_vol_quantile)
-                logger.warning("[操作] 监控净值波动率极端压缩 | [来源] 滚动收益率时间序列 | [结果] 击穿警戒底线！当前波幅: %.6f, 分位数底线: %.6f | [意义] 识别出低波泡沫积聚特征，防止突发剧烈均值回归风险")
+                # logger.warning("[OP] Monitor Volatility Compression | [SOURCE] Sliding Return Series | [RESULT] Under limits! Vol: %.6f, Quantile Limit: %.6f | [SIGNIFICANCE] Identifies early signals of extreme bubble compression", curr_vol, hist_vol_quantile)
+                logger.warning("[操作] 监控净值波动率极端压缩 | [来源] 滚动收益率时间序列 | [结果] 击穿警戒底线！当前波幅: %.6f, 分位数底线: %.6f | [意义] 识别出低波泡沫积聚特征，防止突发剧烈均值回归风险", curr_vol, hist_vol_quantile)
 
     # 2. 解析条件 A 风格拥挤度
     condition_a_triggered = False
@@ -75,8 +75,8 @@ def process_nested_risk_telemetry(context: dict) -> dict:
                     
                     if corr_coeff > corr_threshold:
                         condition_a_triggered = True
-                        logger.warning("[OP] Probe Multi-Factor Crowding | [SOURCE] Cross-Sectional Style Correlation | [RESULT] Coeff: %.4f, Limit Line: %.4f | [SIGNIFICANCE] Flags excessive style clustering across components", corr_coeff, corr_threshold)
-                        logger.warning("[操作] 探测风格因子高度拥挤度 | [来源] 横截面风格相关系数分析 | [结果] 当前相关系数: %.4f, 顶层警报红线: %.4f | [意义] 指出因子拥挤度过载风险，严防风格抱团崩溃引发的大额踩踏损失")
+                        # logger.warning("[OP] Probe Multi-Factor Crowding | [SOURCE] Cross-Sectional Style Correlation | [RESULT] Coeff: %.4f, Limit Line: %.4f | [SIGNIFICANCE] Flags excessive style clustering across components", corr_coeff, corr_threshold)
+                        logger.warning("[操作] 探测风格因子高度拥挤度 | [来源] 横截面风格相关系数分析 | [结果] 当前相关系数: %.4f, 顶层警报红线: %.4f | [意义] 指出因子拥挤度过载风险，严防风格抱团崩溃引发的大额踩踏损失", corr_coeff, corr_threshold)
     except Exception as e:
         logger.error(f"Failed to calculate crowding correlation: {e}")
         context['benchmark_crowding_correlation'] = 0.0
@@ -86,7 +86,7 @@ def process_nested_risk_telemetry(context: dict) -> dict:
 
     # 3. 双重交叉重叠交汇熔断保护
     if condition_a_triggered and condition_b_triggered:
-        logger.critical("[OP] Nest System Shock Triggered | [SOURCE] Telemetry Overlapping Joint-Alarm | [RESULT] Enforcing %s%% multi-equity limit cap | [SIGNIFICANCE] Forced de-allocation of spot risk capital into raw cash storage to survive systemic drawdowns", position_cap * 100)
+        # logger.critical("[OP] Nest System Shock Triggered | [SOURCE] Telemetry Overlapping Joint-Alarm | [RESULT] Enforcing %s%% multi-equity limit cap | [SIGNIFICANCE] Forced de-allocation of spot risk capital into raw cash storage to survive systemic drawdowns", position_cap * 100)
         logger.critical("[操作] 风格拥挤与低波泡沫嵌套风险同时激发 | [来源] 遥测双重重叠交汇大报警 | [结果] 强行限制多头总仓位上限至 %s%% | [意义] 实盘顶层终极物理防御防御机制，将高资产强行置换为无风险纯现金持币，绝对阻断高泡沫期的信用过载", position_cap * 100)
         context['enforce_crowded_allocation_cap'] = position_cap
     else:

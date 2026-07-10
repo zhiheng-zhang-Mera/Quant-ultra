@@ -18,7 +18,7 @@ def execute(pipeline_context: dict) -> dict:
     将增量缓存机制与文件落盘交还主协调器。本地执行对账与安全断电，并导出符合格式标准的实体。
     """
     logger.info("=" * 60)
-    logger.info("[OP] Deploy Phase_9 Production Command Center | [SOURCE] Pipeline Central Orchestration Core | [RESULT] Launching Live-MLOps gateway | [SIGNIFICANCE] Final auditing, reconciliation, and automated auto-preservation")
+    # logger.info("[OP] Deploy Phase_9 Production Command Center | [SOURCE] Pipeline Central Orchestration Core | [RESULT] Launching Live-MLOps gateway | [SIGNIFICANCE] Final auditing, reconciliation, and automated auto-preservation")
     logger.info("[操作] 部署 Phase_9 实盘监控主控中心 | [来源] 全局时空编排协调器大轴 | [结果] 正在引导 MLOps 交互网关 | [意义] 执行最终的对账核销与特征漂移审计，生成合规本地备份")
     logger.info("=" * 60)
 
@@ -62,8 +62,8 @@ def execute(pipeline_context: dict) -> dict:
         export_df.to_parquet(p_path, index=False)
         export_df.reset_index(drop=True).to_feather(f_path)
         
-        logger.info("[OP] Export Production Session Artifacts | [SOURCE] Memory State Record DataFrame | [RESULT] Created Parquet: %s, Feather: %s | [SIGNIFICANCE] Provides persistent state auditing for MLOps tracing", p_path.name, f_path.name)
-        logger.info("[操作] 导出生产会话账本实体 | [来源] 内存态运行数据变DataFrame | [结果] 固化Parquet: %s, Feather: %s | [意义] 提供高保真、轻量级、不可篡改的实盘每日运行会话状态硬拷贝，以供灾备追溯")
+        # logger.info("[OP] Export Production Session Artifacts | [SOURCE] Memory State Record DataFrame | [RESULT] Created Parquet: %s, Feather: %s | [SIGNIFICANCE] Provides persistent state auditing for MLOps tracing", p_path.name, f_path.name)
+        logger.info("[操作] 导出生产会话账本实体 | [来源] 内存态运行数据变DataFrame | [结果] 固化Parquet: %s, Feather: %s | [意义] 提供高保真、轻量级、不可篡改的实盘每日运行会话状态硬拷贝，以供灾备追溯", p_path.name, f_path.name)
     except Exception as e:
         logger.error(f"Archiving system session outputs failed: {e}")
 

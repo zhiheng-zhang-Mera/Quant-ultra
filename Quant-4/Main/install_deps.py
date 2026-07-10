@@ -16,21 +16,26 @@ from pathlib import Path
 
 import pandas_market_calendars
 
+## !! 注意：在terminal中先使用代码 nvidia-smi 查看GPU状态，确保CUDA驱动正常，查看CUDA版本是否与cupy兼容，否则可能导致GPU加速失败。
+## !! 然后使用命令 pip install cupy-cuda12x（根据CUDA版本若12.x安装对应的cupy版本）安装cupy库，以启用GPU加速功能。
+## !! 使用 指令 ： pip list | findstr cupy 检查cupy是否安装成功，若未安装成功请检查CUDA驱动和版本兼容性，不允许cupy纯净版或不同版本，防止冲突。
+
 # 项目所需的核心第三方库（根据代码实际导入情况整理 + 新增）
 REQUIRED_LIBRARIES = [
-    "numpy",
-    "pandas",
-    "pytz",
-    "lightgbm",
-    "scikit-learn",
-    "statsmodels",
-    "scipy",
-    "cvxpy",
-    "matplotlib",
-    "tabulate",
-    "pandas_market_calendars",
-    "pyyaml",
-    "requests",
+    "numpy",            # 数值计算库
+    "pandas",           # 数据处理库
+    "pytz",             # 时区处理库
+    "lightgbm",         # 机器学习库
+    "scikit-learn",     # 机器学习库
+    "statsmodels",      # 统计建模库
+    "scipy",            # 数值计算库
+    "cvxpy",            # 凸优化库
+    "matplotlib",       # 绘图库
+    "tabulate",         # 表格格式化库
+    "pandas_market_calendars",# 交易日历库
+    "pyyaml",           # YAML 处理库
+    "requests",         # HTTP 请求库
+    "tenacity",         # 重试库
     "pyarrow",          # 数据处理库   
     'psutil',           # 系统监控库
     "akshare",          # 金融数据接口

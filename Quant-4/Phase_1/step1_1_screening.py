@@ -45,7 +45,7 @@ def _worker_core(symbol: str, start_date: str, end_date: str, data_bus, now, lim
         if limiter: limiter.release(success)
 
 def run_screening(context: dict, data_bus, data_manager):
-    logger.info("[OP] Deploy Cross-Market Liquidity Filter | [SOURCE] Federated Unified Universe Node | [RESULT] Launching parallel analytics pool | [SIGNIFICANCE] Screens micro-liquidity features and sets up capacity blueprints")
+    # logger.info("[OP] Deploy Cross-Market Liquidity Filter | [SOURCE] Federated Unified Universe Node | [RESULT] Launching parallel analytics pool | [SIGNIFICANCE] Screens micro-liquidity features and sets up capacity blueprints")
     logger.info("[操作] 部署跨市场流动性筛选器 | [来源] 联邦统一标的池节点 | [结果] 正在启动并行分析计算池 | [意义] 甄别微观流动性特征并构建容量上限蓝图")
     
     now = datetime.now(data_bus._tz)
@@ -64,7 +64,7 @@ def run_screening(context: dict, data_bus, data_manager):
             if 'cache_date' in df_cache.columns and pd.to_datetime(df_cache['cache_date'].iloc[0]).date() == latest_trading_day.date():
                 context['assets'] = df_cache['symbol'].tolist()
                 context['adv_data'] = {row['symbol']: row['adv'] for _, row in df_cache.iterrows()}
-                logger.info("[OP] Trigger Local Checkpoint Recovery | [SOURCE] Local Parquet Cache Database | [RESULT] Hydrated context for %s symbols | [SIGNIFICANCE] Bypasses heavy historical computation and IO traps completely", len(context['assets']))
+                # logger.info("[OP] Trigger Local Checkpoint Recovery | [SOURCE] Local Parquet Cache Database | [RESULT] Hydrated context for %s symbols | [SIGNIFICANCE] Bypasses heavy historical computation and IO traps completely", len(context['assets']))
                 logger.info("[操作] 触发本地检查点恢复 | [来源] 本地 Parquet 缓存数据库 | [结果] 成功还原 %s 只标的的上下文 | [意义] 完全绕过沉重的历史重算与网络 IO 陷阱", len(context['assets']))
                 return
         except Exception as e: 
@@ -72,7 +72,7 @@ def run_screening(context: dict, data_bus, data_manager):
 
     symbols = data_bus.get_universe()
     symbols = [s for s in symbols if s.split('.')[0].isdigit() or s.endswith('.US')]
-    logger.info("[DATA] Total raw symbols from universe: %s, after filtering (A-share + US) usable: %s", len(data_bus.get_universe()), len(symbols))
+    # logger.info("[DATA] Total raw symbols from universe: %s, after filtering (A-share + US) usable: %s", len(data_bus.get_universe()), len(symbols))
     logger.info("[DATA] 原始标的池总数: %s, 经双市场过滤后可用的标的数: %s", len(data_bus.get_universe()), len(symbols))
     
     end_date = now.strftime('%Y-%m-%d')
@@ -94,7 +94,8 @@ def run_screening(context: dict, data_bus, data_manager):
                 context.setdefault('asset_histories', {})[res['symbol']] = res['hist_df']
 
     if limiter: limiter.stop()
-    logger.info("[RESULT] Raw screening completed, %s assets passed the basic data availability check", len(raw_results))
+    # logger.info("[RESULT] Raw screening completed, %s assets passed the basic data availability check", len(raw_results))
+    logger.info("[RESULT] 原始筛选完成, %s 只标的通过了基础数据可用性检查", len(raw_results))
 
     filtered_list = []
     ipo_safety_days = context['config'].get("ipo_safety_days", 20)
@@ -114,7 +115,7 @@ def run_screening(context: dict, data_bus, data_manager):
 
     context['assets'] = [x['symbol'] for x in filtered_list]
     context['adv_data'] = {x['symbol']: x['adv'] for x in filtered_list}
-    logger.info("[FILTER] Final filtered assets: %s (rejected: ADV insufficient %s, IPO not mature %s)", len(filtered_list), adv_rejected, ipo_rejected)
+    # logger.info("[FILTER] Final filtered assets: %s (rejected: ADV insufficient %s, IPO not mature %s)", len(filtered_list), adv_rejected, ipo_rejected)
     logger.info("[FILTER] 最终筛选后资产数: %s (流动性不足剔除: %s, 次新股保护剔除: %s)", len(filtered_list), adv_rejected, ipo_rejected)
 
     # ====================================================
@@ -129,8 +130,8 @@ def run_screening(context: dict, data_bus, data_manager):
         theoretical_aum_limit = min(capacities) * len(filtered_list) * 0.15
         context['theoretical_aum_limit_base'] = theoretical_aum_limit
         
-        logger.info("[OP] Inverse Prudent Capacity Base | [SOURCE] Micro Liquidity Friction Matrix | [RESULT] AUM Limit Constant: %s CNY | [SIGNIFICANCE] Pinpoints investment scale choke points under strict turnover boundaries", theoretical_aum_limit)
-        logger.info("[操作] 反推审慎容量基准 | [来源] 微观流动性摩擦矩阵 | [结果] 个人资产安全规模上限: %s 元 | [意义] 在严格的换手率边界下，精准锁定位资产池中窄通道流动性瓶颈上限")
+        #logger.info("[OP] Inverse Prudent Capacity Base | [SOURCE] Micro Liquidity Friction Matrix | [RESULT] AUM Limit Constant: %s CNY | [SIGNIFICANCE] Pinpoints investment scale choke points under strict turnover boundaries", theoretical_aum_limit)
+        logger.info("[操作] 反推审慎容量基准 | [来源] 微观流动性摩擦矩阵 | [结果] 个人资产安全规模上限: %s 元 | [意义] 在严格的换手率边界下，精准锁定位资产池中窄通道流动性瓶颈上限", theoretical_aum_limit)
         # 额外输出容量分布统计
         logger.info("[DIST] Capacity distribution: min=%.2f, median=%.2f, max=%.2f (CNY)", min(capacities), pd.Series(capacities).median(), max(capacities))
 
@@ -139,4 +140,5 @@ def run_screening(context: dict, data_bus, data_manager):
         df_out.to_parquet(screening_cache, index=False)
         logger.info("[CACHE] Screening results cached to %s (records=%s)", screening_cache, len(df_out))
     else:
-        logger.warning("[WARN] No assets passed screening, capacity estimation skipped")
+        # logger.warning("[WARN] No assets passed screening, capacity estimation skipped")
+        logger.warning("[警告] 没有标的通过筛选，容量估算被跳过")

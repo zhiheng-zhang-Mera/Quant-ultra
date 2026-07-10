@@ -33,7 +33,31 @@ def build_dual_track_labels(
         if df is None or df.empty:
             skipped_no_data += 1; continue
 
-        price_series = df['total_return_price']
+        # 时序索引升维防线：解决 int64 与 datetime 冲突
+        if 'date' in df.columns:
+            df.set_index('date', inplace=True)
+        elif 'Date' in df.columns:
+            df.set_index('Date', inplace=True)
+
+        # price_series = df['total_return_price'] # 固定价格
+        
+        # 动态价格尝试列表，防止不同数据源列名异构
+        price_col = None
+        possible_cols = ['total_return_price', 'adj_close', 'adjclose', 'Adj Close', 'close', 'Close']
+        for col in possible_cols:
+            if col in df.columns:
+                price_col = col
+                break
+                
+        if not price_col:
+            # 如果极端情况下连收盘价都没有，跳过该标的以防止系统崩溃
+            continue 
+            
+        price_series = df[price_col]
+        
+        # 剔除同日重复的脏数据，防止 reindex 函数底层崩溃
+        price_series = price_series[~price_series.index.duplicated(keep='last')]
+
         prices = price_series.reindex(train_dates, method='ffill')
         if prices.notna().sum() < 2:
             skipped_no_data += 1; continue

@@ -154,7 +154,7 @@ class FSMEngine:
     def _check_is_delisted(self, sym) -> bool:
         """退市判断"""
         del_date = self.bus.query_by_pit(sym, self.current_date, "delisting_date")
-        if del_date is not None and pd.Timestamp(del_date) <= pd.Timestamp(self.current_date):
+        if del_date is not None and pd.Timestamp(del_date).replace(tzinfo=None) <= pd.Timestamp(self.current_date).replace(tzinfo=None):
             return True
         return False
 
@@ -177,7 +177,8 @@ class FSMEngine:
         if len(test_dates) == 0:
             raise ValueError("Empty test dates.")
 
-        logger.info("FSM Engine started. Initial cash: %.2f", self.cash)
+        # logger.info("FSM Engine started. Initial cash: %.2f", self.cash)
+        logger.info("FSM回测引擎启动 | 初始现金: %.2f | 回测周期: 起始 %d ~ 终止 %d", self.cash, test_dates[0], test_dates[-1])
         prev_nav = self.cash
 
         for t_idx, date in enumerate(test_dates):
@@ -217,8 +218,12 @@ class FSMEngine:
                 adjusted_weights = {k: v / total_w for k, v in adjusted_weights.items()}
 
             # ---- 4. 执行状态机 ----
+            logger.info("由FSM回测引擎执行Phase 4 ~ 6 | 日期: %s | 终点: %s", date_str, test_dates[-1].strftime('%Y-%m-%d'))
+            logger.info("FSM回测启动phase4")
             process_state_4_execution(self, adjusted_weights, prices)
+            logger.info("FSM回测启动phase5")
             process_state_5_equity(self)
+            logger.info("FSM回测启动phase6")
             process_state_6_reconciliation(self, prices, prev_nav)
 
             # ---- 5. 收盘净值与收益 ----
@@ -248,10 +253,11 @@ class FSMEngine:
 
             # 每季度打印一次进度
             if t_idx % 60 == 0:
-                logger.info("Progress: %s, NAV=%.2f", date_str, nav_after)
-
-        logger.info("FSM Engine finished. Final NAV: %.2f", self.nav_series[-1] if self.nav_series else self.cash)
-
+                # logger.info("Progress: %s, NAV=%.2f", date_str, nav_after)
+                logger.info("回测期间季度打印: 总进程 %s / %s | 当前净值: %.2f", date_str, test_dates[-1].strftime('%Y-%m-%d'), nav_after)
+        # logger.info("FSM Engine finished. Final NAV: %.2f", self.nav_series[-1] if self.nav_series else self.cash)
+        logger.info("FSM回测完成 | 最终净值: %.2f | 回测周期: 起始%d ~ 终止%d", self.nav_series[-1] if self.nav_series else self.cash, test_dates[0], test_dates[-1])
+        
         # 保存结果到 context
         self.context['daily_nav'] = pd.Series(self.nav_series, index=test_dates)
         self.context['daily_returns'] = pd.Series(dict(self.daily_returns_list))
@@ -265,7 +271,9 @@ def execute(pipeline_context: dict) -> dict:
     标准管道入口。原地更新 pipeline_context 并返回。
     """
     logger.info("=" * 60)
-    logger.info("[PHASE-7] Deploying Finite State Machine Backtester")
+    # logger.info("[PHASE-7] Deploying Finite State Machine Backtester")
+    # logger.info("[PHASE-7] Backtest Period: %s ~ %s", pipeline_context['daily_weights'].index[0], pipeline_context['daily_weights'].index[-1])
+    logger.info("[Phase-7]运行 Finite State Machine 回测引擎启动")
     logger.info("=" * 60)
 
     engine = FSMEngine(pipeline_context)
@@ -281,6 +289,7 @@ def execute(pipeline_context: dict) -> dict:
         'nav_history': pipeline_context['daily_nav'].to_dict(),
     })
 
-    logger.info("[PHASE-7] Completed. Final NAV: %.2f", pipeline_context['final_nav'])
+    # logger.info("[PHASE-7] Completed. Final NAV: %.2f", pipeline_context['final_nav'])
+    logger.info("[Phase-7] 运行完成 | 最终净值: %.2f", pipeline_context['final_nav'])
     logger.info("=" * 60)
     return pipeline_context
