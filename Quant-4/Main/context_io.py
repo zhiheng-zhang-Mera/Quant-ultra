@@ -56,7 +56,8 @@ def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: lis
                     df.to_parquet(p_path, index=True)
                     metadata[k] = {"type": "dataframe", "index_names": [v.index.name or "index"]}
                     df.reset_index().to_feather(f_path)
-                logger.info("[OP] Write Tabular Engine | [SOURCE] Memory Matrix | [RESULT] Parquet/Feather saved: %s", p_path.name)
+                # logger.info("[OP] Write Tabular Engine | [SOURCE] Memory Matrix | [RESULT] Parquet/Feather saved: %s", p_path.name)
+                logger.info("由上下文I/O模块保存表格引擎数据 | 来源: 内存矩阵 | 结果: Parquet/Feather已保存: %s", p_path.name)
             except Exception as e:
                 logger.warning("[FAIL] Failed to save %s as DataFrame/Series: %s", k, e)
             continue
@@ -79,15 +80,18 @@ def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: lis
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(serialized_list, f, ensure_ascii=False, indent=2, default=str)
                 metadata[k] = {"type": "tuple_dict"}
-                logger.info("[OP] Write Tuple-Dict JSON | [SOURCE] Memory Mapping | [RESULT] Saved: %s", json_path.name)
+                # logger.info("[OP] Write Tuple-Dict JSON | [SOURCE] Memory Mapping | [RESULT] Saved: %s", json_path.name)
+                logger.info("由上下文I/O模块保存元组键字典 | 来源: 内存映射 | 结果: 已保存: %s", json_path.name)
             except Exception as e:
-                logger.warning("[FAIL] Failed to save tuple-dict %s: %s", k, e)
+                # logger.warning("[FAIL] Failed to save tuple-dict %s: %s", k, e)
+                logger.warning("由上下文I/O模块保存元组键字典失败 | 键: %s | 错误: %s", k, e)
             continue
 
         # ---- 通用序列化：优先 JSON，失败则尝试 Pickle ----
         # 先检测是否可 pickle，若不可 pickle 则跳过
         if not _is_picklable(v):
-            logger.warning("[SKIP] Value for key '%s' is not picklable, skipping", k)
+            # logger.warning("[SKIP] Value for key '%s' is not picklable, skipping", k)
+            logger.warning("由上下文I/O模块跳过不可序列化对象 | 键: %s | 原因: 无法被Pickle序列化", k)
             continue
 
         # 尝试 JSON
@@ -96,16 +100,19 @@ def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: lis
             with open(p_dir / f"{k}.json", "w") as f:
                 json.dump(v, f, indent=2)
             metadata[k] = {"type": "json"}
-            logger.info("[OP] Write JSON | [SOURCE] Memory Atom | [RESULT] Saved: %s.json", k)
+            # logger.info("[OP] Write JSON | [SOURCE] Memory Atom | [RESULT] Saved: %s.json", k)
+            logger.info("由上下文I/O模块保存JSON数据 | 结果: 已保存: %s.json", k)
         except Exception:
             # JSON 失败则使用 Pickle
             try:
                 with open(p_dir / f"{k}.pkl", "wb") as f:
                     pickle.dump(v, f)
                 metadata[k] = {"type": "pickle"}
-                logger.info("[OP] Serialize Dynamic Model | [SOURCE] Live Kernel | [RESULT] Pickle generated: %s.pkl", k)
+                # logger.info("[OP] Serialize Dynamic Model | [SOURCE] Live Kernel | [RESULT] Pickle generated: %s.pkl", k)
+                logger.info("由上下文I/O模块序列化动态模型 | 结果: Pickle已生成: %s.pkl", k)
             except Exception as e:
-                logger.warning("[FAIL] Failed to pickle key '%s': %s", k, e)
+                logger.warning("由上下文I/O模块序列化动态模型失败 | 键: %s | 错误: %s", k, e)
+                # logger.warning("[FAIL] Failed to pickle key '%s': %s", k, e)
 
     # 写入元数据
     try:
@@ -119,7 +126,8 @@ def load_phase_result(phase_name: str, modules_list: list) -> Optional[Dict[str,
     p_dir = get_phase_cache_dir(phase_name, "parquet", modules_list)
     meta_file = p_dir / "metadata.json"
     if not meta_file.exists():
-        logger.warning("[OP] Probe Checkpoint | [SOURCE] Disk Auditor | [RESULT] Missed! Cold start required | [SIGNIFICANCE] Cache absent")
+        # logger.warning("[OP] Probe Checkpoint | [SOURCE] Disk Auditor | [RESULT] Missed! Cold start required | [SIGNIFICANCE] Cache absent")
+        logger.warning("由上下文I/O模块探测检查点 | 结果: 缺失！需要冷启动 | 意义: 缓存不存在")
         return None
     with open(meta_file, "r") as f:
         metadata = json.load(f)
@@ -170,7 +178,8 @@ def load_phase_result(phase_name: str, modules_list: list) -> Optional[Dict[str,
         elif t == "pickle" and (p_dir / f"{k}.pkl").exists():
             with open(p_dir / f"{k}.pkl", "rb") as f:
                 res[k] = pickle.load(f)
-    logger.info("[OP] Hydrate Phase Context | [SOURCE] Disk Blocks | [RESULT] Inflated assets: %s | [SIGNIFICANCE] Hot injection bypasses re-computation", list(res.keys()))
+    # logger.info("[OP] Hydrate Phase Context | [SOURCE] Disk Blocks | [RESULT] Inflated assets: %s | [SIGNIFICANCE] Hot injection bypasses re-computation", list(res.keys()))
+    logger.info("由上下文I/O模块恢复阶段上下文 | 来源: 磁盘块 | 结果: 已膨胀资产: %s | 意义: 热注入绕过重新计算", list(res.keys()))
     return res if res else None
 
 def save_context_snapshot(context: Dict, phase_name: str, run_ts: str, log_dir: Path):

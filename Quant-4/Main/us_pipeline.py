@@ -1,10 +1,36 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 from typing import Optional
 
+# [调整4] 引入指数退避重试，防止被云服务商封禁或抛出 429
+try:
+    from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+except ImportError:
+    # 兼容处理：建议环境中 pip install tenacity
+    logging.warning("Missing 'tenacity' library. Recommended for production retry mechanisms.")
+    def retry(*args, **kwargs):
+        def decorator(func): return func
+        return decorator
+    stop_after_attempt = lambda x: None
+    wait_exponential = lambda multiplier, min, max: None
+    retry_if_exception_type = lambda x: None
+
 logger = logging.getLogger("USPipeline")
+
+# [调整4] 使用 tenacity 包装公网请求，遭遇限流时自动指数退避重试 (最多尝试 5 次)
+@retry(
+    stop=stop_after_attempt(5), 
+    wait=wait_exponential(multiplier=1.5, min=2, max=20),
+    reraise=True
+)
+def _fetch_yf_history_with_retry(yf_obj, tk: str, start: str, end: str):
+    logger.info(f"[网络层] yfinance 请求历史价格，标的: {tk} ({start} -> {end}, 已尝试次数：{yf_obj._retry_state.attempt_number})")
+    raw = yf_obj.Ticker(tk).history(start=start, end=end)
+    if raw.empty:
+        raise ValueError(f"yfinance 返回空 DataFrame，可能是请求被拦截或标的错误: {tk}")
+    return raw
 
 def fetch_us_historical(symbol: str, start_date: str, end_date: str, cache_dir: Path, offline_debug: bool, has_yf: bool, yf_obj, ak_obj) -> Optional[pd.DataFrame]:
     c_path = cache_dir / f"us_{symbol}_history.parquet"
@@ -14,32 +40,33 @@ def fetch_us_historical(symbol: str, start_date: str, end_date: str, cache_dir: 
             full["date"] = pd.to_datetime(full["date"])
             mask = (full["date"] >= pd.to_datetime(start_date)) & (full["date"] <= pd.to_datetime(end_date))
             df_res = full.loc[mask].copy()
-            logger.info("[OP] Slice US Offline Cache Store | [SOURCE] Local Verified Parquet Block | [RESULT] Sub-matrix row count: %s | [SIGNIFICANCE] Yields pure historically true price traces", len(df_res))
-            logger.info("[操作] 切片美股离线缓存区 | [来源] 本地经验证的Parquet块 | [结果] 子矩阵提取行数: %s | [意义] 交付纯净的、具备历史真实性的价格轨迹")
+            logger.info("[OP] Slice US Offline Cache Store | [RESULT] Yields pure historically true price traces")
             return df_res
         except Exception:
             c_path.unlink(missing_ok=True)
+            
     if offline_debug:
-        logger.critical("[OP] Evaluate Network Strategy | [SOURCE] Sandboxed Environment Controller | [RESULT] Halt! Missing physical local data asset for %s | [SIGNIFICANCE] Strict prevention of random-walk vector injection during network blackouts", symbol)
-        logger.critical("[操作] 评估网络访问策略 | [来源] 沙箱环境控制器 | [结果] 阻断！缺少 %s 的本地物理数据资产 | [意义] 严格禁止在断网时注入任何随机游走随机伪向量")
+        logger.critical(f"[OP] Evaluate Network Strategy | [RESULT] Halt! Missing physical local data asset for {symbol}")
         raise RuntimeError(f"[A-5 Breach] Sandbox block triggered for {symbol}.")
+        
     df = None
     tk = symbol.replace(".US", "").replace(".us", "")
     if tk in [".INX", "SPX"]:
         tk = "^GSPC"
+        
     if has_yf and yf_obj:
         try:
-            logger.info("[OP] Execute Public API Request | [SOURCE] yfinance International Node | [RESULT] Fetching historical price for symbol: %s | [SIGNIFICANCE] Targets premium untainted market index data directly", tk)
-            logger.info("[操作] 执行公网API请求 | [来源] yfinance国际直连节点 | [结果] 正在拉取历史价格，标的代码: %s | [意义] 直接定位未受污染的高保真大盘核心交易指数")
-            raw = yf_obj.Ticker(tk).history(start="2005-01-01", end=datetime.now().strftime("%Y-%m-%d"))
-            if not raw.empty:
-                df = raw.reset_index().rename(columns={"Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
-                df["amount"] = df["volume"] * df["close"]
-                df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
-                df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
+            # 采用包含防封禁重试的安全网络请求函数
+            current_end = datetime.now().strftime("%Y-%m-%d")
+            raw = _fetch_yf_history_with_retry(yf_obj, tk, start="2005-01-01", end=current_end)
+            
+            df = raw.reset_index().rename(columns={"Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
+            df["amount"] = df["volume"] * df["close"]
+            df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+            df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
         except Exception as e:
-            logger.warning("[OP] Request Premium Channel Failed | [SOURCE] yfinance Cloud Interface | [RESULT] Request timeout or network unreachable | [SIGNIFICANCE] Triggers secondary mirroring route alignment", exc_info=True)
-            logger.warning("[操作] 请求高规通道失败 | [来源] yfinance云端接口 | [结果] 请求超时或网络不可达 | [意义] 触发二级镜像备用路由机制进行灾备对齐")
+            logger.warning(f"[OP] Request Premium Channel Failed | [RESULT] yfinance 彻底失败，转入灾备镜像 | {e}")
+            
     if (df is None or df.empty) and ak_obj:
         try:
             if tk == "^GSPC":
@@ -51,25 +78,37 @@ def fetch_us_historical(symbol: str, start_date: str, end_date: str, cache_dir: 
                     df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
         except Exception as e:
             logger.error(f"AkShare backup link down: {e}")
+            
     if df is None or df.empty:
         raise RuntimeError(f"Halt: Failure to secure verified market vector for US target: {symbol}")
+        
     df.sort_values("date", ascending=True, inplace=True)
     df.to_parquet(c_path, index=False)
+    
     mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
     return df.loc[mask].copy()
 
-def fetch_us_trading_calendar(cache_dir: Path, offline_debug: bool, has_yf: bool, yf_obj, ak_obj, start_year: int = 2010, end_year: int = 2026) -> pd.DatetimeIndex:
+# [调整1] 拆除美股2026年日历上限炸弹
+def fetch_us_trading_calendar(cache_dir: Path, offline_debug: bool, has_yf: bool, yf_obj, ak_obj, start_year: int = 2010, end_year: int = None) -> pd.DatetimeIndex:
+    if end_year is None:
+        end_year = datetime.now().year + 1  # 动态往后推延1年，确保跨年可用
+        
     c_path = cache_dir / f"us_cal_{start_year}_{end_year}.parquet"
     if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 7:
         return pd.DatetimeIndex(pd.read_parquet(c_path)["date"])
+        
     if offline_debug:
         raise RuntimeError("Halt: Missing physical US market calendar.")
+        
     if has_yf and yf_obj:
         try:
-            df_us = yf_obj.Ticker("^GSPC").history(start=f"{start_year}-01-01", end=f"{end_year}-12-31")
+            df_us = _fetch_yf_history_with_retry(yf_obj, "^GSPC", start=f"{start_year}-01-01", end=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
             if not df_us.empty:
                 d = df_us.index.tz_localize(None).sort_values().tolist()
                 pd.DataFrame({"date": d}).to_parquet(c_path, index=False)
                 return pd.DatetimeIndex(d)
-        except: pass
+        except Exception as e:
+            logger.warning(f"Calendar fetching failure logic: {e}")
+            pass
+            
     raise RuntimeError("US trading track dark. Critical safety trip activated.")

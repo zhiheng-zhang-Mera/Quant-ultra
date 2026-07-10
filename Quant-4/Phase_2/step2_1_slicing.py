@@ -6,7 +6,7 @@ from Phase_2.acf_analyzer import compute_dynamic_acf_lag
 logger = logging.getLogger("DataSlicing.Slicing")
 
 def run_moving_window_slicing(context: dict):
-    logger.info("[OP] Launch Multi-Track Index Alignment Engine | [SOURCE] Dual-Market Standard Datetime Indices | [RESULT] Activating synchronous chronology slice workflow | [SIGNIFICANCE] Guarantees that historical token N in US aligns precisely with token N in A-share")
+    # logger.info("[OP] Launch Multi-Track Index Alignment Engine | [SOURCE] Dual-Market Standard Datetime Indices | [RESULT] Activating synchronous chronology slice workflow | [SIGNIFICANCE] Guarantees that historical token N in US aligns precisely with token N in A-share")
     logger.info("[操作] 启动多轨索引对齐引擎 | [来源] 双市场标准日期时间索引 | [结果] 激活同步时序切片工作流 | [意义] 保证海外市场的历史第 N 个交易日代数令牌与 A 股主战场精准锚定对齐")
 
     trading_days_dt_cn = context.get('trading_days_dt_cn', [])
@@ -25,8 +25,8 @@ def run_moving_window_slicing(context: dict):
     context['embargo_window'] = embargo_window
     context['holding_period'] = holding_period
     
-    logger.info("[OP] Lock Global Embargo Insulation Window | [SOURCE] Combined Max(Holding, ACF Lag, Embargo Min) | [RESULT] Calculated Guard Width: %s Trading Days | [SIGNIFICANCE] Hardens mathematical firewall widths to enforce physical spacing between partitions", embargo_window)
-    logger.info("[操作] 锁定全局禁运隔离视窗 | [来源] 归并上限算子值 | [结果] 算得安全垫宽度: %s 个交易日 | [意义] 固化数学防火墙宽度，强制各回测/训练分区在物理上不产生交叉重叠")
+    # logger.info("[OP] Lock Global Embargo Insulation Window | [SOURCE] Combined Max(Holding, ACF Lag, Embargo Min) | [RESULT] Calculated Guard Width: %s Trading Days | [SIGNIFICANCE] Hardens mathematical firewall widths to enforce physical spacing between partitions", embargo_window)
+    logger.info("[操作] 锁定全局禁运隔离视窗 | [来源] 归并上限算子值 | [结果] 算得安全垫宽度: %s 个交易日 | [意义] 固化数学防火墙宽度，强制各回测/训练分区在物理上不产生交叉重叠", embargo_window)
 
     n_cn, n_us = len(trading_days_dt_cn), len(trading_days_dt_us)
     raw_a_end = int(n_cn * slicing_ratios[0])

@@ -30,8 +30,8 @@ class FreeDataSourceManager:
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         os.environ[k.strip()] = v.strip()
-            self._logger.info("[OP] Parse Token Files | [SOURCE] Main/.env Physical File | [RESULT] Environment tokens injected | [SIGNIFICANCE] Enables seamless authorization")
-
+            # self._logger.info("[OP] Parse Token Files | [SOURCE] Main/.env Physical File | [RESULT] Environment tokens injected | [SIGNIFICANCE] Enables seamless authorization")
+            self._logger.info("由数据源管理器加载环境文件 | 来源: Main/.env物理文件 | 结果: 环境令牌已注入 | 意义: 实现无缝授权")
     def _init_sources(self):
         self._has_yf = False
         if not self.offline_debug:
@@ -39,7 +39,8 @@ class FreeDataSourceManager:
                 import yfinance as yf
                 self._yf = yf
                 self._has_yf = True
-                self._logger.info("[OP] Register Data Providers | [SOURCE] yfinance | [RESULT] Level 0 active | [SIGNIFICANCE] Connects international equity pipeline")
+                # self._logger.info("[OP] Register Data Providers | [SOURCE] yfinance | [RESULT] Level 0 active | [SIGNIFICANCE] Connects international equity pipeline")
+                self._logger.info("由数据源管理器初始化数据提供商 | 来源: yfinance | 结果: Level 0 active | 意义: 连接国际股票管道")
             except ImportError: pass
         try:
             import akshare as ak
@@ -63,7 +64,8 @@ class FreeDataSourceManager:
             import efinance as ef
             self._ef = ef
             self._sources.append(("efinance", self._fetch_efinance))
-            self._logger.info("[OP] Register Data Providers | [SOURCE] efinance | [RESULT] Level 4 active | [SIGNIFICANCE] Adds domestic backup mirror")
+            # self._logger.info("[OP] Register Data Providers | [SOURCE] efinance | [RESULT] Level 4 active | [SIGNIFICANCE] Adds domestic backup mirror")
+            self._logger.info("由数据源管理器注册数据提供商 | 来源: efinance | 结果: Level 4 active | 意义: 添加国内备份镜像")
         except ImportError: pass
 
     def fetch_historical(self, symbol: str, start_date: str, end_date: str, freq: str = "d") -> Optional[pd.DataFrame]:
@@ -90,7 +92,8 @@ class FreeDataSourceManager:
                 if df is not None and not df.empty:
                     df.to_parquet(c_path, index=False)
                     mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
-                    self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
+                    # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
+                    self._logger.info("由数据源管理器查询A股实时数据 | 来源: %s | 结果: 行数: %d | 意义: 多源回退成功", name, len(df))
                     return df.loc[mask].copy()
             except:
                 continue
@@ -197,7 +200,7 @@ class FreeDataSourceManager:
             return pd.read_parquet(c_path)["symbol"].tolist()
         return ["600000.SH", "600036.SH", "600519.SH", "000001.SZ", "000002.SZ"] * 16
 
-    def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = 2026) -> pd.DatetimeIndex:
+    def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = datetime.now().year) -> pd.DatetimeIndex:
         c_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
         if c_path.exists():
             return pd.DatetimeIndex(pd.read_parquet(c_path)["date"])
@@ -208,5 +211,5 @@ class FreeDataSourceManager:
         pd.DataFrame({"date": dates}).to_parquet(c_path, index=False)
         return pd.DatetimeIndex(dates)
 
-    def fetch_us_trading_calendar(self, start_year: int = 2010, end_year: int = 2026) -> pd.DatetimeIndex:
+    def fetch_us_trading_calendar(self, start_year: int = 2010, end_year: int = datetime.now().year) -> pd.DatetimeIndex:
         return _fetch_us_calendar(self.cache_dir, self.offline_debug, self._has_yf, getattr(self, "_yf", None), getattr(self, "_ak", None), start_year, end_year)

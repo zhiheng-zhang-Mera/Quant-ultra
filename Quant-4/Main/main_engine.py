@@ -33,8 +33,10 @@ logging.basicConfig(
 logger = logging.getLogger("Orchestrator")
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Quant-Ultra Workflow Engine Core")
-    parser.add_argument("--config", type=str, default="./config.yaml", help="外部 YAML 配置文件路径")
+    parser = argparse.ArgumentParser(description="Quant-Ultra Workflow Engine Core (Production Ready)")
+    # [新增] 运行模式：实盘/增量 vs 回测/重算
+    parser.add_argument("--mode", type=str, choices=["backtest", "live"], default="backtest", help="系统运行模式：回测(backtest)或实盘增量(live)")
+    parser.add_argument("--config", type=str, default="./config.yaml", help="外部 YAML 配置文件路径 (优先级最高)")
     parser.add_argument("--skip-phases", type=str, default="", help="跳过指定阶段(逗号隔离)")
     parser.add_argument("--only-phase", type=str, default=None, help="约束仅执行指定独立阶段")
     parser.add_argument("--resume-from", type=str, default=None, help="自断点指定阶段恢复流水线")
@@ -44,63 +46,54 @@ def parse_args():
     return parser.parse_args()
 
 def run_pipeline(args):
-    # logger.info("[OP] Boot Pipeline Framework | [SOURCE] Command Line Args Parse Node | [RESULT] System settings initialized | [SIGNIFICANCE] Entering master orchestrator deployment lifecycle", vars(args))
-    # logger.info("[操作] 引导流水线框架启动 | [来源] 命令行参数解析节点 | [结果] 系统底层配置就绪 | [意义] 进入主控编排器的核心部署生命周期")
-    print("[操作] 引导流水线框架启动 | [来源] 命令行参数解析节点 | [结果] 系统底层配置就绪 | [意义] 进入主控编排器的核心部署生命周期")
+    logger.info(f"[OP] Boot Pipeline Framework | Mode: {args.mode.upper()} | [RESULT] System initialized | [SIGNIFICANCE] Entering master orchestrator deployment lifecycle")
 
     if get_git_status() == "DIRTY" and not args.no_git_check:
-        logger.critical("🚨 检测到生产工作区存留未提交修改，刚性熔断禁止启动回测！ | Git Dirty Check Failed")
+        logger.critical("🚨 检测到生产工作区存留未提交修改，刚性熔断禁止启动回测/实盘！ | Git Dirty Check Failed")
         sys.exit(1)
 
-    # ---- 完整默认配置 ----
-    default_config = {
-        "adv_window": 20, "min_adv_threshold": 1e7, "ipo_safety_days": 20, "max_participation_rate": 0.05,
-        "expected_turnover": 0.05, "max_single_stock_weight": 0.05, "default_residual_rate": 0.0,
-        "impact_alpha": 0.5, "impact_kappa_base": 0.05, "spread_lookback_days": 60, "stock_cap_pct": 0.045,
-        "total_shares_source": "free_float", "short_rate_default": 0.08/252, "short_rate_source": "fixed",
-        "tau_BL": 0.02, "omega_min": 1e-8, "omega_max": 0.01, "gamma_risk_initial": 2.5, "sector_limit": 0.3,
-        "epsilon": 0.001, "transaction_cost_coeff": 0.0003, "lambda_decay": 0.01, "vol_window": 20,
-        "threshold_multiplier": 0.5, "min_vol_obs": 5, "error_threshold_window": 252, "embargo_min": 5,
-        "holding_period": 5, "max_leverage": 2.0, "d_min_search": [0.1, 0.3, 0.5, 0.7, 0.9], "vif_threshold": 30,
-        "cluster_select_ratio": 0.8, "lgb_params": {"n_estimators": 100, "num_leaves": 31, "learning_rate": 0.05, "deterministic": True, "num_threads": 1, "random_state": 42, "verbosity": -1},
-        "train_b1_grid_gamma": np.linspace(0.3, 0.7, 9).tolist(), "error_min_samples": 50, "cv_folds": 3,
-        "psi_lookback_days": 60, "volatility_window": 20, "crowded_corr_threshold": 0.95, "vol_compress_quantile": 0.1,
-        "mae_threshold": 1e-5, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
-        "max_model_size": 2e9, "smoothing_period": 25,
-        "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
-        "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
-        "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
-    }
-    config = default_config.copy()
+    # [调整6] 配置彻底解耦，从外部 yaml 读取默认配置
+    config = {}
+    default_cfg_path = CURRENT_DIR / "default_param.yaml"
+    if default_cfg_path.exists():
+        with open(default_cfg_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+    else:
+        logger.warning(f"⚠️ 找不到基础配置文件 {default_cfg_path}，请确保 default_param.yaml 存在。")
+
     if args.config and Path(args.config).exists():
         try:
             with open(args.config, 'r', encoding='utf-8') as f:
                 user_cfg = yaml.safe_load(f) or {}
                 config.update(user_cfg)
-            # logger.info("[OP] Load External Config | [SOURCE] YAML File Parser | [RESULT] Merged custom parameters successfully | [SIGNIFICANCE] Overrides default kernel hyperparameters")
-            print("[操作] 加载外部配置 | [来源] YAML文件解析器 | [结果] 成功合并自定义参数 | [意义] 覆盖默认内核超参数")
+            logger.info("[OP] Load External Config | [RESULT] Merged custom parameters successfully")
         except Exception as e:
             logger.warning(f"外部配置加载失败: {e}")
 
-    # ---- 核心组件 ----
     data_manager = FreeDataSourceManager(offline_debug=args.offline)
     audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
 
-    # ---- 双市场日历对齐 ----
+    # [调整1] 拆除2026年硬编码时间炸弹：动态获取当前年份
+    current_year = datetime.now().year
+    safety_end_year = current_year + 1
+
     sh_tz = pytz.timezone("Asia/Shanghai")
     ny_tz = pytz.timezone("America/New_York")
-    cal_cn = data_manager.fetch_trading_calendar(2010, datetime.now().year)
+    
+    cal_cn = data_manager.fetch_trading_calendar(2010, safety_end_year)
     cn_str_list = [d.strftime("%Y-%m-%d") for d in cal_cn]
     trading_days_dt_cn = cal_cn.tz_localize(sh_tz).tolist() if cal_cn.tz is None else cal_cn.tz_convert(sh_tz).tolist()
+    
     try:
-        cal_us = data_manager.fetch_us_trading_calendar(2010, datetime.now().year)
+        cal_us = data_manager.fetch_us_trading_calendar(2010, safety_end_year)
         us_str_list = [d.strftime("%Y-%m-%d") for d in cal_us]
         trading_days_dt_us = cal_us.tz_localize(ny_tz).tolist() if cal_us.tz is None else cal_us.tz_convert(ny_tz).tolist()
     except Exception as e:
         logger.warning(f"⚠️ 美股日历获取失败，使用A股日历对齐兜底: {e}")
         us_str_list = cn_str_list.copy()
         trading_days_dt_us = trading_days_dt_cn.copy()
+        
     min_len = min(len(cn_str_list), len(us_str_list))
     alignment_table = pd.DataFrame({
         "sequence_token": range(min_len),
@@ -116,19 +109,23 @@ def run_pipeline(args):
     }
     trading_days_dt = trading_days_dt_cn
 
-    # ---- 切片看门狗 ----
+    # [调整1 & 5] 切片看门狗修改：实盘模式下动态截止到“今天”
     full_timeline = cn_str_list
     idx = pd.DatetimeIndex(full_timeline).tz_localize(None)
+    
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    test_slice_end = today_str if args.mode == "live" else f"{safety_end_year}-12-31"
+
     slices = {
         "Train-A": idx[(idx >= "2010-01-04") & (idx <= "2018-06-25")].strftime("%Y-%m-%d").tolist(),
         "Train-B1": idx[(idx >= "2018-07-10") & (idx <= "2020-03-05")].strftime("%Y-%m-%d").tolist(),
         "Train-B2": idx[(idx >= "2020-03-20") & (idx <= "2021-11-16")].strftime("%Y-%m-%d").tolist(),
         "Validation": idx[(idx >= "2021-12-01") & (idx <= "2024-06-06")].strftime("%Y-%m-%d").tolist(),
-        "Test": idx[(idx >= "2024-06-24") & (idx <= f"{datetime.now().strftime('%Y-%m-%d')}")].strftime("%Y-%m-%d").tolist()
+        "Test": idx[(idx >= "2024-06-24") & (idx <= test_slice_end)].strftime("%Y-%m-%d").tolist()
     }
 
     pipeline_context = {
-        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash()},
+        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash(), "mode": args.mode},
         "config": config,
         "data_bus": data_bus,
         "data_manager": data_manager,
@@ -140,8 +137,17 @@ def run_pipeline(args):
         "_completed_phases": set(),
     }
 
-    # ---- 阶段调度 ----
+    # [调整5] 增量实盘阶段跳过：实盘不跑重型训练、回测和压力测试
     skips = {x.strip() for x in args.skip_phases.split(",") if x.strip()}
+    if args.mode == "live":
+        live_skips = {
+            "Phase_2.step2_1_slicing", "Phase_2.step2_2_validation",
+            "Phase_5.step_5_1_cv", "Phase_5.step_5_4_fitting", "Phase_5.step_5_5_calibration",
+            "Phase_7.step7_fsm_backtest", "Phase_8.step8_audit_stress_test"
+        }
+        skips.update(live_skips)
+        logger.info(f"🚀 实盘模式激活！已自动静默跳过历史重算阶段: {live_skips}")
+
     if args.only_phase:
         target = args.only_phase if "." in args.only_phase else f"Phase_{args.only_phase.split('_')[0]}.{args.only_phase}"
         phases_to_run = []
@@ -168,8 +174,7 @@ def run_pipeline(args):
                 pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
                 pipeline_context["_completed_phases"].add(phase)
                 cache_hit = True
-                # logger.info("[OP] Trigger Hot Cache Injection | [SOURCE] Binary Serialization Node | [RESULT] Phase memory fully restored | [SIGNIFICANCE] Enforces rigid singleton safety locks: %s", phase)
-                logger.info("[操作] 触发热缓存注入 | [来源] 二进制序列化节点 | [结果] 阶段内存完全还原 | [意义] 强制执行严格的单例安全锁: %s", phase)
+                logger.info(f"[OP] Trigger Hot Cache Injection | [RESULT] {phase} memory fully restored")
                 continue
 
         if not validate_phase_contract(phase, pipeline_context, "input"):

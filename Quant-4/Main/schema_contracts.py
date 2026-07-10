@@ -54,13 +54,16 @@ PHASE_DEPENDENCIES: Dict[str, Set[str]] = {
 def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str = "output") -> bool:
     schema_dict = PHASE_INPUT_SCHEMA if stage == "input" else PHASE_OUTPUT_SCHEMA
     required_keys = schema_dict.get(phase_name, set())
-    logger.info("[OP] Scan Context Keys | [SOURCE] Runtime Pipeline State Map | [RESULT] Targets to verify: %s | [SIGNIFICANCE] Commences rigid validation of data element boundaries", list(required_keys))
-    logger.info("[操作] 扫描上下文键值 | [来源] 运行时流水线状态图 | [结果] 待验证目标群: %s | [意义] 开始对数据要素边界执行刚性验证")
+    # logger.info("[OP] Scan Context Keys | [SOURCE] Runtime Pipeline State Map | [RESULT] Targets to verify: %s | [SIGNIFICANCE] Commences rigid validation of data element boundaries", list(required_keys))
+    # logger.info("[操作] 扫描上下文键值 | [来源] 运行时流水线状态图 | [结果] 待验证目标群: %s | [意义] 开始对数据要素边界执行刚性验证")
+    logger.info("由运行流水线扫描上下文键值以完成对数据要素边界执行刚性验证 | 当前阶段: %s | 待验证目标群: %s", stage, list(required_keys))
     missing_keys = [k for k in required_keys if k not in context or context[k] is None]
     if missing_keys:
-        logger.critical("[OP] Intercept Invalid Flow State | [SOURCE] Schema Structural Inspector | [RESULT] Validation failed! Missing tokens: %s | [SIGNIFICANCE] Hard break prevents downstream error propagation or feature poison", missing_keys)
-        logger.critical("[操作] 拦截非法流动状态 | [来源] Schema结构检查器 | [结果] 验证失败！缺失令牌: %s | [意义] 强行熔断防止下游错误级联或特征污染")
+        # logger.critical("[OP] Intercept Invalid Flow State | [SOURCE] Schema Structural Inspector | [RESULT] Validation failed! Missing tokens: %s | [SIGNIFICANCE] Hard break prevents downstream error propagation or feature poison", missing_keys)
+        # logger.critical("[操作] 拦截非法流动状态 | [来源] Schema结构检查器 | [结果] 验证失败！缺失令牌: %s | [意义] 强行熔断防止下游错误级联或特征污染")
+        logger.critical("由运行流水线拦截非法流动状态以防止下游错误级联或特征污染 | 当前阶段: %s | 缺失令牌: %s", stage, missing_keys)
         return False
-    logger.info("[OP] Validate Structural Contract Pass | [SOURCE] Integrity Assertion Evaluator | [RESULT] Node %s (%s verification) matches specification | [SIGNIFICANCE] Eliminates silent type corruption or matrix alignment failures", phase_name, stage)
-    logger.info("[操作] 验证结构化契约通过 | [来源] 完整性断言评估器 | [结果] 节点 %s (%s 校验) 与设计规范完全吻合 | [意义] 彻底消灭隐性类型损坏或矩阵对齐失效问题")
+    # logger.info("[OP] Validate Structural Contract Pass | [SOURCE] Integrity Assertion Evaluator | [RESULT] Node %s (%s verification) matches specification | [SIGNIFICANCE] Eliminates silent type corruption or matrix alignment failures", phase_name, stage)
+    # logger.info("[操作] 验证结构化契约通过 | [来源] 完整性断言评估器 | [结果] 节点 %s (%s 校验) 与设计规范完全吻合 | [意义] 彻底消灭隐性类型损坏或矩阵对齐失效问题")
+    logger.info("由运行流水线验证结构化契约通过 | 当前阶段: %s | 节点 %s (%s 校验) 与设计规范完全吻合", stage, phase_name, stage)
     return True

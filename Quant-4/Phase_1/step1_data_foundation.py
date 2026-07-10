@@ -6,7 +6,7 @@ Forces historical dead/delisted stock matrices back into the orchestrator assets
 import logging
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 from Phase_1.config import CONFIG as DATA_FOUNDATION_CONFIG
 from Phase_1.step1_1_screening import run_screening
@@ -62,7 +62,7 @@ def execute(pipeline_context: dict) -> dict:
     logger.info("[PROGRESS] Fetching birth/death boundaries for %s assets...", len(total_assets))
     for idx, sym in enumerate(total_assets):
         try:
-            hist = data_manager.fetch_historical(sym, "2010-01-01", "2026-07-02")
+            hist = data_manager.fetch_historical(sym, "2010-01-01", (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
             if hist is not None and not hist.empty:
                 asset_bounds[sym] = (hist['date'].min(), hist['date'].max())
             else:
