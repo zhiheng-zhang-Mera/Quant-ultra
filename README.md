@@ -39,3 +39,18 @@
   - New Phase 11 for applying local LLM to read and explain report from Phase 10
   - Apply multi-threading and multi-laptop co-working mechanism
     - **CPU/GPU accleration is added, lower priority**
+
+## Work schedlue by 2026/07/17:
+- Function Update Log
+  - Fuuly pass for Phase_0(Main) to Phase_9
+  - Phase_10 LLM draft is placed
+  - Enhance for Phase 1~9 is placed in dlc folder
+  - Loop re-verify for doing 2nd pass is placed in dlc folder
+  - Auto adjust metrics script is placed in dlc folder
+ - Schedule Work Log
+   - Debug for Phase 10
+   - Debug for auto metic
+   - Debug for dlc enhance
+   - Debug for 2nd pass
+- Future Idea & Long Term Planning log
+  - Cython re-structure after all works above finish
