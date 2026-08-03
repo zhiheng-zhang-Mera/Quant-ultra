@@ -79,6 +79,10 @@ class PITDataBus:
                     return self._universe
                 except Exception:
                     pass
+
+            if self.manager.offline_debug:
+                self._universe = self.manager.fetch_stock_list()
+                return self._universe
                     
             # Level 2: 动态回源 AkShare (解决 KeyError 痛点)
             try:

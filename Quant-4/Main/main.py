@@ -24,7 +24,7 @@ from Main.schema_contracts import PHASE_MODULES, PHASE_DEPENDENCIES, validate_ph
 from Main.context_io import save_phase_result, load_phase_result, save_context_snapshot
 from Main.stage_reporter import StageReporter
 from Main.orchestration_guard import build_run_fingerprint, validate_orchestration, write_startup_manifest
-from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA
+from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resolve_phase_name
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -108,7 +108,7 @@ def run_pipeline(args):
         us_str_list = [d.strftime("%Y-%m-%d") for d in cal_us]
         trading_days_dt_us = cal_us.tz_localize(ny_tz).tolist() if cal_us.tz is None else cal_us.tz_convert(ny_tz).tolist()
     except Exception as e:
-        logger.warning(f"⚠️ 美股日历获取失败，使用A股日历对齐兜底: {e}")
+        logger.warning(f"[WARNING] 美股日历获取失败，使用A股日历对齐兜底: {e}")
         us_str_list = cn_str_list.copy()
         trading_days_dt_us = trading_days_dt_cn.copy()
     min_len = min(len(cn_str_list), len(us_str_list))
@@ -153,7 +153,7 @@ def run_pipeline(args):
     # ---- 阶段调度 ----
     skips = {x.strip() for x in args.skip_phases.split(",") if x.strip()}
     if args.only_phase:
-        target = args.only_phase if "." in args.only_phase else f"Phase_{args.only_phase.split('_')[0]}.{args.only_phase}"
+        target = resolve_phase_name(args.only_phase)
         phases_to_run = []
         def collect_deps(p):
             for dep in PHASE_DEPENDENCIES.get(p, set()):
@@ -164,7 +164,7 @@ def run_pipeline(args):
         collect_deps(target)
         phases_to_run = [p for p in PHASE_MODULES if p in phases_to_run and p not in skips]
     elif args.resume_from:
-        target = args.resume_from if "." in args.resume_from else f"Phase_{args.resume_from.split('_')[0]}.{args.resume_from}"
+        target = resolve_phase_name(args.resume_from)
         phases_to_run = [p for p in PHASE_MODULES[PHASE_MODULES.index(target):] if p not in skips]
     else:
         phases_to_run = [p for p in PHASE_MODULES if p not in skips]
@@ -187,7 +187,7 @@ def run_pipeline(args):
         if not validate_phase_contract(phase, pipeline_context, "input"):
             sys.exit(1)
 
-        logger.info(f"⏳ Executing computational block: {phase}")
+        logger.info("[RUNNING] Executing computational block: %s", phase)
         try:
             mod = importlib.import_module(phase)
             res = mod.execute(pipeline_context)
@@ -199,14 +199,16 @@ def run_pipeline(args):
                 pipeline_context["_completed_phases"].add(phase)
                 save_phase_result(phase, res, PHASE_MODULES, run_fingerprint=run_fingerprint)
                 stage_reporter.finish(phase, res, True, cache_hit=False)
+            else:
+                raise ValueError(f"Output contract validation failed for {phase}")
         except Exception as e:
             stage_reporter.finish(phase, {"exception": repr(e), "traceback": traceback.format_exc()}, False, cache_hit=False)
-            logger.critical(f"🚨 CRITICAL COLLAPSE at step [{phase}]: {e}\n{traceback.format_exc()}")
+            logger.critical(f"[CRITICAL] Pipeline failed at step [{phase}]: {e}\n{traceback.format_exc()}")
             sys.exit(1)
 
         save_context_snapshot(pipeline_context, phase, RUN_TIMESTAMP, LOG_DIR)
 
-    logger.info("全部 11 个阶段已按合约执行完成")
+    logger.info("请求的 %d 个阶段已按合约执行完成", len(phases_to_run))
     return pipeline_context
 
 if __name__ == '__main__':

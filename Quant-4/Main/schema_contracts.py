@@ -59,6 +59,22 @@ PHASE_DEPENDENCIES: Dict[str, Set[str]] = {
     "Phase_11.step11_interactive_advisor": {"Phase_10.step10_cio_reporting"},
 }
 
+def resolve_phase_name(value: str) -> str:
+    """Resolve CLI phase aliases without silently accepting an unknown phase."""
+    candidate = str(value).strip()
+    if candidate in PHASE_MODULES:
+        return candidate
+    if candidate.isdigit():
+        prefix = f"Phase_{int(candidate)}."
+    elif candidate.startswith("Phase_") and "." not in candidate:
+        prefix = f"{candidate}."
+    else:
+        prefix = ""
+    matches = [phase for phase in PHASE_MODULES if phase.startswith(prefix)] if prefix else []
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f"Unknown phase {value!r}; expected 1-{len(PHASE_MODULES)} or a full module name")
+
 def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str = "output") -> bool:
     schema_dict = PHASE_INPUT_SCHEMA if stage == "input" else PHASE_OUTPUT_SCHEMA
     required_keys = schema_dict.get(phase_name, set())
@@ -71,6 +87,11 @@ def validate_phase_contract(phase_name: str, context: Dict[str, Any], stage: str
         # logger.critical("[操作] 拦截非法流动状态 | [来源] Schema结构检查器 | [结果] 验证失败！缺失令牌: %s | [意义] 强行熔断防止下游错误级联或特征污染")
         logger.critical("由运行流水线拦截非法流动状态以防止下游错误级联或特征污染 | 当前阶段: %s | 缺失令牌: %s", stage, missing_keys)
         return False
+    if stage == "output" and phase_name == PHASE_MODULES[0]:
+        empty_keys = [key for key in ("assets", "adv_data") if len(context[key]) == 0]
+        if empty_keys:
+            logger.critical("Phase 1 produced empty required datasets: %s", empty_keys)
+            return False
     # logger.info("[OP] Validate Structural Contract Pass | [SOURCE] Integrity Assertion Evaluator | [RESULT] Node %s (%s verification) matches specification | [SIGNIFICANCE] Eliminates silent type corruption or matrix alignment failures", phase_name, stage)
     # logger.info("[操作] 验证结构化契约通过 | [来源] 完整性断言评估器 | [结果] 节点 %s (%s 校验) 与设计规范完全吻合 | [意义] 彻底消灭隐性类型损坏或矩阵对齐失效问题")
     logger.info("由运行流水线验证结构化契约通过 | 当前阶段: %s | 节点 %s (%s 校验) 与设计规范完全吻合", stage, phase_name, stage)

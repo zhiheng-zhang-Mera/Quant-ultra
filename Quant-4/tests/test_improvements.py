@@ -11,7 +11,7 @@ from Main.investment_advisor import write_candidate_report
 from Main.walk_forward_backtest import walk_forward_backtest
 from Main.orchestration_guard import build_run_fingerprint, validate_orchestration
 from Main.parameter_governance import validate_parameter_proposal
-from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA
+from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA, resolve_phase_name, validate_phase_contract
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -90,6 +90,27 @@ def test_eleven_phase_dag_and_fingerprint_are_deterministic():
     second,_=build_run_fingerprint("abc",{"x":1},PHASE_MODULES)
     changed,_=build_run_fingerprint("abc",{"x":2},PHASE_MODULES)
     assert first==second and first!=changed
+
+def test_cli_phase_aliases_resolve_and_unknown_values_fail():
+    assert resolve_phase_name("1") == PHASE_MODULES[0]
+    assert resolve_phase_name("Phase_11") == PHASE_MODULES[-1]
+    assert resolve_phase_name(PHASE_MODULES[4]) == PHASE_MODULES[4]
+    try:
+        resolve_phase_name("99")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown phase must not be accepted")
+
+def test_offline_data_manager_does_not_register_network_sources(tmp_path):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager = FreeDataSourceManager(cache_dir=tmp_path, offline_debug=True)
+    assert manager._sources == []
+    assert manager.fetch_stock_list()
+
+def test_phase1_contract_rejects_empty_market_data():
+    empty = {"assets": [], "adv_data": pd.DataFrame(), "theoretical_aum_limit": 0.0}
+    assert not validate_phase_contract(PHASE_MODULES[0], empty, "output")
 
 def test_cache_rejects_fingerprint_mismatch(tmp_path,monkeypatch):
     import Main.context_io as cio

@@ -41,6 +41,8 @@ class FreeDataSourceManager:
             self._logger.info("由数据源管理器加载环境文件 | 来源: Main/.env物理文件 | 结果: 环境令牌已注入 | 意义: 实现无缝授权")
     def _init_sources(self):
         self._has_yf = False
+        if self.offline_debug:
+            return
         if not self.offline_debug:
             try:
                 import yfinance as yf
@@ -182,6 +184,8 @@ class FreeDataSourceManager:
         c_path = self.cache_dir / "stock_list.parquet"
         if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 1:
             return pd.read_parquet(c_path)["symbol"].tolist()
+        if self.offline_debug:
+            return ["600000.SH", "600036.SH", "600519.SH", "000001.SZ", "000002.SZ"]
         try:
             df = self._ak.stock_zh_a_spot_em()
             syms = [f"{x}.SH" if str(x).startswith("6") else f"{x}.SZ" for x in df["代码"] if len(str(x)) == 6]
@@ -217,6 +221,8 @@ class FreeDataSourceManager:
         c_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
         if c_path.exists():
             return pd.DatetimeIndex(pd.read_parquet(c_path)["date"])
+        if self.offline_debug:
+            raise RuntimeError(f"Offline trading calendar cache missing: {c_path}")
         cal = self._ak.tool_trade_date_hist_sina()
         cal["trade_date"] = pd.to_datetime(cal["trade_date"])
         cal = cal[(cal["trade_date"].dt.year >= start_year) & (cal["trade_date"].dt.year <= end_year)]
