@@ -22,6 +22,7 @@ from Main.audit_logger import AuditLogger
 from Main.data_bus import PITDataBus
 from Main.schema_contracts import PHASE_MODULES, PHASE_DEPENDENCIES, validate_phase_contract
 from Main.context_io import save_phase_result, load_phase_result, save_context_snapshot
+from Main.stage_reporter import StageReporter
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -85,6 +86,7 @@ def run_pipeline(args):
     # ---- 核心组件 ----
     data_manager = FreeDataSourceManager(offline_debug=args.offline)
     audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
+    stage_reporter = StageReporter(PROJECT_ROOT / "reports", RUN_TIMESTAMP, get_git_hash())
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
 
     # ---- 双市场日历对齐 ----
@@ -160,6 +162,7 @@ def run_pipeline(args):
         phases_to_run = [p for p in PHASE_MODULES if p not in skips]
 
     for phase in phases_to_run:
+        stage_reporter.start(phase)
         cache_hit = False
         if not args.force_recompute:
             cached = load_phase_result(phase, PHASE_MODULES)
@@ -168,6 +171,7 @@ def run_pipeline(args):
                 pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
                 pipeline_context["_completed_phases"].add(phase)
                 cache_hit = True
+                stage_reporter.finish(phase, cached, True, cache_hit=True)
                 # logger.info("[OP] Trigger Hot Cache Injection | [SOURCE] Binary Serialization Node | [RESULT] Phase memory fully restored | [SIGNIFICANCE] Enforces rigid singleton safety locks: %s", phase)
                 logger.info("[操作] 触发热缓存注入 | [来源] 二进制序列化节点 | [结果] 阶段内存完全还原 | [意义] 强制执行严格的单例安全锁: %s", phase)
                 continue
@@ -186,7 +190,9 @@ def run_pipeline(args):
                 pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
                 pipeline_context["_completed_phases"].add(phase)
                 save_phase_result(phase, res, PHASE_MODULES)
+                stage_reporter.finish(phase, res, True, cache_hit=False)
         except Exception as e:
+            stage_reporter.finish(phase, {"exception": repr(e), "traceback": traceback.format_exc()}, False, cache_hit=False)
             logger.critical(f"🚨 CRITICAL COLLAPSE at step [{phase}]: {e}\n{traceback.format_exc()}")
             sys.exit(1)
 

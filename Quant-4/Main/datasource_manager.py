@@ -7,16 +7,23 @@ from typing import List, Optional, Set
 import pandas as pd
 from Main.env_config import PROJECT_ROOT
 from Main.us_pipeline import fetch_us_historical, fetch_us_trading_calendar as _fetch_us_calendar
+from Main.data_quality import validate_ohlcv, write_manifest
 
 class FreeDataSourceManager:
-    def __init__(self, cache_dir: Path = None, offline_debug: bool = False):
+    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None):
         self.cache_dir = cache_dir or (PROJECT_ROOT / "data_cache")
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.evidence_dir = self.cache_dir / "evidence"
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self._sources: List[tuple] = []
         self._bs_logged = False
         self.offline_debug = offline_debug
         self._logger = logging.getLogger("DataSourceManager")
         self._load_env_file()
+        self.proxy_url = proxy_url or os.environ.get("QUANT_ULTRA_PROXY") or os.environ.get("HTTPS_PROXY")
+        if self.proxy_url:
+            os.environ["HTTPS_PROXY"] = self.proxy_url
+            os.environ["HTTP_PROXY"] = self.proxy_url
         self._init_sources()
         self.DEFAULT_START = "2005-01-01"
         self._failed_symbols: Set[str] = set()
@@ -90,6 +97,12 @@ class FreeDataSourceManager:
             try:
                 df = func(symbol, self.DEFAULT_START, datetime.now().strftime("%Y-%m-%d"), freq)
                 if df is not None and not df.empty:
+                    evidence = validate_ohlcv(df, symbol)
+                    evidence.update({"provider": name, "fetched_at": datetime.now().astimezone().isoformat(), "proxy_configured": bool(self.proxy_url)})
+                    write_manifest(self.evidence_dir / f"{symbol}_{name}.json", evidence)
+                    if not evidence["valid"]:
+                        self._logger.warning("Rejected invalid dataset %s from %s: %s", symbol, name, evidence["errors"])
+                        continue
                     df.to_parquet(c_path, index=False)
                     mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
                     # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")

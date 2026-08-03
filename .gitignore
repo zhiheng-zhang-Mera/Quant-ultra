@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+build/
+dist/
+*.egg-info/
+.venv*/
+.pytest_cache/
+Quant-4/data_cache/
+Quant-4/Phase_Result/
+Quant-4/logs/
+Quant-4/reports/runs/
+Quant-4/cython/*.c
