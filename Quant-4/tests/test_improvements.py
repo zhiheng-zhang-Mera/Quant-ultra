@@ -8,6 +8,7 @@ from Main.fast_math import log_returns
 from Main.portfolio_analytics import holding_advice, metrics, nearest_psd, recommendation, risk_parity_weights
 from analyze_cn_asset import normalize
 from Main.investment_advisor import write_candidate_report
+from Main.walk_forward_backtest import walk_forward_backtest
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -52,3 +53,29 @@ def test_candidate_report_is_readable_and_hashed(tmp_path):
     assert md.exists() and csv.exists()
     content=md.read_text(encoding="utf-8")
     assert "510300.SH" in content and "CSV SHA-256" in content
+
+def _backtest_frame(rows=620):
+    rng=np.random.default_rng(42)
+    close=100*np.exp(np.cumsum(rng.normal(.0003,.01,rows)))
+    open_=close*np.exp(rng.normal(0,.002,rows))
+    return pd.DataFrame({"date":pd.bdate_range("2020-01-01",periods=rows),"open":open_,"close":close})
+
+def _small_grid():
+    return {"fast_window":[5,10],"slow_window":[20,40],"vol_window":[10,20],"target_vol":[.10,.15]}
+
+def test_walk_forward_proves_temporal_order_and_frozen_parameters():
+    result=walk_forward_backtest(_backtest_frame(),_small_grid(),train_size=180,test_size=60,embargo=5)
+    assert result["summary"]["lookahead_audit_passed"]
+    assert (pd.to_datetime(result["returns"]["signal_time"]) < pd.to_datetime(result["returns"]["execution_time"])).all()
+    assert result["audit"]["parameters_frozen"].all()
+    assert (pd.to_datetime(result["folds"]["train_end"]) < pd.to_datetime(result["folds"]["test_start"])).all()
+
+def test_future_mutation_cannot_change_first_fold():
+    original=_backtest_frame()
+    first=walk_forward_backtest(original,_small_grid(),train_size=180,test_size=60,embargo=5)
+    mutated=original.copy()
+    mutated.loc[mutated.index>=300,["open","close"]]*=10
+    second=walk_forward_backtest(mutated,_small_grid(),train_size=180,test_size=60,embargo=5)
+    keys=["fast_window","slow_window","vol_window","target_vol"]
+    assert first["folds"].iloc[0][keys].to_dict()==second["folds"].iloc[0][keys].to_dict()
+    pd.testing.assert_series_equal(first["returns"].query("fold == 0")["strategy_return"],second["returns"].query("fold == 0")["strategy_return"])

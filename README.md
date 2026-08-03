@@ -105,6 +105,17 @@ END
 git diff --check
 ```
 
+## 8.1 无未来预知的参数自适应回测
+
+```powershell
+.\.venv\Scripts\python run_adaptive_backtest.py 600519 --kind stock
+.\.venv\Scripts\python run_adaptive_backtest.py 510300 --kind etf --train-size 504 --test-size 63 --embargo 5
+```
+
+回测使用 expanding walk-forward：每一折只在测试期之前的训练窗选择快慢均线、波动窗口和目标波动率，参数随后在整段测试窗冻结。训练窗与测试窗之间强制保留 embargo；`t` 日收盘信号只能在 `t+1` 日开盘成交，收益使用 `t+1` 到 `t+2` 的开盘价格。任何 `signal_time >= execution_time` 或训练/测试重叠都会立即终止。报告位于 `Quant-4/reports/adaptive_backtests`，包含每折参数、时间边界、收益明细及防泄漏审计。
+
+参数自适应不是用测试集反复调参：测试结果不反馈给同一折的参数选择。需要进一步避免研究者对全部历史测试结果的人为过拟合时，应另留从未查看的最终 holdout 数据。
+
 正常 Python 发行版使用 pytest；缺少 `unittest` 的裁剪版/嵌入式 Python 可运行第二条独立验收命令。测试覆盖数据门禁的正反例、Cython/NumPy 数值等价接口、风险平价不变量，以及股票/ETF 代码归一化。联网数据正确性还需查看当次 `evidence` 清单；离线单元测试不能证明第三方实时行情本身真实。
 
 ## 9. 目录
