@@ -4,6 +4,8 @@ from test_improvements import (
     test_fast_math_and_metrics,
     test_risk_parity_invariants,
     test_stock_and_etf_normalization,
+    test_recommendation_has_required_four_outputs,
+    test_holding_advice_reconciles_cash_position_and_action,
 )
 
 TESTS = [
@@ -11,6 +13,8 @@ TESTS = [
     test_fast_math_and_metrics,
     test_risk_parity_invariants,
     test_stock_and_etf_normalization,
+    test_recommendation_has_required_four_outputs,
+    test_holding_advice_reconciles_cash_position_and_action,
 ]
 
 if __name__ == "__main__":

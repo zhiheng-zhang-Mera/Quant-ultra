@@ -53,7 +53,7 @@ $env:QUANT_ULTRA_PROXY='http://127.0.0.1:7890'
 
 ```powershell
 Set-Location D:\Quant-Ultra\Quant-4
-.\.venv\Scripts\python Main\main.py --force-recompute
+.\.venv\Scripts\python Main\main.py --force-recompute --portfolio-query
 ```
 
 常用参数：
@@ -66,7 +66,7 @@ Set-Location D:\Quant-Ultra\Quant-4
 --force-recompute    忽略阶段缓存
 ```
 
-每一阶段都会在 `Quant-4/reports/runs/<运行时间>/` 生成独立 `.md` 与 `.json` 报告，包含合约验证、缓存状态、耗时、Git 提交、输出形状/摘要和报告哈希。失败阶段同样生成异常证据。
+每一阶段都会在 `Quant-4/reports/runs/<运行时间>/` 生成独立 `.md` 与 `.json` 报告。十阶段结束后还会生成 `post_pipeline_candidates.md/csv`，逐项给出筛选后的股票/ETF、理想买入区间、建议配置仓位和理想止盈比例。`--portfolio-query` 会在其后进入持仓查询。
 
 ## 6. 指定 A 股 / ETF 持仓分析
 
@@ -74,15 +74,15 @@ Set-Location D:\Quant-Ultra\Quant-4
 .\.venv\Scripts\python analyze_cn_asset.py --end-token END
 ```
 
-输入格式为 `类型 代码 当前仓位 成本`，仓位使用 0–1：
+输入格式为 `总资金 代码 持仓数量 平均成本 [可选类型]`：
 
 ```text
-stock 600519 0.08 1450
-etf 510300 0.20 3.85
+1000000 600519 300 1450 stock
+1000000 510300 20000 3.85 etf
 END
 ```
 
-输出包括年化收益与波动、Sharpe、Sortino、最大回撤、Calmar、95% VaR/CVaR、20/60 日均线、60 日动量、浮动收益、目标仓位和“增持/持有/减仓”研究信号。目标仓位带 10% 单标的上限；使用前仍需结合税费、流动性、停牌、涨跌停和个人风险约束。
+输出包括年化收益与波动、Sharpe、Sortino、最大回撤、Calmar、95% VaR/CVaR、ATR、20/60 日均线、浮盈亏、账户实际仓位、模型目标仓位、目标持股数、应增减数量、入仓区间、止盈价、风险参考价、操作建议和触发理由。A股数量按100股整数批次计算，目标仓位带10%单标的上限；使用前仍需结合税费、流动性、停牌、涨跌停和个人风险约束。
 
 ## 7. 数学定义
 
