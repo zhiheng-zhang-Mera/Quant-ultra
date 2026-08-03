@@ -13,12 +13,18 @@ def _get_delisted_a_stocks(data_manager) -> list:
         if not hasattr(data_manager, '_ak'): 
             logger.debug("AkShare not available, cannot fetch delisted list")
             return []
-        df = data_manager._ak.stock_zh_a_delisted()
-        if df is None or df.empty: 
+        frames = []
+        for method_name, code_col in (("stock_info_sh_delist", "公司代码"), ("stock_info_sz_delist", "证券代码")):
+            method = getattr(data_manager._ak, method_name, None)
+            if method is None:
+                continue
+            frame = method()
+            if frame is not None and not frame.empty and code_col in frame.columns:
+                frames.append(frame[[code_col]].rename(columns={code_col: "code"}))
+        if not frames:
             logger.debug("Delisted list returned empty")
             return []
-        code_col = 'code' if 'code' in df.columns else '股票代码'
-        raw_codes = df[code_col].astype(str).str.strip().tolist()
+        raw_codes = pd.concat(frames, ignore_index=True)["code"].astype(str).str.strip().tolist()
         full_codes = []
         for c in raw_codes:
             if not c.isdigit(): continue
@@ -34,7 +40,7 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
     now = datetime.now(data_bus._tz)
     latest_trading_day = context.get('effective_latest_trading_day')
     
-    delisted = _get_delisted_a_stocks(data_manager)
+    delisted = [] if context.get("config", {}).get("bounded_universe") else _get_delisted_a_stocks(data_manager)
     all_stocks = list(set(assets + delisted))
     
     logger.info("[OP] Integrate Deceased Corporate Vectors | [SOURCE] Remote Mirroring Exchange Tables | [RESULT] Combined Universe Count: %s (Active: %s, Delisted: %s) | [SIGNIFICANCE] Forcibly reconstructs historical dead asset matrices to resolve flaw A-8", len(all_stocks), len(assets), len(delisted))

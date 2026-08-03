@@ -9,7 +9,9 @@ dist/
 .pytest_cache/
 Quant-4/data_cache/
 Quant-4/Phase_Result/
+Quant-4/Phase Result/
 Quant-4/logs/
 # Runtime-generated manifests, stage reports, and CIO test artifacts.
 Quant-4/reports/
+Quant-4/data/
 Quant-4/cython/*.c

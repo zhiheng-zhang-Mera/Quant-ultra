@@ -26,7 +26,7 @@ logger = logging.getLogger("USPipeline")
     reraise=True
 )
 def _fetch_yf_history_with_retry(yf_obj, tk: str, start: str, end: str):
-    logger.info(f"[网络层] yfinance 请求历史价格，标的: {tk} ({start} -> {end}, 已尝试次数：{yf_obj._retry_state.attempt_number})")
+    logger.info("[NETWORK] yfinance history request: %s (%s -> %s)", tk, start, end)
     raw = yf_obj.Ticker(tk).history(start=start, end=end)
     if raw.empty:
         raise ValueError(f"yfinance 返回空 DataFrame，可能是请求被拦截或标的错误: {tk}")

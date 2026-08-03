@@ -34,6 +34,21 @@ class PITDataBus:
         self._logger.warning(f"Failed {method_name} for {asset}: {error}")
         return fallback_value
 
+    def append_atom(self, asset: str, timestamp: Any, value: Any, field: str, announcement_date: Any):
+        """Append a point-in-time value while preserving its availability boundary."""
+        ts = pd.to_datetime(timestamp)
+        announced = pd.to_datetime(announcement_date)
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        if announced.tzinfo is not None:
+            announced = announced.tz_localize(None)
+        self._atom_storage.setdefault(field, []).append({
+            "asset": asset,
+            "timestamp": ts,
+            "announcement_date": announced,
+            "value": value,
+        })
+
     def validate_pit_coordinates(self, asset: str, request_date: Any) -> bool:
         """
         验证时间坐标是否符合 Point-in-Time 原则，防止未来函数。
@@ -233,7 +248,12 @@ class PITDataBus:
             if os.path.exists(alt_path):
                 file_path = alt_path
             else:
-                return pd.DataFrame()
+                df = self.fetch_historical(sym, start_date, end_date)
+                if df is None or df.empty:
+                    return pd.DataFrame()
+                df = df.copy()
+                df['date'] = pd.to_datetime(df['date'])
+                return df.sort_values('date').set_index('date')
             
         # 3. 加载物理数据并执行刚性时空切割
         try:
@@ -246,7 +266,13 @@ class PITDataBus:
                     df = df[df['date'] >= pd.to_datetime(start_date)]
                 if end_date:
                     df = df[df['date'] <= pd.to_datetime(end_date)]
-                df = df.sort_values('date').reset_index(drop=True)
+                df = df.sort_values('date')
+                if 'log_return' not in df.columns and 'close' in df.columns:
+                    df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+                    df['actual_log_return'] = df['log_return'].fillna(0.0)
+                if 'amount' not in df.columns and {'volume', 'close'}.issubset(df.columns):
+                    df['amount'] = df['volume'] * df['close']
+                df = df.set_index('date')
             elif df.index.name == 'date' or isinstance(df.index, pd.DatetimeIndex):
                 if start_date:
                     df = df[df.index >= pd.to_datetime(start_date)]

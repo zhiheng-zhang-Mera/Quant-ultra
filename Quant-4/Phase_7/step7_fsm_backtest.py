@@ -178,7 +178,7 @@ class FSMEngine:
             raise ValueError("Empty test dates.")
 
         # logger.info("FSM Engine started. Initial cash: %.2f", self.cash)
-        logger.info("FSM回测引擎启动 | 初始现金: %.2f | 回测周期: 起始 %d ~ 终止 %d", self.cash, test_dates[0], test_dates[-1])
+        logger.info("FSM回测引擎启动 | 初始现金: %.2f | 回测周期: 起始 %s ~ 终止 %s", self.cash, test_dates[0], test_dates[-1])
         prev_nav = self.cash
 
         for t_idx, date in enumerate(test_dates):
@@ -256,7 +256,7 @@ class FSMEngine:
                 # logger.info("Progress: %s, NAV=%.2f", date_str, nav_after)
                 logger.info("回测期间季度打印: 总进程 %s / %s | 当前净值: %.2f", date_str, test_dates[-1].strftime('%Y-%m-%d'), nav_after)
         # logger.info("FSM Engine finished. Final NAV: %.2f", self.nav_series[-1] if self.nav_series else self.cash)
-        logger.info("FSM回测完成 | 最终净值: %.2f | 回测周期: 起始%d ~ 终止%d", self.nav_series[-1] if self.nav_series else self.cash, test_dates[0], test_dates[-1])
+        logger.info("FSM回测完成 | 最终净值: %.2f | 回测周期: 起始%s ~ 终止%s", self.nav_series[-1] if self.nav_series else self.cash, test_dates[0], test_dates[-1])
         
         # 保存结果到 context
         self.context['daily_nav'] = pd.Series(self.nav_series, index=test_dates)

@@ -80,7 +80,8 @@ def run_screening(context: dict, data_bus, data_manager):
     logger.info("[RANGE] Data pull window: %s to %s", start_date, end_date)
     
     limiter = AdaptiveConcurrencyLimiter() if HAS_PSUTIL else None
-    max_workers = CONFIG.get("ADAPTIVE_MAX_WORKERS", 4) if HAS_PSUTIL else CONFIG.get("DOWNLOAD_WORKERS", 8)
+    configured_workers = context.get("config", {}).get("download_workers")
+    max_workers = configured_workers or (CONFIG.get("ADAPTIVE_MAX_WORKERS", 4) if HAS_PSUTIL else CONFIG.get("DOWNLOAD_WORKERS", 8))
     logger.info("[PARALLEL] Using max_workers=%s, adaptive=%s", max_workers, HAS_PSUTIL)
     
     raw_results = []

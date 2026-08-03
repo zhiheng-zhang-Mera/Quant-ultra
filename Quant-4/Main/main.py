@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--offline", action="store_true", help="激活全离线调试模式")
     parser.add_argument("--force-recompute", action="store_true", help="降级全量缓存强制执行")
     parser.add_argument("--non-interactive", action="store_true", help="阶段11只生成报告，不进入交互查询")
+    parser.add_argument("--symbols", type=str, default="", help="Comma-separated symbols for a bounded real-data run")
+    parser.add_argument("--download-workers", type=int, default=None, help="Override Phase 1 market-data worker count")
     return parser.parse_args()
 
 def run_pipeline(args):
@@ -77,6 +79,11 @@ def run_pipeline(args):
     }
     config = default_config.copy()
     config["phase11_interactive"] = not args.non_interactive
+    config["bounded_universe"] = bool(args.symbols.strip())
+    if args.download_workers is not None:
+        if args.download_workers < 1:
+            raise ValueError("--download-workers must be at least 1")
+        config["download_workers"] = args.download_workers
     if args.config and Path(args.config).exists():
         try:
             with open(args.config, 'r', encoding='utf-8') as f:
@@ -96,6 +103,10 @@ def run_pipeline(args):
     audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
     stage_reporter = StageReporter(PROJECT_ROOT / "reports", RUN_TIMESTAMP, get_git_hash())
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
+    requested_symbols = [symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip()]
+    if requested_symbols:
+        data_bus.set_universe(requested_symbols)
+        logger.info("Using bounded real-data universe with %d symbols", len(requested_symbols))
 
     # ---- 双市场日历对齐 ----
     sh_tz = pytz.timezone("Asia/Shanghai")

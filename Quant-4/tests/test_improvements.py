@@ -112,6 +112,49 @@ def test_phase1_contract_rejects_empty_market_data():
     empty = {"assets": [], "adv_data": pd.DataFrame(), "theoretical_aum_limit": 0.0}
     assert not validate_phase_contract(PHASE_MODULES[0], empty, "output")
 
+def test_load_asset_history_fetches_on_cache_miss(tmp_path):
+    from Main.data_bus import PITDataBus
+    frame = _market_frame()
+    class Manager:
+        cache_dir = tmp_path
+        offline_debug = False
+        def fetch_historical(self, symbol, start, end):
+            return frame.copy()
+    loaded = PITDataBus(Manager()).load_asset_history("600519.SH", "2024-01-01", "2024-12-31")
+    assert isinstance(loaded.index, pd.DatetimeIndex)
+    assert len(loaded) == len(frame) and "amount" not in loaded.columns
+
+def test_delisted_stock_interfaces_are_combined():
+    from Phase_1.step1_2_returns import _get_delisted_a_stocks
+    class Ak:
+        def stock_info_sh_delist(self):
+            return pd.DataFrame({"公司代码": ["600001"]})
+        def stock_info_sz_delist(self):
+            return pd.DataFrame({"证券代码": ["000003"]})
+    manager = type("Manager", (), {"_ak": Ak()})()
+    assert set(_get_delisted_a_stocks(manager)) == {"600001.SH", "000003.SZ"}
+
+def test_point_in_time_atoms_respect_announcement_boundary(tmp_path):
+    from Main.data_bus import PITDataBus
+    class Manager:
+        cache_dir = tmp_path
+        offline_debug = True
+        def fetch_historical(self, *args):
+            return pd.DataFrame()
+    manager = Manager()
+    bus = PITDataBus(manager)
+    bus.append_atom("600519.SH", "2024-01-03", 42.0, "factor", "2024-01-02")
+    assert bus.query_by_pit("600519.SH", "2024-01-01", "factor") is None
+    assert bus.query_by_pit("600519.SH", "2024-01-02", "factor") == 42.0
+
+def test_cached_history_restores_derived_columns(tmp_path):
+    from Main.data_bus import PITDataBus
+    frame = _market_frame()
+    frame.to_parquet(tmp_path / "600519.SH_history.parquet", index=False)
+    manager = type("Manager", (), {"cache_dir": tmp_path, "offline_debug": True})()
+    loaded = PITDataBus(manager).load_asset_history("600519.SH", "2024-01-01", "2024-12-31")
+    assert {"log_return", "actual_log_return", "amount"}.issubset(loaded.columns)
+
 def test_cache_rejects_fingerprint_mismatch(tmp_path,monkeypatch):
     import Main.context_io as cio
     monkeypatch.setattr(cio,"CACHE_ROOT",tmp_path)
