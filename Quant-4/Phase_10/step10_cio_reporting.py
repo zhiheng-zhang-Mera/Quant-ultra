@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from Main.parameter_governance import validate_parameter_proposal, write_pending_proposal
 
 
 def execute(context: dict) -> dict:
@@ -23,5 +24,10 @@ def execute(context: dict) -> dict:
     payload = {"decision": decision, "missing_evidence": missing, "evidence": evidence}
     path = report_root / f"cio_{run_id}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return {"cio_decision": decision, "cio_evidence": payload, "cio_report_path": str(path), "phase10_ready": True}
-
+    proposal = context.get("parameter_proposal")
+    proposal_status, proposal_path = "NOT_PROPOSED", None
+    if proposal is not None:
+        validation = validate_parameter_proposal(proposal, context.get("config", {}))
+        proposal_path = write_pending_proposal(validation, report_root, run_id)
+        proposal_status = "PENDING_HUMAN_APPROVAL" if validation["valid"] else "REJECTED"
+    return {"cio_decision": decision, "cio_evidence": payload, "cio_report_path": str(path), "parameter_proposal_status": proposal_status, "parameter_proposal_path": str(proposal_path) if proposal_path else None, "phase10_ready": True}

@@ -11,6 +11,9 @@ def execute(context: dict) -> dict:
     run_id = context.get("run_metadata", {}).get("timestamp", "unknown")
     report_dir = Path(__file__).parents[1] / "reports" / "runs" / run_id / "phase11"
     candidates = build_pipeline_recommendations(context)
+    observation_only = context.get("cio_decision") != "ELIGIBLE_FOR_PHASE_11"
+    candidates["action_allowed"] = not observation_only
+    candidates["advisory_mode"] = "OBSERVATION_ONLY" if observation_only else "ACTIONABLE_RESEARCH"
     md_path, csv_path = write_candidate_report(candidates, report_dir)
     interactive = bool(context.get("config", {}).get("phase11_interactive", False)) and sys.stdin.isatty()
     if interactive:
@@ -21,5 +24,6 @@ def execute(context: dict) -> dict:
         "phase11_report_path": str(md_path),
         "phase11_csv_path": str(csv_path),
         "phase11_interactive_started": interactive,
+        "phase11_observation_only": observation_only,
         "phase11_ready": True,
     }

@@ -9,6 +9,9 @@ from Main.portfolio_analytics import holding_advice, metrics, nearest_psd, recom
 from analyze_cn_asset import normalize
 from Main.investment_advisor import write_candidate_report
 from Main.walk_forward_backtest import walk_forward_backtest
+from Main.orchestration_guard import build_run_fingerprint, validate_orchestration
+from Main.parameter_governance import validate_parameter_proposal
+from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -79,3 +82,41 @@ def test_future_mutation_cannot_change_first_fold():
     keys=["fast_window","slow_window","vol_window","target_vol"]
     assert first["folds"].iloc[0][keys].to_dict()==second["folds"].iloc[0][keys].to_dict()
     pd.testing.assert_series_equal(first["returns"].query("fold == 0")["strategy_return"],second["returns"].query("fold == 0")["strategy_return"])
+
+def test_eleven_phase_dag_and_fingerprint_are_deterministic():
+    audit=validate_orchestration(PHASE_MODULES,PHASE_DEPENDENCIES,PHASE_INPUT_SCHEMA,PHASE_OUTPUT_SCHEMA)
+    assert audit["phase_count"]==11 and audit["last_phase"].startswith("Phase_11")
+    first,_=build_run_fingerprint("abc",{"x":1},PHASE_MODULES)
+    second,_=build_run_fingerprint("abc",{"x":1},PHASE_MODULES)
+    changed,_=build_run_fingerprint("abc",{"x":2},PHASE_MODULES)
+    assert first==second and first!=changed
+
+def test_cache_rejects_fingerprint_mismatch(tmp_path,monkeypatch):
+    import Main.context_io as cio
+    monkeypatch.setattr(cio,"CACHE_ROOT",tmp_path)
+    phase=PHASE_MODULES[0]
+    cio.save_phase_result(phase,{"value":42},PHASE_MODULES,run_fingerprint="fingerprint-a")
+    assert cio.load_phase_result(phase,PHASE_MODULES,"fingerprint-a")["value"]==42
+    assert cio.load_phase_result(phase,PHASE_MODULES,"fingerprint-b") is None
+
+def test_parameter_proposals_are_allowlisted_bounded_and_never_applied():
+    current={"max_single_stock_weight":.05,"sector_limit":.30}
+    good=validate_parameter_proposal({"max_single_stock_weight":.055},current)
+    assert good["valid"] and good["requires_human_approval"] and not good["applied"]
+    bad=validate_parameter_proposal({"max_single_stock_weight":.10,"unknown":1},current)
+    assert not bad["valid"] and bad["accepted"]=={}
+
+def test_phase10_missing_evidence_holds_and_rejects_unsafe_proposal(tmp_path,monkeypatch):
+    import Phase_10.step10_cio_reporting as phase10
+    context={"run_metadata":{"timestamp":"test"},"config":{"max_single_stock_weight":.05},"parameter_proposal":{"max_single_stock_weight":.10},"_completed_phases":set()}
+    result=phase10.execute(context)
+    assert result["cio_decision"]=="HOLD_FOR_REVIEW"
+    assert result["parameter_proposal_status"]=="REJECTED"
+
+def test_phase11_downgrades_to_observation_when_cio_holds(tmp_path,monkeypatch):
+    import Phase_11.step11_interactive_advisor as phase11
+    monkeypatch.setattr(phase11,"build_pipeline_recommendations",lambda context: pd.DataFrame([{"symbol":"510300.SH"}]))
+    monkeypatch.setattr(phase11,"write_candidate_report",lambda frame,path:(tmp_path/"x.md",tmp_path/"x.csv"))
+    result=phase11.execute({"phase10_ready":True,"cio_decision":"HOLD_FOR_REVIEW","run_metadata":{"timestamp":"test"},"config":{"phase11_interactive":False}})
+    assert result["phase11_observation_only"]
+    assert not result["investment_candidates"]["action_allowed"].any()

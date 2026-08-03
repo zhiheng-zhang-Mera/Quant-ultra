@@ -23,6 +23,8 @@ from Main.data_bus import PITDataBus
 from Main.schema_contracts import PHASE_MODULES, PHASE_DEPENDENCIES, validate_phase_contract
 from Main.context_io import save_phase_result, load_phase_result, save_context_snapshot
 from Main.stage_reporter import StageReporter
+from Main.orchestration_guard import build_run_fingerprint, validate_orchestration, write_startup_manifest
+from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -85,6 +87,10 @@ def run_pipeline(args):
         except Exception as e:
             logger.warning(f"外部配置加载失败: {e}")
 
+    dag_audit = validate_orchestration(PHASE_MODULES, PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA)
+    run_fingerprint, fingerprint_material = build_run_fingerprint(get_git_hash(), config, PHASE_MODULES)
+    startup_manifest = write_startup_manifest(PROJECT_ROOT / "reports", RUN_TIMESTAMP, run_fingerprint, fingerprint_material, dag_audit)
+
     # ---- 核心组件 ----
     data_manager = FreeDataSourceManager(offline_debug=args.offline)
     audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
@@ -132,7 +138,7 @@ def run_pipeline(args):
     }
 
     pipeline_context = {
-        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash()},
+        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash(), "run_fingerprint": run_fingerprint, "startup_manifest": str(startup_manifest)},
         "config": config,
         "data_bus": data_bus,
         "data_manager": data_manager,
@@ -167,7 +173,7 @@ def run_pipeline(args):
         stage_reporter.start(phase)
         cache_hit = False
         if not args.force_recompute:
-            cached = load_phase_result(phase, PHASE_MODULES)
+            cached = load_phase_result(phase, PHASE_MODULES, expected_fingerprint=run_fingerprint)
             if cached and validate_phase_contract(phase, cached, "output"):
                 pipeline_context.update(cached)
                 pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
@@ -191,7 +197,7 @@ def run_pipeline(args):
                 pipeline_context.update(res)
                 pipeline_context.update({"data_bus": data_bus, "data_manager": data_manager, "audit_logger": audit_logger})
                 pipeline_context["_completed_phases"].add(phase)
-                save_phase_result(phase, res, PHASE_MODULES)
+                save_phase_result(phase, res, PHASE_MODULES, run_fingerprint=run_fingerprint)
                 stage_reporter.finish(phase, res, True, cache_hit=False)
         except Exception as e:
             stage_reporter.finish(phase, {"exception": repr(e), "traceback": traceback.format_exc()}, False, cache_hit=False)

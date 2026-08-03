@@ -41,7 +41,7 @@ PHASE_OUTPUT_SCHEMA: Dict[str, Set[str]] = {
     "Phase_7.step7_fsm_backtest": {"daily_nav", "daily_returns", "violations", "final_nav", "nav_history"},
     "Phase_8.step8_audit_stress_test": {"audit_passed", "audit_summary"},
     "Phase_9.step9_live_mlops": {"reconciliation_mae", "recon_passed", "psi_consecutive_breaches", "enforce_crowded_allocation_cap"}
-    ,"Phase_10.step10_cio_reporting": {"cio_decision", "cio_evidence", "cio_report_path", "phase10_ready"}
+    ,"Phase_10.step10_cio_reporting": {"cio_decision", "cio_evidence", "cio_report_path", "parameter_proposal_status", "phase10_ready"}
     ,"Phase_11.step11_interactive_advisor": {"investment_candidates", "phase11_report_path", "phase11_csv_path", "phase11_ready"}
 }
 

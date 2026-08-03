@@ -29,7 +29,7 @@ def _is_picklable(obj) -> bool:
     except (pickle.PickleError, TypeError, AttributeError, RecursionError):
         return False
 
-def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: list) -> None:
+def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: list, run_fingerprint: str = None) -> None:
     if not isinstance(result, dict):
         return
     p_dir = get_phase_cache_dir(phase_name, "parquet", modules_list)
@@ -119,12 +119,26 @@ def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: lis
         with open(p_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
         shutil.copy(p_dir / "metadata.json", f_dir / "metadata.json")
+        if run_fingerprint:
+            manifest = {"run_fingerprint": run_fingerprint, "phase": phase_name, "schema_version": 1}
+            with open(p_dir / "cache_manifest.json", "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
     except Exception as e:
         logger.warning("[FAIL] Failed to write metadata: %s", e)
 
-def load_phase_result(phase_name: str, modules_list: list) -> Optional[Dict[str, Any]]:
+def load_phase_result(phase_name: str, modules_list: list, expected_fingerprint: str = None) -> Optional[Dict[str, Any]]:
     p_dir = get_phase_cache_dir(phase_name, "parquet", modules_list)
     meta_file = p_dir / "metadata.json"
+    if expected_fingerprint:
+        cache_manifest = p_dir / "cache_manifest.json"
+        if not cache_manifest.exists():
+            logger.warning("拒绝无运行指纹的旧缓存: %s", phase_name)
+            return None
+        with open(cache_manifest, "r", encoding="utf-8") as f:
+            cached_fingerprint = json.load(f).get("run_fingerprint")
+        if cached_fingerprint != expected_fingerprint:
+            logger.warning("拒绝运行指纹不匹配的缓存: %s", phase_name)
+            return None
     if not meta_file.exists():
         # logger.warning("[OP] Probe Checkpoint | [SOURCE] Disk Auditor | [RESULT] Missed! Cold start required | [SIGNIFICANCE] Cache absent")
         logger.warning("由上下文I/O模块探测检查点 | 结果: 缺失！需要冷启动 | 意义: 缓存不存在")
