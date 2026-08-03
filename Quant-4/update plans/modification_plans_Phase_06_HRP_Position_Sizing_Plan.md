@@ -24,3 +24,10 @@
 1. 引入 `scipy.cluster.hierarchy` 库。
 2. 新增 `hrp_optimizer.py`，实现 `HierarchicalRiskParity` 算法。
 3. 修改 `step6_position_sizing.py`，将 HRP 与校准后的 BL 融合。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：Black-Litterman、稳健协方差、凸优化、仓位上限与额外风险平价数学模块。
+- **仅旁路原型**：HRP 在 `enhance_dlc/phase_06_enhance.py`，尚未成为正式可选优化器。
+- **未完成**：组合层风险预算、成交容量、行业约束的统一可行性证明；协方差估计误差压力测试。
+- **补全验收**：权重和、上下限、行业/流动性/换手约束必须逐日输出机器可验证证据。

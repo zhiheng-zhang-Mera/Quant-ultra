@@ -23,7 +23,6 @@ from Main.data_bus import PITDataBus
 from Main.schema_contracts import PHASE_MODULES, PHASE_DEPENDENCIES, validate_phase_contract
 from Main.context_io import save_phase_result, load_phase_result, save_context_snapshot
 from Main.stage_reporter import StageReporter
-from Main.investment_advisor import build_pipeline_recommendations, write_candidate_report
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -43,7 +42,7 @@ def parse_args():
     parser.add_argument("--no-git-check", action="store_true", help="强制关闭 Git 脏工作区校验硬红线")
     parser.add_argument("--offline", action="store_true", help="激活全离线调试模式")
     parser.add_argument("--force-recompute", action="store_true", help="降级全量缓存强制执行")
-    parser.add_argument("--portfolio-query", action="store_true", help="十阶段结束后进入股票/ETF持仓查询")
+    parser.add_argument("--non-interactive", action="store_true", help="阶段11只生成报告，不进入交互查询")
     return parser.parse_args()
 
 def run_pipeline(args):
@@ -75,6 +74,7 @@ def run_pipeline(args):
         "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
     }
     config = default_config.copy()
+    config["phase11_interactive"] = not args.non_interactive
     if args.config and Path(args.config).exists():
         try:
             with open(args.config, 'r', encoding='utf-8') as f:
@@ -200,19 +200,8 @@ def run_pipeline(args):
 
         save_context_snapshot(pipeline_context, phase, RUN_TIMESTAMP, LOG_DIR)
 
-    if "daily_weights" in pipeline_context:
-        candidates = build_pipeline_recommendations(pipeline_context)
-        candidate_md, candidate_csv = write_candidate_report(candidates, stage_reporter.root)
-        pipeline_context["investment_candidates"] = candidates
-        logger.info("十阶段候选建议已生成: %s / %s", candidate_md, candidate_csv)
-    else:
-        logger.warning("本次执行未产生 daily_weights，跳过十阶段候选建议")
-
-    if args.portfolio_query:
-        from analyze_cn_asset import run_portfolio_query
-        run_portfolio_query(data_manager, report_dir=stage_reporter.root / "portfolio_queries")
-
-    logger.info("🏁 ALL QUANT AGENTS EXECUTED SUCCESSFULLY WITH CONTRACT ASSURANCES")
+    logger.info("全部 11 个阶段已按合约执行完成")
+    return pipeline_context
 
 if __name__ == '__main__':
     run_pipeline(parse_args())

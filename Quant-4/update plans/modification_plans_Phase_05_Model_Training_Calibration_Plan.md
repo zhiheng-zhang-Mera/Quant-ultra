@@ -22,3 +22,10 @@
 1. 修改 `step_5_1_cv.py`，替换为无泄漏滚动 Walk-Forward 分割器。
 2. 重构 `step_5_5_calibration.py`，利用 `sklearn.calibration.CalibratedClassifierCV` 对 LGBM/XGBoost 集成进行校准。
 3. 输出经过校准后的概率矩阵 `calibrated_probas.pkl`，供 Phase-6 使用。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：Purged walk-forward 骨架、方向/分位模型与校准阶段。
+- **仅旁路原型**：`enhance_dlc/phase_05_enhance.py` 提供 Isotonic/Platt 包装，但未证明主链消费校准概率。
+- **未完成**：概率可靠性图、Brier/ECE 分市场分时期报告、模型与特征 schema 版本绑定。
+- **补全验收**：校准集必须晚于训练集且早于测试集；Phase 6 只能读取带版本和校准证据的概率。

@@ -26,3 +26,10 @@
 1. 修改 `step1_1_screening.py`，加入动态生存股库。
 2. 重构 `step1_data_foundation.py`，提供 `mice_imputation` 函数替代 `fillna(method='ffill')`。
 3. 新增子脚本 `alternative_extractor.py`，实现盘后自动化文本情感量化因子的入库。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：退市标的回流、PIT 退市残值、数据源多路回退、OHLCV 完整性和哈希证据。
+- **仅旁路原型**：`enhance_dlc/phase_01_enhance.py` 含 MICE/SoftImpute 与退市跟踪，但尚未被 Phase 1 正式入口调用。
+- **未完成**：替代数据的授权来源、发布时间戳、版本化语料和防提示注入均未具备，禁止把 mock 情绪当真实因子。
+- **补全验收**：主链集成必须有缺失机制分类、只使用当时可获得的数据、插补掩码留档，以及原始/插补值并存。

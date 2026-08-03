@@ -24,3 +24,10 @@
 1. 重构 `Phase_10/step10_llm_reporting.py`，实现异构分析师模型的串行加载与释放 (`keep_alive=0`)。
 2. 扩展 `data_aggregator.py`，支持抓取更详细的模型校准度、滑点比、以及 PSI 指标。
 3. 新增 `parameter_effector.py`，专门承接 CIO 模型输出的调参 JSON，动态覆盖各 Phase 的 `config.py`，完成完整的控制论闭环（Cybernetic Feedback Loop）。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已补入**：Phase 10 现生成仅基于上下文证据的 CIO JSON；证据缺失时输出 `HOLD_FOR_REVIEW`。
+- **已废止的错误路径**：旧 `data_aggregator.py` 使用 mock 指标，不得作为投资结论或参数调整依据。
+- **未完成**：3+1 本地模型是可选解释层；LLM 输出不得直接改写 Python 配置，更不得绕过风险门禁。
+- **补全验收**：参数建议必须过 JSON Schema、白名单、幅度限制、样本外回测、人工批准和原子回滚后才能生效。

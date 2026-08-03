@@ -21,3 +21,10 @@
 1. 修改 `data_loader.py`，实现 `get_pit_fundamental_data` 接口。
 2. 重构 `step_3_1_regime.py`，使用 `hmmlearn` 库建立 HMM 状态分类器，并在每日收盘后更新市场机制分类。
 3. 在 `step_3_4_features.py` 中，将当前的 `regime_state` 以 One-Hot 编码的形式合并至特征截面上。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：PIT 数据总线与横截面边界守卫。
+- **仅旁路原型**：`enhance_dlc/phase_03_enhance.py` 含 publication-date 查询和 HMM，但未正式接入 Phase 3。
+- **未完成**：供应商修订历史、可获得时间与入库时间双时间轴；HMM 标签稳定映射和仅历史窗口重训。
+- **补全验收**：任意时点查询必须满足 `publication_time <= decision_time`，修订数据不得覆盖旧版本。

@@ -24,3 +24,10 @@
 1. 在 `Phase_2/config.py` 中加入 `EMBARGO_PCT = 0.01` 及平稳性检验严格度。
 2. 重构 `step2_2_validation.py`，引入 `purged_k_fold` 交叉验证分割器。
 3. 在 `acf_analyzer.py` 中添加平稳性自动微分修复逻辑。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：切片间 purge/embargo 硬校验；新增走步回测同时验证训练早于测试、信号早于成交。
+- **仅旁路原型**：`enhance_dlc/phase_02_enhance.py` 含滚动缩放、平稳性与 PurgedKFold，未全部接入生产入口。
+- **未完成**：ADF/KPSS 的多重检验校正、按训练折拟合的 scaler 持久化和特征失败硬门禁。
+- **补全验收**：对未来价格扰动后，历史折特征、参数和收益必须逐位不变。

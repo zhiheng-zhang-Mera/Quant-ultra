@@ -28,3 +28,10 @@
 1. 重构 `label_builder.py`，实现 `get_triple_barrier_labels`，利用滚动 `pandas` 计算动态波动率屏障。
 2. 在 `step4_labeling_weighting.py` 中引入元标注建模管线，保存一阶模型预测值作为二阶特征。
 3. 修改训练权重，引入基于时间重叠度的 `compute_sample_uniqueness`。
+
+## 4. 2026-08-03 实施核验与补全
+
+- **正式主链已实现**：标签与样本权重阶段存在并受合约约束。
+- **仅旁路原型**：三重屏障、元标注和并发权重位于 `enhance_dlc/phase_04_enhance.py`，默认未启用。
+- **未完成**：A股涨跌停、停牌导致屏障不可成交的状态语义；元模型必须使用一阶模型 OOF 预测。
+- **补全验收**：标签结束时间必须传入 Purged CV，元标签严禁由样本内预测生成。
