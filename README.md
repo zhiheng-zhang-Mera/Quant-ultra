@@ -130,3 +130,16 @@ Engineering acceptance, backtests, sentiment scores, and deterministic reconcili
 `run_adaptive_backtest.py` keeps a checksum-protected parameter state per symbol. A first run proposes a bounded next grid, the same data cutoff replays without advancing, and only a newer data cutoff starts the next generation. Cross-run iteration never changes the analysis-only boundary or authorizes execution; use `--disable-self-optimize` for a fixed-grid diagnostic run.
 
 Selection, entry, holding, and take-profit now form a regime-gated expert chain with at least eight methods per stage. Market trend, volatility, drawdown, liquidity, and sentiment change each stage's softmax weights. The dominant method directly shifts compatible priors in the following stage through an explicit transition matrix. Decisions use nonlinear `atanh` pooling plus a top-expert interaction term, rather than a linear weighted sum.
+
+### 独立真实建议组合回测
+
+`Quant-4/run_advice_portfolio_backtest.py` 将现有分析引擎的逐标的建议挂载到一个独立、只读、组合级回测器。脚本不提供单只股票参数，并强制至少两只具有有效来源证据的标的；数据文件必须与证据中的行数及 SHA-256 完全一致，模拟、mock 和离线调试来源会被拒绝。
+
+默认排除 B 股、北交所，以及通常需要额外账户权限的创业板和科创板代码前缀。建议在收盘后生成，并只允许在下一交易日开盘执行；停牌、零成交量和不可买入涨停会阻止买入。结果包含现金、成本、换手、敞口、等权合格标的基准和逐次信号审计。
+
+```powershell
+Set-Location D:\Quant-Ultra\Quant-4
+D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 21 --fee-rate 0.001 --min-assets 2
+```
+
+输出位于 `Quant-4/reports/advice_portfolio_backtest/`。该脚本模拟执行分析建议以评估历史表现，不发送订单，也不证明未来收益；样本池过窄时，结论只能视为工程验证。

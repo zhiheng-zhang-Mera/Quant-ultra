@@ -212,6 +212,23 @@ def test_adaptive_parameter_state_rejects_tampering(tmp_path):
     else:
         raise AssertionError("tampered adaptive state must be rejected")
 
+def test_purchase_eligibility_excludes_permission_and_non_a_share_codes():
+    from Main.advice_portfolio_backtest import symbol_purchase_eligibility
+    assert symbol_purchase_eligibility("600519.SH")[0]
+    assert symbol_purchase_eligibility("000001.SZ")[0]
+    for symbol in ("300001.SZ","688001.SH","920001.BJ","900901.SH","AAPL.US"):
+        assert not symbol_purchase_eligibility(symbol)[0]
+
+def test_advice_portfolio_requires_multiple_real_assets():
+    from Main.advice_portfolio_backtest import UniverseDecision, run_advice_portfolio_backtest
+    frame=_market_frame().set_index("date")
+    try:
+        run_advice_portfolio_backtest({"600519.SH":frame},[UniverseDecision("600519.SH",True,"test")],min_assets=2)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("single-security advice backtests must be rejected")
+
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
     first=walk_forward_backtest(original,_small_grid(),train_size=180,test_size=60,embargo=5)
