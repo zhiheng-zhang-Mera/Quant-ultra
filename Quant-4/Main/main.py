@@ -80,7 +80,10 @@ def run_pipeline(args):
         "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
         "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
         "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
-        "news_input_path": None, "forum_input_path": None,
+        "news_input_path": None, "forum_input_path": None, "local_llm_sentiment_enabled": True,
+        "local_llm_model": "qwen3-coder:30b", "local_llm_base_url": "http://127.0.0.1:11434",
+        "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
+        "local_llm_max_records_per_symbol": 2, "local_llm_max_chars_per_record": 300,
     }
     config = default_config.copy()
     config["phase11_interactive"] = not args.non_interactive

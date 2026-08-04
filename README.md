@@ -43,6 +43,8 @@ published_at,symbol,text
 
 晚于运行时点的记录会被排除。系统分别计算新闻和论坛词典情绪，并用 `close × volume` 构造 5 日相对 20 日资金池变化；综合权重为新闻 35%、论坛 25%、资金池 40%。词典模型不能可靠理解反讽、否定、传闻或操纵性发帖，正式使用应接入授权来源和经过验证的中文模型。
 
+Phase 3 还会动态探测本地 Ollama 和 `local_llm_model`。模型存在时，系统仅对最新的有限文本做额外情绪分析；默认总计不超过 6 条、每个标的不超过 2 条、每条不超过 300 字，关闭推理过程并将单次批量调用硬限制为 20 秒。模型不存在、Ollama 未启动、超时或返回格式异常时，系统自动保留词典结果并继续流水线。相关开关和限额位于 `Main/default_param.yaml`。
+
 ### D 盘安装与运行
 
 ```powershell
@@ -94,6 +96,8 @@ Quant-Ultra is an auditable research pipeline for China A-shares, ETFs, and US e
 11. Phase 11 emits entry ranges, sizing, exits, and friction estimates; failed gates force observation-only mode.
 
 Configure `news_input_path` and `forum_input_path` with CSV/JSONL records containing `published_at`, `symbol`, and `text`. Future-dated records are excluded. Missing optional sources are reported and receive neutral scores; the system never fabricates sentiment evidence.
+
+Phase 3 dynamically checks the local Ollama model configured by `local_llm_model`. If present, it enhances only a bounded recent sample (6 records total, 2 per symbol, 300 characters each, reasoning disabled, and a 20-second batch timeout by default). A missing model, stopped service, timeout, or malformed response falls back to lexical sentiment without blocking the pipeline.
 
 Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/reports/runs/<run-id>/`, including an interpretation, glossary, output summary, Git hash, and evidence digest.
 

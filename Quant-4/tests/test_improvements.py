@@ -14,7 +14,7 @@ from Main.parameter_governance import validate_parameter_proposal
 from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA, resolve_phase_name, validate_phase_contract
 from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
 from Main.stage_reporter import StageReporter
-from Phase_3.alternative_data import build_alternative_signals, score_text
+from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -72,6 +72,25 @@ def test_alternative_data_is_pit_and_reports_missing_optional_sources(tmp_path):
     assert result["alternative_data_evidence"]["future_records_excluded"]
     assert result["alternative_data_evidence"]["news"]["status"] == "MISSING_OPTIONAL_SOURCE"
     assert np.isfinite(result["alternative_signals"].loc[0, "alternative_signal"])
+
+def test_local_llm_sentiment_is_bounded_and_optional():
+    class FakeClient:
+        def list_models(self): return ["local-test"]
+        def generate(self, model, prompt):
+            assert model == "local-test"
+            return '{"results":[{"id":"news:0","score":0.8,"confidence":0.9}]}'
+    frame = pd.DataFrame([{"published_at": pd.Timestamp("2026-08-01", tz="UTC"), "symbol": "600519.SH", "text": "增长", "sentiment": 1.0}])
+    enhanced, evidence = enhance_sentiment_with_local_llm({"news": frame, "forum": frame.iloc[:0]}, {"local_llm_model": "local-test", "local_llm_max_records_total": 1}, client=FakeClient())
+    assert evidence["status"] == "ANALYZED"
+    assert enhanced["news"].loc[0, "effective_sentiment"] == 0.8
+
+def test_local_llm_missing_model_falls_back_without_failure():
+    class MissingClient:
+        def list_models(self): return []
+    frame = pd.DataFrame(columns=["published_at", "symbol", "text", "sentiment"])
+    unchanged, evidence = enhance_sentiment_with_local_llm({"news": frame}, {"local_llm_model": "absent"}, client=MissingClient())
+    assert evidence["status"] == "MODEL_NOT_FOUND" and evidence["fallback_used"]
+    assert unchanged["news"].empty
 
 def test_stage_report_is_bilingual_and_interpreted(tmp_path):
     reporter = StageReporter(tmp_path, "run", "abc123")

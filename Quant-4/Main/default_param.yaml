@@ -32,6 +32,13 @@ max_daily_turnover: 0.25
 concentration_penalty: 0.02
 news_input_path: null
 forum_input_path: null
+local_llm_sentiment_enabled: true
+local_llm_model: "qwen3-coder:30b"
+local_llm_base_url: "http://127.0.0.1:11434"
+local_llm_timeout_seconds: 20
+local_llm_max_records_total: 6
+local_llm_max_records_per_symbol: 2
+local_llm_max_chars_per_record: 300
 lambda_decay: 0.01
 vol_window: 20
 threshold_multiplier: 0.5
