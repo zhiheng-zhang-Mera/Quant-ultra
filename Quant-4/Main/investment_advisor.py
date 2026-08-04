@@ -23,13 +23,15 @@ def build_pipeline_recommendations(context: dict, top_n: int = 20) -> pd.DataFra
     end = datetime.now().date()
     start = end - timedelta(days=550)
     rows = []
+    alternative = context.get("alternative_signals")
+    alternative_map = dict(zip(alternative["symbol"], alternative["alternative_signal"])) if isinstance(alternative, pd.DataFrame) and not alternative.empty else {}
     for symbol in symbols:
         try:
             frame = manager.fetch_historical(str(symbol), str(start), str(end))
             if frame is None or len(frame) < 60:
                 continue
             asset_type = infer_kind(str(symbol))
-            rec = recommendation(frame, model_weight=float(latest_weights[symbol]), asset_type=asset_type, cost_config=context.get("config"))
+            rec = recommendation(frame, model_weight=float(latest_weights[symbol]), asset_type=asset_type, cost_config=context.get("config"), alternative_signal=float(alternative_map.get(symbol, 0.0)))
             if rec["qualified"]:
                 rows.append({"symbol": symbol, "asset_type": asset_type, **rec})
         except Exception:
@@ -45,7 +47,7 @@ def write_candidate_report(frame: pd.DataFrame, report_dir: Path) -> tuple[Path,
     frame.to_csv(csv_path, index=False, encoding="utf-8-sig")
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     md_path = report_dir / "post_pipeline_candidates.md"
-    columns = [c for c in ["symbol", "asset_type", "entry_price_low", "entry_price_high", "suggested_weight", "take_profit_pct", "score", "sharpe"] if c in frame]
+    columns = [c for c in ["symbol", "asset_type", "dominant_selection_method", "dominant_entry_method", "dominant_holding_method", "dominant_take_profit_method", "entry_price_low", "entry_price_high", "suggested_weight", "take_profit_pct", "score", "sharpe"] if c in frame]
     if frame.empty:
         table = "本次没有通过全部条件的候选标的。"
     else:

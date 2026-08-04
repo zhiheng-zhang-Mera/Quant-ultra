@@ -5,7 +5,7 @@ import pandas as pd
 ROOT=Path(__file__).parents[1]; sys.path.insert(0,str(ROOT))
 from Main.data_quality import validate_ohlcv
 from Main.fast_math import log_returns
-from Main.portfolio_analytics import holding_advice, metrics, nearest_psd, recommendation, risk_parity_weights
+from Main.portfolio_analytics import holding_advice, metrics, nearest_psd, recommendation, risk_parity_weights, technical_snapshot
 from analyze_cn_asset import normalize
 from Main.investment_advisor import write_candidate_report
 from Main.walk_forward_backtest import walk_forward_backtest
@@ -15,6 +15,7 @@ from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_
 from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
 from Main.stage_reporter import StageReporter
 from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
+from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -100,6 +101,23 @@ def test_stage_report_is_bilingual_and_interpreted(tmp_path):
     assert "结论解读 / Conclusion" in text
     assert "术语 / Glossary" in text
     assert "PIT features and alternative data" in text
+
+def test_four_stage_chain_has_multiple_experts_and_normalized_dynamic_weights():
+    frame = _market_frame(); snap = technical_snapshot(frame); perf = metrics(frame["close"])
+    chain = four_stage_decision_chain(frame, snap, perf, 0.002, alternative_signal=0.4)
+    for stage in ("selection", "entry", "holding", "take_profit"):
+        assert len(STAGE_METHODS[stage]) >= 8
+        assert np.isclose(sum(chain[stage]["method_weights"].values()), 1.0)
+        assert -1 <= chain[stage]["nonlinear_score"] <= 1
+
+def test_dominant_method_directly_changes_next_stage_prior():
+    frame = _market_frame(); chain = four_stage_decision_chain(frame, technical_snapshot(frame), metrics(frame["close"]), 0.002)
+    for current, following in (("selection", "entry"), ("entry", "holding"), ("holding", "take_profit")):
+        dominant = chain[current]["dominant_method"]
+        assert chain[following]["inherited_from"] == dominant
+        compatible = TRANSITIONS.get(dominant, set()) & set(STAGE_METHODS[following])
+        assert compatible
+        assert all(chain[following]["transition_boost"][method] > 0 for method in compatible)
 
 def test_candidate_report_is_readable_and_hashed(tmp_path):
     rec=recommendation(_market_frame(),model_weight=.08)

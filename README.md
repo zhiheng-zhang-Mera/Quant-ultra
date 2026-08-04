@@ -65,6 +65,12 @@ D:\Quant-Ultra-Env\venv\Scripts\python.exe Main\main.py --symbols "600519.SH,000
 - 止盈 3%–12%，须覆盖预计往返成本并保留最低净利润目标。
 - 实际券商佣金和基金管理费必须在 `Main/default_param.yaml` 按合同调整。
 
+### 四阶段动态决策链
+
+选择、建仓、持仓和止盈各自包含至少八种方法：趋势、动量、均值回归、风险调整、回撤韧性、波动突破、流动性和情绪选择；ATR 回撤、均线回踩、突破确认、波动分批、流动性、价值区、动量延续和风险预算建仓；趋势跟随、跟踪止损、波动控制、回撤防护、信号持续、流动性监控、时间止损和利润保护持仓；ATR、波动带、跟踪退出、风险收益、阻力位、时间衰减、流动性退出和分批止盈。
+
+每阶段先根据趋势、波动、回撤、成交活跃度和情绪状态调整 softmax 门控权重。上一阶段权重最高的方法通过显式转移矩阵对下一阶段兼容方法增加先验、对不兼容方法减权。最终结论使用 `atanh` 非线性池化和前两名方法协同项，而不是分数的线性加权平均。报告会保存各方法分数、动态权重、主导方法和跨阶段转移增益，便于复核。
+
 ### 验证与术语
 
 ```powershell
@@ -102,3 +108,5 @@ Phase 3 dynamically checks the local Ollama model configured by `local_llm_model
 Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/reports/runs/<run-id>/`, including an interpretation, glossary, output summary, Git hash, and evidence digest.
 
 Engineering acceptance, backtests, sentiment scores, and deterministic reconciliation do not guarantee investment performance. A failed audit or reconciliation produces `HOLD_FOR_REVIEW`; Phase 11 remains `OBSERVATION_ONLY` and must not be treated as executable advice.
+
+Selection, entry, holding, and take-profit now form a regime-gated expert chain with at least eight methods per stage. Market trend, volatility, drawdown, liquidity, and sentiment change each stage's softmax weights. The dominant method directly shifts compatible priors in the following stage through an explicit transition matrix. Decisions use nonlinear `atanh` pooling plus a top-expert interaction term, rather than a linear weighted sum.
