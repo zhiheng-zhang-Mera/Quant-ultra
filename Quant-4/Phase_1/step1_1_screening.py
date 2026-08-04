@@ -62,6 +62,11 @@ def run_screening(context: dict, data_bus, data_manager):
         try:
             df_cache = pd.read_parquet(screening_cache)
             if 'cache_date' in df_cache.columns and pd.to_datetime(df_cache['cache_date'].iloc[0]).date() == latest_trading_day.date():
+                if context.get("config", {}).get("bounded_universe"):
+                    allowed = set(data_bus.get_universe())
+                    df_cache = df_cache[df_cache['symbol'].isin(allowed)].copy()
+                if df_cache.empty:
+                    raise ValueError("screening cache has no rows for the requested bounded universe")
                 context['assets'] = df_cache['symbol'].tolist()
                 context['adv_data'] = {row['symbol']: row['adv'] for _, row in df_cache.iterrows()}
                 # logger.info("[OP] Trigger Local Checkpoint Recovery | [SOURCE] Local Parquet Cache Database | [RESULT] Hydrated context for %s symbols | [SIGNIFICANCE] Bypasses heavy historical computation and IO traps completely", len(context['assets']))

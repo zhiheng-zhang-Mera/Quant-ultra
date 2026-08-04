@@ -2,12 +2,20 @@ import json
 import pickle
 import shutil
 import logging
+import hashlib
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("ContextIO")
 CACHE_ROOT = Path(__file__).parent.parent.resolve() / "Phase_Result"
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 # 需要跳过保存的键（因为它们包含不可序列化的对象或不需要持久化）
 IGNORED_KEYS = {
@@ -120,7 +128,12 @@ def save_phase_result(phase_name: str, result: Dict[str, Any], modules_list: lis
             json.dump(metadata, f, indent=2)
         shutil.copy(p_dir / "metadata.json", f_dir / "metadata.json")
         if run_fingerprint:
-            manifest = {"run_fingerprint": run_fingerprint, "phase": phase_name, "schema_version": 1}
+            artifacts = {
+                path.name: _sha256(path)
+                for path in sorted(p_dir.iterdir())
+                if path.is_file() and path.name != "cache_manifest.json"
+            }
+            manifest = {"run_fingerprint": run_fingerprint, "phase": phase_name, "schema_version": 2, "artifacts": artifacts}
             with open(p_dir / "cache_manifest.json", "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
     except Exception as e:
@@ -135,10 +148,20 @@ def load_phase_result(phase_name: str, modules_list: list, expected_fingerprint:
             logger.warning("拒绝无运行指纹的旧缓存: %s", phase_name)
             return None
         with open(cache_manifest, "r", encoding="utf-8") as f:
-            cached_fingerprint = json.load(f).get("run_fingerprint")
+            manifest = json.load(f)
+            cached_fingerprint = manifest.get("run_fingerprint")
         if cached_fingerprint != expected_fingerprint:
             logger.warning("拒绝运行指纹不匹配的缓存: %s", phase_name)
             return None
+        artifacts = manifest.get("artifacts") if manifest.get("schema_version") == 2 else None
+        if not isinstance(artifacts, dict) or not artifacts:
+            logger.warning("拒绝缺少文件完整性清单的旧缓存: %s", phase_name)
+            return None
+        for name, expected_hash in artifacts.items():
+            artifact = p_dir / name
+            if not artifact.is_file() or _sha256(artifact) != expected_hash:
+                logger.critical("拒绝完整性校验失败的缓存文件: %s/%s", phase_name, name)
+                return None
     if not meta_file.exists():
         # logger.warning("[OP] Probe Checkpoint | [SOURCE] Disk Auditor | [RESULT] Missed! Cold start required | [SIGNIFICANCE] Cache absent")
         logger.warning("由上下文I/O模块探测检查点 | 结果: 缺失！需要冷启动 | 意义: 缓存不存在")

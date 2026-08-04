@@ -52,6 +52,8 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
             existing_df = pd.read_parquet(cache_path)
             if not existing_df.empty:
                 existing_df['date'] = pd.to_datetime(existing_df['date'])
+                if context.get("config", {}).get("bounded_universe"):
+                    existing_df = existing_df[existing_df['symbol'].isin(set(all_stocks))].copy()
                 if existing_df['date'].max().date() >= latest_trading_day.date():
                     cached_symbols = set(existing_df['symbol'].unique())
                     if assets and set(assets).issubset(cached_symbols):

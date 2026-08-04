@@ -6,7 +6,7 @@ import logging
 import os
 import pandas as pd
 import numpy as np
-import pickle
+import json
 from pathlib import Path
 import concurrent.futures
 from Phase_6.config import DEFAULT_CONFIG
@@ -81,14 +81,16 @@ def execute(pipeline_context: dict) -> dict:
     # ==============================================================================
     # ⚡ 行业映射加速模块：缓存 + 多线程 + 扩充批量源
     # ==============================================================================
-    CACHE_PATH = Path("data/sector_map_cache.pkl")
+    CACHE_PATH = Path("data/sector_map_cache.json")
     sector_map = None
 
     # 尝试加载缓存
     if CACHE_PATH.exists():
         try:
-            with open(CACHE_PATH, "rb") as f:
-                sector_map = pickle.load(f)
+            with open(CACHE_PATH, "r", encoding="utf-8") as f:
+                sector_map = json.load(f)
+            if not isinstance(sector_map, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in sector_map.items()):
+                raise ValueError("sector cache schema is invalid")
             logger.info("Loaded sector_map from cache (%d symbols)", len(sector_map))
             # 检查是否涵盖所有资产（若资产列表变更则重新构建）
             if all(asset in sector_map for asset in assets):
@@ -199,8 +201,8 @@ def execute(pipeline_context: dict) -> dict:
         # ---- 保存缓存 ----
         try:
             CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(CACHE_PATH, "wb") as f:
-                pickle.dump(sector_map, f)
+            with open(CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(sector_map, f, ensure_ascii=False, sort_keys=True)
             logger.info("Saved sector_map cache to %s", CACHE_PATH)
         except Exception as e:
             logger.warning("Failed to save cache: %s", e)

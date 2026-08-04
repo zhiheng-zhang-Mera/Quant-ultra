@@ -36,11 +36,11 @@ PHASE_OUTPUT_SCHEMA: Dict[str, Set[str]] = {
     "Phase_2.step2_data_slicing": {"slices", "embargo_window"},
     "Phase_3.step3_pit_setup": {"feature_panel_shared", "feature_panel_private_a", "feature_panel_private_us", "online_regime_state", "alternative_signals", "alternative_data_evidence"},
     "Phase_4.step4_labeling_weighting": {"y_clf_all", "y_reg_all", "sample_weights"},
-    "Phase_5.step5_model_training_calibration": {"direction_classifier", "quantile_models", "gamma_star", "q_error_threshold_dict", "selected_features", "fractional_features_cube"},
+    "Phase_5.step5_model_training_calibration": {"direction_classifier", "quantile_models", "gamma_star", "q_error_threshold_dict", "selected_features", "fractional_features_cube", "num_trials", "trial_evidence"},
     "Phase_6.step6_position_sizing": {"daily_weights", "daily_intervals", "daily_adv20"},
     "Phase_7.step7_fsm_backtest": {"daily_nav", "daily_returns", "violations", "final_nav", "nav_history"},
     "Phase_8.step8_audit_stress_test": {"audit_passed", "audit_summary"},
-    "Phase_9.step9_live_mlops": {"reconciliation_mae", "recon_passed", "psi_consecutive_breaches", "enforce_crowded_allocation_cap"}
+    "Phase_9.step9_live_mlops": {"reconciliation_mae", "recon_passed", "trading_halted", "kill_switch_report", "psi_consecutive_breaches", "enforce_crowded_allocation_cap"}
     ,"Phase_10.step10_cio_reporting": {"cio_decision", "cio_evidence", "cio_report_path", "parameter_proposal_status", "phase10_ready"}
     ,"Phase_11.step11_interactive_advisor": {"investment_candidates", "phase11_report_path", "phase11_csv_path", "phase11_ready"}
 }

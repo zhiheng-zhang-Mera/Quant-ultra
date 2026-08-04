@@ -261,6 +261,15 @@ def test_cache_rejects_fingerprint_mismatch(tmp_path,monkeypatch):
     assert cio.load_phase_result(phase,PHASE_MODULES,"fingerprint-a")["value"]==42
     assert cio.load_phase_result(phase,PHASE_MODULES,"fingerprint-b") is None
 
+def test_cache_rejects_artifact_tampering(tmp_path,monkeypatch):
+    import Main.context_io as cio
+    monkeypatch.setattr(cio,"CACHE_ROOT",tmp_path)
+    phase=PHASE_MODULES[0]
+    cio.save_phase_result(phase,{"value":42},PHASE_MODULES,run_fingerprint="fingerprint-a")
+    artifact=tmp_path/"parquet"/"Phase_1"/"value.json"
+    artifact.write_text('{"value": 999}',encoding="utf-8")
+    assert cio.load_phase_result(phase,PHASE_MODULES,"fingerprint-a") is None
+
 def test_parameter_proposals_are_allowlisted_bounded_and_never_applied():
     current={"max_single_stock_weight":.05,"sector_limit":.30}
     good=validate_parameter_proposal({"max_single_stock_weight":.055},current)
@@ -274,6 +283,11 @@ def test_phase10_missing_evidence_holds_and_rejects_unsafe_proposal(tmp_path,mon
     result=phase10.execute(context)
     assert result["cio_decision"]=="HOLD_FOR_REVIEW"
     assert result["parameter_proposal_status"]=="REJECTED"
+
+def test_phase10_reconciliation_failure_cannot_be_eligible():
+    import Phase_10.step10_cio_reporting as phase10
+    context={"run_metadata":{"timestamp":"test"},"audit_summary":{},"audit_passed":True,"final_nav":100.0,"reconciliation_mae":0.1,"recon_passed":False,"psi_consecutive_breaches":0,"_completed_phases":set()}
+    assert phase10.execute(context)["cio_decision"]=="HOLD_FOR_REVIEW"
 
 def test_phase11_downgrades_to_observation_when_cio_holds(tmp_path,monkeypatch):
     import Phase_11.step11_interactive_advisor as phase11
@@ -302,3 +316,51 @@ def test_dsr_fails_closed_without_num_trials_evidence():
     run_dsr_audit(context)
     assert not context["dsr_pass"]
     assert context["dsr_evidence_status"] == "MISSING_NUM_TRIALS"
+
+def test_reconciliation_failure_freezes_non_live_orders_without_claiming_liquidation():
+    from Phase_9.shadow_reconciliation import enforce_reconciliation_gate
+    result=enforce_reconciliation_gate({"recon_passed":False,"is_live":False})
+    assert result["trading_halted"]
+    assert result["kill_switch_report"]["status"]=="ORDER_GENERATION_FROZEN"
+    assert not result["kill_switch_report"]["liquidation_attempted"]
+
+def test_reconciliation_fails_closed_without_target_portfolio():
+    from Phase_9.shadow_reconciliation import run_shadow_reconciliation
+    result=run_shadow_reconciliation({"config":{}})
+    assert not result["recon_passed"]
+    assert result["reconciliation_evidence_status"]=="MISSING_TARGET_WEIGHTS"
+
+def test_reconciliation_uses_latest_daily_target_weights():
+    from Phase_9.shadow_reconciliation import run_shadow_reconciliation
+    weights=pd.DataFrame([{"A":0.1},{"A":0.2}])
+    result=run_shadow_reconciliation({"daily_weights":weights,"config":{"reconciliation_mae_ceiling":1.0}})
+    assert result["target_weights"]=={"A":0.2}
+
+def test_phase11_defense_in_depth_rejects_false_reconciliation(tmp_path,monkeypatch):
+    import Phase_11.step11_interactive_advisor as phase11
+    monkeypatch.setattr(phase11,"build_pipeline_recommendations",lambda context: pd.DataFrame([{"symbol":"510300.SH"}]))
+    monkeypatch.setattr(phase11,"write_candidate_report",lambda frame,path:(tmp_path/"x.md",tmp_path/"x.csv"))
+    result=phase11.execute({"phase10_ready":True,"cio_decision":"ELIGIBLE_FOR_PHASE_11","audit_passed":True,"recon_passed":False,"run_metadata":{"timestamp":"test"},"config":{"phase11_interactive":False}})
+    assert result["phase11_observation_only"]
+    assert not result["investment_candidates"]["action_allowed"].any()
+
+def test_production_preflight_reports_boundaries():
+    from Main.production_readiness import run_preflight
+    result=run_preflight(require_clean_git=False)
+    assert result["ready"]
+    assert result["checks"]["orchestration"]["evidence"]["phase_count"]==11
+    assert any("does not prove" in boundary for boundary in result["boundaries"])
+
+def test_bounded_universe_filters_screening_cache(tmp_path):
+    import pytz
+    from Phase_1.step1_1_screening import run_screening
+    today=pd.Timestamp.now(tz="Asia/Shanghai").normalize()
+    pd.DataFrame({"symbol":["600519.SH","000001.SZ"],"adv":[2e7,3e7],"cache_date":[today.date(),today.date()]}).to_parquet(tmp_path/"screening_results.parquet",index=False)
+    class Bus:
+        _tz=pytz.timezone("Asia/Shanghai")
+        def get_universe(self): return ["600519.SH"]
+    manager=type("Manager",(),{"cache_dir":tmp_path})()
+    context={"trading_days_dt":[today],"config":{"bounded_universe":True}}
+    run_screening(context,Bus(),manager)
+    assert context["assets"]==["600519.SH"]
+    assert set(context["adv_data"])=={"600519.SH"}

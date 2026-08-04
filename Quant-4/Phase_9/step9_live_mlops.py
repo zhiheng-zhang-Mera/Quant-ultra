@@ -5,7 +5,7 @@ Phase 9 Pipeline Orchestrator - Production Release & Immutable Asset Ledger
 import logging
 from datetime import datetime
 import pandas as pd
-from Phase_9.shadow_reconciliation import run_shadow_reconciliation
+from Phase_9.shadow_reconciliation import run_shadow_reconciliation, enforce_reconciliation_gate
 from Phase_9.tiered_updater import evaluate_distribution_drift
 from Phase_9.telemetry_alerts import process_nested_risk_telemetry
 from Phase_9.config import CACHE_PARQUET_DIR, CACHE_FEATHER_DIR
@@ -32,6 +32,7 @@ def execute(pipeline_context: dict) -> dict:
 
     # Step 9.1：执行影子对账双轨审计
     pipeline_context = run_shadow_reconciliation(pipeline_context)
+    pipeline_context = enforce_reconciliation_gate(pipeline_context)
     
     # Step 9.2：PSI 认知稳定性审计
     pipeline_context = evaluate_distribution_drift(pipeline_context)
@@ -44,7 +45,9 @@ def execute(pipeline_context: dict) -> dict:
         "execution_timestamp": datetime.now().isoformat(),
         "current_date_str": current_date_str,
         "reconciliation_mae": float(pipeline_context.get('reconciliation_mae', 0.0)),
-        "recon_passed": bool(pipeline_context.get('recon_passed', True)),
+        "recon_passed": bool(pipeline_context.get('recon_passed', False)),
+        "trading_halted": bool(pipeline_context.get('trading_halted', True)),
+        "kill_switch_report": pipeline_context.get('kill_switch_report'),
         "current_mean_psi": float(pipeline_context.get('current_mean_psi', 0.0)),
         "psi_consecutive_breaches": int(pipeline_context.get('psi_consecutive_breaches', 0)),
         "alpha_new_model": float(pipeline_context.get('alpha_new_model', 1.0)),

@@ -5,6 +5,8 @@ Quant-Ultra Flow - Step 9.1: Deterministic Shadow Reconciliation & Emergency Har
 import logging
 from datetime import datetime
 import numpy as np
+import pandas as pd
+import pandas as pd
 from Phase_9.config import DEFAULT_MLOPS_CONFIG
 
 logger = logging.getLogger("MLOps.ShadowRecon")
@@ -17,9 +19,33 @@ def run_shadow_reconciliation(context: dict) -> dict:
     logger.info("[操作] 启动确定性影子对账管线 | [来源] 主控制流目标分配权重 | [结果] 正在激活双轨模态分流 | [意义] 校对模型目标与物理成交之间的一致性，防止隐性滑点资产流失")
 
     target_weights = context.get('target_weights', {})
+    if not target_weights:
+        daily_weights = context.get('daily_weights')
+        if isinstance(daily_weights, pd.DataFrame) and not daily_weights.empty:
+            target_weights = daily_weights.iloc[-1].dropna().astype(float).to_dict()
+            context['target_weights'] = target_weights
+    if not target_weights:
+        daily_weights = context.get('daily_weights')
+        if isinstance(daily_weights, pd.DataFrame) and not daily_weights.empty:
+            target_weights = daily_weights.iloc[-1].dropna().astype(float).to_dict()
+            context['target_weights'] = target_weights
     executed_weights = {}
     is_live = context.get('is_live', False)
     mae_ceiling = context.get('config', {}).get('reconciliation_mae_ceiling', DEFAULT_MLOPS_CONFIG['reconciliation_mae_ceiling'])
+
+    if not target_weights:
+        context['reconciliation_mae'] = float('inf')
+        context['recon_passed'] = False
+        context['reconciliation_evidence_status'] = 'MISSING_TARGET_WEIGHTS'
+        logger.critical("Reconciliation rejected because no target portfolio evidence was available.")
+        return context
+
+    if not target_weights:
+        context['reconciliation_mae'] = float('inf')
+        context['recon_passed'] = False
+        context['reconciliation_evidence_status'] = 'MISSING_TARGET_WEIGHTS'
+        logger.critical("Reconciliation rejected because no target portfolio evidence was available.")
+        return context
 
     if is_live:
         gateway = context.get('counterparty_gateway')
@@ -56,6 +82,8 @@ def run_shadow_reconciliation(context: dict) -> dict:
     context['reconciliation_mae'] = mae
     recon_passed = mae <= mae_ceiling
     context['recon_passed'] = recon_passed
+    context['reconciliation_evidence_status'] = 'VERIFIED' if recon_passed else 'POSITION_MISMATCH'
+    context['reconciliation_evidence_status'] = 'VERIFIED' if recon_passed else 'POSITION_MISMATCH'
 
     # logger.info("[OP] Run Deterministic MAE Calculation | [SOURCE] Comparative Asset Portfolios | [RESULT] Current MAE: %.8f, Limits Ceiling: %.8f, Passed: %s | [SIGNIFICANCE] Determines whether execution drift triggers trade hold locks", mae, mae_ceiling, recon_passed)
     logger.info("[操作] 计算确定性持仓 MAE 偏离度 | [来源] 理论与执行双端持仓明细对账 | [结果] 截面 MAE 误差: %.8f, 允许限额: %.8f, 对账通过: %s | [意义] 以高精度数学均值衡量实盘调仓损耗，不平账则立刻对系统下单实施封锁锁死", mae, mae_ceiling, recon_passed)
@@ -92,3 +120,23 @@ def trigger_physical_hard_kill_switch(fsm_engine, counterparty_gateway) -> dict:
         report["returned_cash"] = final_nav
         
     return report
+
+def enforce_reconciliation_gate(context: dict) -> dict:
+    """Freeze order generation on reconciliation failure; liquidate only in live mode."""
+    if context.get("recon_passed") is True:
+        context["trading_halted"] = False
+        context["kill_switch_report"] = None
+        return context
+
+    context["trading_halted"] = True
+    if context.get("is_live") is True:
+        context["kill_switch_report"] = trigger_physical_hard_kill_switch(
+            context.get("fsm_engine"), context.get("counterparty_gateway")
+        )
+    else:
+        context["kill_switch_report"] = {
+            "status": "ORDER_GENERATION_FROZEN",
+            "reason": "RECONCILIATION_FAILED",
+            "liquidation_attempted": False,
+        }
+    return context

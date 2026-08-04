@@ -20,7 +20,13 @@ def execute(context: dict) -> dict:
         "completed_phases": sorted(context.get("_completed_phases", [])),
     }
     missing = [k for k, value in evidence.items() if value is None]
-    decision = "HOLD_FOR_REVIEW" if missing or evidence.get("audit_passed") is not True else "ELIGIBLE_FOR_PHASE_11"
+    required_completed = {"Phase_8.step8_audit_stress_test", "Phase_9.step9_live_mlops"}
+    completed = set(evidence["completed_phases"])
+    prerequisite_gap = sorted(required_completed - completed)
+    if prerequisite_gap:
+        missing.append("completed_phases:" + ",".join(prerequisite_gap))
+    governance_failed = evidence.get("audit_passed") is not True or evidence.get("recon_passed") is not True
+    decision = "HOLD_FOR_REVIEW" if missing or governance_failed else "ELIGIBLE_FOR_PHASE_11"
     payload = {"decision": decision, "missing_evidence": missing, "evidence": evidence}
     path = report_root / f"cio_{run_id}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
