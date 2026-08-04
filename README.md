@@ -139,7 +139,9 @@ Selection, entry, holding, and take-profit now form a regime-gated expert chain 
 
 ```powershell
 Set-Location D:\Quant-Ultra\Quant-4
-D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 21 --fee-rate 0.001 --min-assets 2
+D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 1 --fee-rate 0.001 --min-assets 2 --max-positions 5 --min-exposure 0.15 --max-exposure 0.90 --max-holding-days 20
 ```
 
 输出位于 `Quant-4/reports/advice_portfolio_backtest/`。该脚本模拟执行分析建议以评估历史表现，不发送订单，也不证明未来收益；样本池过窄时，结论只能视为工程验证。
+
+回测按历史交易日逐日重建当日可购入池，只读取信号日及之前的价格、成交量和指标。组合敞口根据合格信号广度、趋势比例、年化波动和组合回撤在上下限内动态变化；候选按风险调整后的引擎评分轮动。达到动态止盈、止损或最长持有期会在下一开盘退出并进入短冷却期，以模拟日线级多次收割，而不是隐含每日无成本再平衡。

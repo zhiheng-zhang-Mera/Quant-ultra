@@ -229,6 +229,27 @@ def test_advice_portfolio_requires_multiple_real_assets():
     else:
         raise AssertionError("single-security advice backtests must be rejected")
 
+def test_dynamic_exposure_is_bounded_and_reacts_to_risk():
+    from Main.advice_portfolio_backtest import dynamic_risk_exposure
+    strong=dynamic_risk_exposure(0.9,0.9,0.12,0.0)
+    stressed=dynamic_risk_exposure(0.2,0.2,0.50,-0.12)
+    assert 0.15 <= stressed < strong <= 0.90
+
+def test_historical_eligibility_uses_only_as_of_rows():
+    from Main.advice_portfolio_backtest import eligible_as_of
+    frame=_market_frame().set_index("date")
+    signal_date=frame.index[99]
+    assert eligible_as_of({"600519.SH":frame},signal_date,60)==["600519.SH"]
+    assert eligible_as_of({"600519.SH":frame},frame.index[30],60)==[]
+
+def test_dynamic_calendar_does_not_require_identical_listing_dates():
+    from Main.advice_portfolio_backtest import UniverseDecision, run_advice_portfolio_backtest
+    first=_market_frame().set_index("date")
+    second=first.iloc[20:].copy()
+    decisions=[UniverseDecision("600519.SH",True,"test"),UniverseDecision("000001.SZ",True,"test")]
+    result=run_advice_portfolio_backtest({"600519.SH":first,"000001.SZ":second},decisions,years=1,lookback=60,min_assets=2,max_holding_days=10)
+    assert result["returns"]["historically_eligible_assets"].min() <= result["returns"]["historically_eligible_assets"].max()
+
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
     first=walk_forward_backtest(original,_small_grid(),train_size=180,test_size=60,embargo=5)
