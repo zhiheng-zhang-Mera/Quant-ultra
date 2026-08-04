@@ -6,6 +6,7 @@ build/
 dist/
 *.egg-info/
 .venv*/
+.tmp/
 .pytest_cache/
 Quant-4/data_cache/
 Quant-4/Phase_Result/
