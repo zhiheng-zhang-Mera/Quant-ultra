@@ -1,6 +1,9 @@
 import os
 import time
 import logging
+import queue
+import threading
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Set
@@ -10,7 +13,7 @@ from Main.us_pipeline import fetch_us_historical, fetch_us_trading_calendar as _
 from Main.data_quality import validate_ohlcv, write_manifest
 
 class FreeDataSourceManager:
-    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None):
+    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None, source_timeout_seconds: float = 30.0):
         self.cache_dir = cache_dir or (PROJECT_ROOT / "data_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir = self.cache_dir / "evidence"
@@ -27,6 +30,31 @@ class FreeDataSourceManager:
         self._init_sources()
         self.DEFAULT_START = "2005-01-01"
         self._failed_symbols: Set[str] = set()
+        self.source_timeout_seconds = max(float(source_timeout_seconds), 0.01)
+        self._disabled_sources: Set[str] = set()
+
+    def _bounded_source_call(self, name: str, func, *args, **kwargs):
+        """Run one provider within a hard wall-clock budget and circuit-break timeouts."""
+        results: queue.Queue = queue.Queue(maxsize=1)
+        def invoke():
+            try:
+                results.put((True, func(*args, **kwargs)))
+            except BaseException as exc:
+                results.put((False, exc))
+        worker = threading.Thread(target=invoke, name=f"market-source-{name}", daemon=True)
+        worker.start()
+        worker.join(self.source_timeout_seconds)
+        if worker.is_alive():
+            self._disabled_sources.add(name)
+            raise TimeoutError(f"{name} exceeded {self.source_timeout_seconds:.2f}s")
+        ok, value = results.get_nowait()
+        if not ok:
+            raise value
+        return value
+
+    def _write_download_audit(self, symbol: str, attempts: list, status: str) -> None:
+        payload = {"symbol": symbol, "status": status, "attempts": attempts, "generated_at": datetime.now().astimezone().isoformat()}
+        (self.evidence_dir / f"{symbol}_download_audit.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_env_file(self):
         p = PROJECT_ROOT / "Main" / ".env"
@@ -89,30 +117,65 @@ class FreeDataSourceManager:
             try:
                 df = pd.read_parquet(c_path)
                 df["date"] = pd.to_datetime(df["date"])
-                mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
-                return df.loc[mask].copy()
-            except:
+                validation = validate_ohlcv(df, symbol)
+                manifests = list(self.evidence_dir.glob(f"{symbol}_*.json"))
+                matching = False
+                for manifest in manifests:
+                    try:
+                        evidence = json.loads(manifest.read_text(encoding="utf-8"))
+                        matching |= evidence.get("valid") is True and evidence.get("sha256") == validation["sha256"] and int(evidence.get("rows", -1)) == len(df)
+                    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                        continue
+                if validation["valid"] and matching:
+                    mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
+                    cached = df.loc[mask].copy()
+                    if not cached.empty:
+                        return cached
+                self._logger.warning("Rejected cache without matching valid evidence: %s", symbol)
+            except Exception:
                 c_path.unlink(missing_ok=True)
         if self.offline_debug:
             return None
+        attempts = []
         for name, func in self._sources:
+            if name in self._disabled_sources:
+                attempts.append({"provider": name, "status": "CIRCUIT_OPEN"})
+                continue
+            started = time.monotonic()
             try:
-                df = func(symbol, self.DEFAULT_START, datetime.now().strftime("%Y-%m-%d"), freq)
+                df = self._bounded_source_call(name, func, symbol, self.DEFAULT_START, datetime.now().strftime("%Y-%m-%d"), freq)
+                elapsed = round(time.monotonic() - started, 3)
+                if df is None or df.empty:
+                    attempts.append({"provider": name, "status": "EMPTY", "elapsed_seconds": elapsed})
+                    continue
                 if df is not None and not df.empty:
                     evidence = validate_ohlcv(df, symbol)
-                    evidence.update({"provider": name, "fetched_at": datetime.now().astimezone().isoformat(), "proxy_configured": bool(self.proxy_url)})
+                    requested = df[(pd.to_datetime(df["date"]) >= pd.to_datetime(start_date)) & (pd.to_datetime(df["date"]) <= pd.to_datetime(end_date))] if "date" in df else pd.DataFrame()
+                    if evidence["valid"] and requested.empty:
+                        evidence["valid"] = False
+                        evidence["errors"].append("no rows in requested date range")
+                    evidence.update({"provider": name, "fetched_at": datetime.now().astimezone().isoformat(), "proxy_configured": bool(self.proxy_url), "elapsed_seconds": elapsed})
                     write_manifest(self.evidence_dir / f"{symbol}_{name}.json", evidence)
                     if not evidence["valid"]:
+                        attempts.append({"provider": name, "status": "INCOMPLETE_OR_INVALID", "elapsed_seconds": elapsed, "errors": evidence["errors"]})
                         self._logger.warning("Rejected invalid dataset %s from %s: %s", symbol, name, evidence["errors"])
                         continue
                     df.to_parquet(c_path, index=False)
                     mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
+                    attempts.append({"provider": name, "status": "ACCEPTED", "elapsed_seconds": elapsed, "rows": len(df), "sha256": evidence["sha256"]})
+                    self._write_download_audit(symbol, attempts, "COMPLETE")
                     # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
                     self._logger.info("由数据源管理器查询A股实时数据 | 来源: %s | 结果: 行数: %d | 意义: 多源回退成功", name, len(df))
                     return df.loc[mask].copy()
-            except:
+            except TimeoutError as exc:
+                attempts.append({"provider": name, "status": "TIMEOUT_CIRCUIT_OPEN", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
+                self._logger.warning("Provider timeout for %s via %s; switching channel", symbol, name)
+                continue
+            except Exception as exc:
+                attempts.append({"provider": name, "status": "ERROR", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
                 continue
         self._failed_symbols.add(symbol)
+        self._write_download_audit(symbol, attempts, "FAILED_ALL_CHANNELS")
         return None
 
     def fetch_index_historical(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
@@ -190,7 +253,7 @@ class FreeDataSourceManager:
         if self.offline_debug:
             return ["600000.SH", "600036.SH", "600519.SH", "000001.SZ", "000002.SZ"]
         try:
-            df = self._ak.stock_zh_a_spot_em()
+            df = self._bounded_source_call("akshare_spot_list", self._ak.stock_zh_a_spot_em)
             syms = [f"{x}.SH" if str(x).startswith("6") else f"{x}.SZ" for x in df["代码"] if len(str(x)) == 6]
             if syms:
                 pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
@@ -198,7 +261,7 @@ class FreeDataSourceManager:
         except: pass
         if hasattr(self, "_ak"):
             try:
-                frame = self._ak.stock_info_a_code_name()
+                frame = self._bounded_source_call("akshare_static_list", self._ak.stock_info_a_code_name)
                 code_col = next((c for c in frame.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
                 if code_col is not None:
                     syms = []
@@ -214,14 +277,16 @@ class FreeDataSourceManager:
                 pass
         if hasattr(self, "_bs"):
             try:
-                self._bs.login()
-                result = self._bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+                def baostock_codes():
+                    self._bs.login()
+                    result = self._bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+                    values = []
+                    while result.next(): values.append(result.get_row_data()[0])
+                    return values
                 codes = []
-                while result.next():
-                    raw = result.get_row_data()[0]
+                for raw in self._bounded_source_call("baostock_stock_list", baostock_codes):
                     exchange, code = raw.split(".", 1)
-                    if len(code) == 6 and code.isdigit():
-                        codes.append(f"{code}.{exchange.upper()}")
+                    if len(code) == 6 and code.isdigit(): codes.append(f"{code}.{exchange.upper()}")
                 syms = sorted(set(codes))
                 if len(syms) >= 500:
                     pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
@@ -230,7 +295,7 @@ class FreeDataSourceManager:
                 pass
         if hasattr(self, "_ts_pro"):
             try:
-                df_ts = self._ts_pro.stock_basic(list_status='L', fields='ts_code')
+                df_ts = self._bounded_source_call("tushare_stock_list", self._ts_pro.stock_basic, list_status='L', fields='ts_code')
                 if df_ts is not None and not df_ts.empty:
                     syms = [s for s in df_ts['ts_code'].tolist() if len(s.split(".")[0]) == 6 and not s.startswith("8")]
                     if syms:
@@ -239,7 +304,7 @@ class FreeDataSourceManager:
             except: pass
         if hasattr(self, "_ef"):
             try:
-                df_ef = self._ef.stock.get_realtime_quotes()
+                df_ef = self._bounded_source_call("efinance_stock_list", self._ef.stock.get_realtime_quotes)
                 if df_ef is not None and not df_ef.empty:
                     code_col = '股票代码' if '股票代码' in df_ef.columns else ('代码' if '代码' in df_ef.columns else None)
                     if code_col:
@@ -259,7 +324,7 @@ class FreeDataSourceManager:
         active = set(self.fetch_stock_list())
         if not self.offline_debug and hasattr(self, "_ak"):
             try:
-                etfs = self._ak.fund_etf_spot_em()
+                etfs = self._bounded_source_call("akshare_etf_list", self._ak.fund_etf_spot_em)
                 code_col = next((c for c in etfs.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
                 if code_col is not None:
                     for raw in etfs[code_col].astype(str):
@@ -271,7 +336,7 @@ class FreeDataSourceManager:
         if include_delisted and not self.offline_debug and hasattr(self, "_ak"):
             for method_name in ("stock_info_sh_delist", "stock_info_sz_delist"):
                 try:
-                    frame = getattr(self._ak, method_name)()
+                    frame = self._bounded_source_call(f"akshare_{method_name}", getattr(self._ak, method_name))
                     code_col = next((c for c in frame.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
                     if code_col is None:
                         continue

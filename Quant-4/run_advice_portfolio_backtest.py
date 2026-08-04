@@ -22,6 +22,7 @@ def main() -> int:
     parser.add_argument("--minimum-stock-coverage", type=int, default=1000, help="ETF histories cannot substitute for broad stock coverage")
     parser.add_argument("--cache-only", action="store_true", help="Diagnostic only: do not refresh the broad market cache")
     parser.add_argument("--download-workers", type=int, default=4)
+    parser.add_argument("--source-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--max-positions", type=int, default=5)
     parser.add_argument("--min-exposure", type=float, default=0.15)
     parser.add_argument("--max-exposure", type=float, default=0.90)
@@ -36,7 +37,7 @@ def main() -> int:
     if not args.cache_only:
         end = pd.Timestamp.now().normalize()
         start = end - pd.DateOffset(years=args.years + 2)
-        refresh_audit = refresh_full_market_cache(args.cache_dir, str(start.date()), str(end.date()), args.download_workers, prefixes, args.minimum_market_coverage, args.minimum_stock_coverage)
+        refresh_audit = refresh_full_market_cache(args.cache_dir, str(start.date()), str(end.date()), args.download_workers, prefixes, args.minimum_market_coverage, args.minimum_stock_coverage, args.source_timeout_seconds)
     frames, audit = discover_real_universe(args.cache_dir, min_rows=max(args.lookback * 2, 504), excluded_prefixes=prefixes)
     stock_coverage = sum(symbol.split(".")[0].startswith(("0", "6")) and not symbol.split(".")[0].startswith(("15", "16")) for symbol in frames)
     if stock_coverage < args.minimum_stock_coverage:

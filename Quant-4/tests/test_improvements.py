@@ -1,5 +1,6 @@
 import sys
 import json
+import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -264,6 +265,35 @@ def test_full_market_refresh_fails_before_download_when_stock_coverage_is_thin(t
         assert "stocks=" in str(exc)
     else:
         raise AssertionError("undersized stock coverage must fail closed")
+
+def test_market_source_timeout_switches_channel_and_writes_audit(tmp_path):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager=FreeDataSourceManager(cache_dir=tmp_path,offline_debug=True,source_timeout_seconds=.01)
+    manager.offline_debug=False
+    def slow(*args):
+        time.sleep(.1)
+        return _market_frame()
+    manager._sources=[("slow",slow),("fast",lambda *args:_market_frame())]
+    result=manager.fetch_historical("600519.SH","2024-01-01","2024-04-09")
+    assert result is not None and len(result)==100
+    audit=json.loads((tmp_path/"evidence"/"600519.SH_download_audit.json").read_text(encoding="utf-8"))
+    assert [item["status"] for item in audit["attempts"]]==["TIMEOUT_CIRCUIT_OPEN","ACCEPTED"]
+    assert "slow" in manager._disabled_sources
+
+def test_stock_list_timeout_switches_to_static_channel(tmp_path):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager=FreeDataSourceManager(cache_dir=tmp_path,offline_debug=True,source_timeout_seconds=.01)
+    manager.offline_debug=False
+    class FakeAk:
+        def stock_zh_a_spot_em(self):
+            time.sleep(.1)
+            return pd.DataFrame()
+        def stock_info_a_code_name(self):
+            return pd.DataFrame({"code":[f"{600000+i:06d}" for i in range(600)]})
+    manager._ak=FakeAk()
+    symbols=manager.fetch_stock_list()
+    assert len(symbols)==600
+    assert "akshare_spot_list" in manager._disabled_sources
 
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
