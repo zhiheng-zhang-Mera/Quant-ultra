@@ -13,6 +13,7 @@ from Phase_7.config import (
 from Phase_7.market_utils import get_prices_for_date, get_previous_close_price
 from Phase_7.risk_guard import compute_individual_position_limit
 from Phase_7.execution_fsm import process_state_4_execution, process_state_5_equity, process_state_6_reconciliation
+from Main.trading_costs import explicit_order_fees, is_etf, merged_cost_config
 
 logger = logging.getLogger("FSMBacktest.Engine")
 
@@ -31,6 +32,7 @@ class FSMEngine:
         self.nav_series = []
         self.daily_returns_list = []
         self.violations_list = []
+        self.cost_ledger = {"commission": 0.0, "exchange_fee": 0.0, "regulatory_fee": 0.0, "stamp_tax": 0.0, "slippage": 0.0, "management_fee": 0.0}
 
         # 停牌相关
         self.halt_counter = {sym: 0 for sym in self.assets}
@@ -126,6 +128,12 @@ class FSMEngine:
         self.config.setdefault('management_fee', DEFAULT_MANAGEMENT_FEE)
         self.config.setdefault('stamp_tax', DEFAULT_STAMP_TAX)
         self.config.setdefault('slippage_bps', DEFAULT_SLIPPAGE_BPS)
+        self.config.setdefault('commission_rate', 0.00025)
+        self.config.setdefault('minimum_commission', 5.0)
+        self.config.setdefault('exchange_fee_rate', 0.0000341)
+        self.config.setdefault('regulatory_fee_rate', 0.00002)
+        self.config.setdefault('slippage_rate', DEFAULT_SLIPPAGE_BPS)
+        self.config.setdefault('etf_annual_management_fee', 0.005)
         self.config.setdefault('gap_up_threshold', GAP_UP_THRESHOLD)
         self.config.setdefault('max_single_ticket_prop', MAX_SINGLE_TICKET_PROP)
         self.config.setdefault('star_market_lot', STAR_MARKET_LOT)
@@ -163,13 +171,16 @@ class FSMEngine:
         adv = self.bus.query_by_pit(sym, self.current_date, "adv")
         adv = adv if (adv is not None and adv > 0) else 1e7
         turnover = (shares * price) / adv
-        impact = 0.001 * (turnover ** 0.5)  # 使用静态冲击系数
-        exec_price = price * (1.0 - impact)  # 卖出时价格向下偏移
+        impact = 0.001 * (turnover ** 0.5)
+        slippage = float(merged_cost_config(self.config)['slippage_rate'])
+        exec_price = price * (1.0 - impact - slippage)
         cost = shares * exec_price
-        fee = (self.config['handling_fee'] + self.config['management_fee']) * cost
-        stamp = self.config['stamp_tax'] * cost
-        self.cash += (cost - fee - stamp)
+        fees = explicit_order_fees(cost, "sell", symbol=sym, config=self.config)
+        self.cash += cost - fees['total']
         self.holdings[sym] -= shares
+        for key in ("commission", "exchange_fee", "regulatory_fee", "stamp_tax"):
+            self.cost_ledger[key] += fees[key]
+        self.cost_ledger["slippage"] += shares * price * (impact + slippage)
         logger.debug("[SELL] %s %d shares @ %.4f (impact %.4f)", sym, shares, exec_price, impact)
 
     def run_engine_pipeline(self):
@@ -187,6 +198,12 @@ class FSMEngine:
 
             # ---- 1. 获取价格 ----
             prices = get_prices_for_date(self.assets, date, self.bus, self.price_cache)
+            daily_management = sum(
+                self.holdings[sym] * (prices.get(sym) or 0.0) * self.config['etf_annual_management_fee'] / 252.0
+                for sym in self.assets if is_etf(sym)
+            )
+            self.cash -= daily_management
+            self.cost_ledger['management_fee'] += daily_management
 
             # ---- 2. 原始目标权重 ----
             raw_weights = self.daily_weights.loc[date].to_dict()
@@ -263,6 +280,7 @@ class FSMEngine:
         self.context['daily_returns'] = pd.Series(dict(self.daily_returns_list))
         self.context['violations'] = pd.Series(dict(self.violations_list))
         self.context['final_nav'] = self.nav_series[-1] if self.nav_series else self.cash
+        self.context['transaction_costs'] = {**self.cost_ledger, "total": float(sum(self.cost_ledger.values()))}
         self.context['backtest_ready'] = True
 
 
@@ -285,6 +303,7 @@ def execute(pipeline_context: dict) -> dict:
         'daily_returns': pipeline_context['daily_returns'],
         'violations': pipeline_context['violations'],
         'final_nav': float(pipeline_context['final_nav']),
+        'transaction_costs': pipeline_context['transaction_costs'],
         'fsm_engine': engine,          # 供后续阶段使用
         'nav_history': pipeline_context['daily_nav'].to_dict(),
     })

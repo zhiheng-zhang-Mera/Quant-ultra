@@ -5,6 +5,7 @@ Quant-Ultra Flow - Step 7.4-7.6: FSM Order Matching & Bi-Party Reconciliation En
 import logging
 import numpy as np
 from Phase_7.config import STATIC_KAPPA_IMPACT, STATIC_ALPHA_IMPACT, DEFAULT_RESIDUAL_RATE
+from Main.trading_costs import explicit_order_fees, merged_cost_config
 
 logger = logging.getLogger("FSMBacktest.ExecutionFSM")
 
@@ -15,8 +16,6 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
     """
     total_nav = engine.calc_nav()
     target_values = {sym: total_nav * target_weights.get(sym, 0.0) for sym in engine.assets}
-    fee_rate = engine.config.get('handling_fee', 0.0000487) + engine.config.get('management_fee', 0.00002)
-    stamp_rate = engine.config.get('stamp_tax', 0.0005)
 
     # ---- 1. 退市资产强制清算 ----
     for sym in engine.assets:
@@ -96,12 +95,16 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
             adv = adv if (adv is not None and adv > 0) else 1e7
             turnover = (buy_shares * price) / adv
             slippage_impact = STATIC_KAPPA_IMPACT * (turnover ** STATIC_ALPHA_IMPACT)
-            exec_price = price * (1.0 + slippage_impact)  # 基础滑点已在配置中，也可额外加
+            base_slippage = float(merged_cost_config(engine.config)['slippage_rate'])
+            exec_price = price * (1.0 + slippage_impact + base_slippage)
             cost = buy_shares * exec_price
-            fee = fee_rate * cost
-            if engine.cash >= cost + fee:
-                engine.cash -= (cost + fee)
+            fees = explicit_order_fees(cost, "buy", symbol=sym, config=engine.config)
+            if engine.cash >= cost + fees['total']:
+                engine.cash -= cost + fees['total']
                 engine.holdings[sym] += buy_shares
+                for key in ("commission", "exchange_fee", "regulatory_fee", "stamp_tax"):
+                    engine.cost_ledger[key] += fees[key]
+                engine.cost_ledger["slippage"] += buy_shares * price * (slippage_impact + base_slippage)
                 logger.debug("[BUY] %s %d shares @ %.4f (impact %.4f)", sym, buy_shares, exec_price, slippage_impact)
 
     # logger.info("[EXEC] Order matching completed for %d assets", len(engine.assets))

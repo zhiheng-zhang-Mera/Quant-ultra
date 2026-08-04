@@ -12,6 +12,7 @@ from Main.walk_forward_backtest import walk_forward_backtest
 from Main.orchestration_guard import build_run_fingerprint, validate_orchestration
 from Main.parameter_governance import validate_parameter_proposal
 from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA, resolve_phase_name, validate_phase_contract
+from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -39,8 +40,10 @@ def test_recommendation_has_required_four_outputs():
     rec=recommendation(_market_frame(),model_weight=.08)
     assert rec["qualified"]
     assert 0 < rec["entry_price_low"] <= rec["entry_price_high"]
-    assert 0 <= rec["suggested_weight"] <= .10
-    assert .08 <= rec["take_profit_pct"] <= .30
+    assert 0 <= rec["suggested_weight"] <= .08
+    assert .03 <= rec["take_profit_pct"] <= .12
+    assert rec["net_take_profit_pct"] >= rec["minimum_net_profit_pct"]
+    assert rec["entry_price_high"] <= rec["last_price"]
 
 def test_holding_advice_reconciles_cash_position_and_action():
     result=holding_advice(_market_frame(),100000,1000,10,model_weight=.08)
@@ -48,6 +51,16 @@ def test_holding_advice_reconciles_cash_position_and_action():
     assert result["target_quantity"] % 100 == 0
     assert result["action"] in {"分批止盈","减仓","按批次买入","减仓至目标","持有观察"}
     assert result["action_reason"]
+    assert result["estimated_sell_fees_at_take_profit"] > 0
+
+def test_cost_model_applies_minimum_commission_and_sell_stamp_tax():
+    buy = explicit_order_fees(1000, "buy", symbol="600519.SH")
+    sell = explicit_order_fees(1000, "sell", symbol="600519.SH")
+    etf_sell = explicit_order_fees(1000, "sell", symbol="510300.SH")
+    assert buy["commission"] == 5.0
+    assert sell["stamp_tax"] > 0
+    assert etf_sell["stamp_tax"] == 0
+    assert round_trip_friction_rate(10000, symbol="510300.SH", holding_days=20) > 0
 
 def test_candidate_report_is_readable_and_hashed(tmp_path):
     rec=recommendation(_market_frame(),model_weight=.08)

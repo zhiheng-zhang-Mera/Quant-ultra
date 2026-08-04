@@ -9,8 +9,14 @@ from datetime import datetime
 from typing import Optional
 import concurrent.futures
 from Phase_6.utils import _compute_individual_shares_upper
+from Main.trading_costs import merged_cost_config
 
 logger = logging.getLogger("PositionSizing.ConvexOptimizer")
+
+def feasible_investment_floor(configured_floor: float, upper_bounds: np.ndarray, investable_cap: float) -> float:
+    """Return a conservative lower bound that cannot exceed position capacity."""
+    capacity = float(np.maximum(np.asarray(upper_bounds, dtype=float), 0.0).sum())
+    return float(min(max(configured_floor, 0.0), max(investable_cap, 0.0), capacity * 0.90))
 
 def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev_weights: Optional[np.ndarray] = None) -> np.ndarray:
     assets = context['assets']
@@ -22,7 +28,13 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
     config = context.get('config', {})
     gamma_risk = config.get('gamma_risk_initial', 2.5)
     sector_limit = config.get('sector_limit', 0.3)
-    trans_cost = config.get('transaction_cost_coeff', 0.0003)
+    costs = merged_cost_config(config)
+    explicit_round_trip = 2 * (costs['commission_rate'] + costs['exchange_fee_rate'] + costs['regulatory_fee_rate'] + costs['slippage_rate']) + costs['stamp_tax']
+    trans_cost = max(config.get('transaction_cost_coeff', 0.0003), explicit_round_trip)
+    cash_buffer = float(np.clip(config.get('cash_buffer_weight', 0.05), 0.0, 0.40))
+    configured_min_invested = float(np.clip(config.get('minimum_invested_weight', 0.10), 0.0, 1.0 - cash_buffer))
+    max_turnover = float(max(config.get('max_daily_turnover', 0.25), 0.0))
+    concentration_coeff = float(max(config.get('concentration_penalty', 0.02), 0.0))
     
     if R_BL is None or Sigma is None: raise RuntimeError("Pre-conditions metrics missing.")
     w_prev = np.array(prev_weights) if prev_weights is not None else np.zeros(n)
@@ -36,6 +48,7 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         upper_bounds = np.array(list(executor.map(_get_upper, assets)))
+    min_invested = feasible_investment_floor(configured_min_invested, upper_bounds, 1.0 - cash_buffer)
 
     # 行业映射提取
     if 'sector_map' not in context:
@@ -60,13 +73,16 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         Sigma_param = cp.Parameter((n, n), PSD=True) # 刚性声明半正定，通过 DCP 校验
         w_prev_param = cp.Parameter(n)
         upper_bounds_param = cp.Parameter(n, nonneg=True)
+        turnover_budget_param = cp.Parameter(nonneg=True)
+        min_invested_param = cp.Parameter(nonneg=True)
         
         # 定义标准目标效用公式 (对参数而非实际数据进行操作)
         expected_return = R_BL_param.T @ w
         risk_penalty = (gamma_risk / 2) * cp.quad_form(w, Sigma_param)
         turnover_penalty = trans_cost * cp.norm(w - w_prev_param, 1)
+        concentration_penalty = concentration_coeff * cp.sum_squares(w)
         
-        utility = expected_return - risk_penalty - turnover_penalty
+        utility = expected_return - risk_penalty - turnover_penalty - concentration_penalty
         
         # 构建静态仿射行业约束矩阵
         unique_sectors = list(set(sector_map.values()))
@@ -79,9 +95,11 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
                 
         constraints = [
             w >= 0,
-            cp.sum(w) == 1.0,
+            cp.sum(w) <= 1.0 - cash_buffer,
+            cp.sum(w) >= min_invested_param,
             w <= upper_bounds_param,
-            A_sec @ w <= sector_limit
+            A_sec @ w <= sector_limit,
+            cp.norm1(w - w_prev_param) <= turnover_budget_param
         ]
 
         # 极其昂贵的编译动作，仅执行这一次
@@ -95,7 +113,9 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
             'R_BL_param': R_BL_param,
             'Sigma_param': Sigma_param,
             'w_prev_param': w_prev_param,
-            'upper_bounds_param': upper_bounds_param
+            'upper_bounds_param': upper_bounds_param,
+            'turnover_budget_param': turnover_budget_param,
+            'min_invested_param': min_invested_param
         }
 
     # ------------------------------------------------------------------------------
@@ -108,6 +128,9 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
     cache['R_BL_param'].value = R_BL
     cache['w_prev_param'].value = w_prev
     cache['upper_bounds_param'].value = upper_bounds
+    cache['min_invested_param'].value = min_invested
+    initial_allowance = max(0.0, min_invested - float(np.sum(w_prev)))
+    cache['turnover_budget_param'].value = max_turnover + initial_allowance
     
     # 🛡️ 刚性微调协方差：强制对称化并施加微量对角扰动，保证 Float64 精度下绝对半正定，防止求解器中途崩溃
     Sigma_sym = (Sigma + Sigma.T) / 2.0

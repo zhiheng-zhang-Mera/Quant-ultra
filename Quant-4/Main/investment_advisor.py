@@ -28,9 +28,10 @@ def build_pipeline_recommendations(context: dict, top_n: int = 20) -> pd.DataFra
             frame = manager.fetch_historical(str(symbol), str(start), str(end))
             if frame is None or len(frame) < 60:
                 continue
-            rec = recommendation(frame, model_weight=float(latest_weights[symbol]))
+            asset_type = infer_kind(str(symbol))
+            rec = recommendation(frame, model_weight=float(latest_weights[symbol]), asset_type=asset_type, cost_config=context.get("config"))
             if rec["qualified"]:
-                rows.append({"symbol": symbol, "asset_type": infer_kind(str(symbol)), **rec})
+                rows.append({"symbol": symbol, "asset_type": asset_type, **rec})
         except Exception:
             continue
     if not rows:
@@ -64,7 +65,7 @@ def analyze_holding(manager, total_capital: float, code: str, quantity: int, ave
     frame = manager.fetch_historical(symbol, str(end - timedelta(days=550)), str(end))
     if frame is None or len(frame) < 60:
         raise RuntimeError(f"{symbol} 可验证行情不足60条")
-    return {"symbol": symbol, "asset_type": normalized_kind, **holding_advice(frame, total_capital, quantity, average_cost)}
+    return {"symbol": symbol, "asset_type": normalized_kind, **holding_advice(frame, total_capital, quantity, average_cost, asset_type=normalized_kind)}
 
 
 def save_holding_report(result: dict, report_dir: Path) -> Path:
