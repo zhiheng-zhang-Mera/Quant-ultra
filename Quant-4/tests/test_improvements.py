@@ -312,6 +312,19 @@ def test_timed_out_channel_and_symbol_reenter_after_cooldown(tmp_path):
     assert "recovering" not in manager._disabled_sources
     assert "600519.SH" not in manager._failed_symbols
 
+def test_ollama_setup_is_check_only(monkeypatch):
+    import Phase_10.env_setup as setup
+    monkeypatch.setattr(setup.shutil,"which",lambda name:None)
+    monkeypatch.setattr(setup,"urlopen",lambda *args,**kwargs:(_ for _ in ()).throw(OSError("offline")))
+    result=setup.setup_all()
+    assert result["framework"]["check_only"] and not result["framework"]["installed"]
+    assert result["model"]["check_only"] and not result["model"]["service_reachable"]
+
+def test_dependency_installer_does_not_install_ollama():
+    import Main.install_deps as installer
+    assert "ollama" not in installer.IMPORT_CHECKS
+    assert installer.REQUIREMENTS.exists()
+
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
     first=walk_forward_backtest(original,_small_grid(),train_size=180,test_size=60,embargo=5)

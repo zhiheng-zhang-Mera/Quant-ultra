@@ -1,241 +1,141 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Quant-Ultra + Conformal-BL 项目依赖自动检查与安装脚本（增强版）
-用法: python install_deps.py [--mirror https://pypi.tuna.tsinghua.edu.cn/simple] [--scan] [--no-upgrade]
-特性: 每次运行自动更新 pip 和所有已安装库，额外安装 akshare、baostock
-"""
+"""One-command, isolated dependency installer for Quant-Ultra.
 
+Ollama and the configured local model are inspected only. This script never
+installs Ollama, starts its service, or pulls/removes a model.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import os
+from pathlib import Path
+import shutil
 import subprocess
 import sys
-import importlib
-import re
-import os
-import argparse
-from pathlib import Path
+from datetime import datetime
+from urllib.request import urlopen
 
-import pandas_market_calendars
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PROJECT_ROOT.parent
+REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
+REPORT_PATH = PROJECT_ROOT / "reports" / "setup" / "setup_report.json"
 
-## !! 注意：在terminal中先使用代码 nvidia-smi 查看GPU状态，确保CUDA驱动正常，查看CUDA版本是否与cupy兼容，否则可能导致GPU加速失败。
-## !! 然后使用命令 pip install cupy-cuda12x（根据CUDA版本若12.x安装对应的cupy版本）安装cupy库，以启用GPU加速功能。
-## !! 使用 指令 ： pip list | findstr cupy 检查cupy是否安装成功，若未安装成功请检查CUDA驱动和版本兼容性，不允许cupy纯净版或不同版本，防止冲突。
+IMPORT_CHECKS = {
+    "numpy": "numpy", "pandas": "pandas", "scipy": "scipy",
+    "scikit-learn": "sklearn", "lightgbm": "lightgbm",
+    "statsmodels": "statsmodels", "cvxpy": "cvxpy", "pyarrow": "pyarrow",
+    "PyYAML": "yaml", "pytz": "pytz", "requests": "requests",
+    "tenacity": "tenacity", "akshare": "akshare", "baostock": "baostock",
+    "efinance": "efinance", "yfinance": "yfinance", "tushare": "tushare",
+    "Cython": "Cython", "pytest": "pytest", "tqdm": "tqdm",
+    "matplotlib": "matplotlib", "tabulate": "tabulate",
+    "pandas-market-calendars": "pandas_market_calendars", "psutil": "psutil",
+    "optuna": "optuna", "hmmlearn": "hmmlearn", "transformers": "transformers",
+    "torch": "torch", "plotly": "plotly",
+    "fancyimpute": "fancyimpute", "chinese-calendar": "chinese_calendar",
+}
 
-# 项目所需的核心第三方库（根据代码实际导入情况整理 + 新增）
-REQUIRED_LIBRARIES = [
-    "numpy",            # 数值计算库
-    "pandas",           # 数据处理库
-    "pytz",             # 时区处理库
-    "lightgbm",         # 机器学习库
-    "scikit-learn",     # 机器学习库
-    "statsmodels",      # 统计建模库
-    "scipy",            # 数值计算库
-    "cvxpy",            # 凸优化库
-    "matplotlib",       # 绘图库
-    "tabulate",         # 表格格式化库
-    "pandas_market_calendars",# 交易日历库
-    "pyyaml",           # YAML 处理库
-    "requests",         # HTTP 请求库
-    "tenacity",         # 重试库
-    "pyarrow",          # 数据处理库   
-    'psutil',           # 系统监控库
-    "akshare",          # 金融数据接口
-    "baostock",         # 金融数据接口
-    "tushare",          # 金融数据接口
-    'efinance',         # 金融数据接口
-    'yfinance',         # 金融数据接口
-]
 
-# 标准库白名单（不安装）
-STDLIB = set(sys.stdlib_module_names) if hasattr(sys, 'stdlib_module_names') else set([
-    'abc', 'argparse', 'array', 'ast', 'asyncio', 'base64',
-    'binascii', 'bisect', 'builtins', 'bz2', 'calendar', 'codecs',
-    'collections', 'concurrent', 'configparser', 'contextlib', 'copy',
-    'csv', 'ctypes', 'datetime', 'decimal', 'difflib', 'dis', 'doctest',
-    'email', 'encodings', 'enum', 'errno', 'filecmp', 'fileinput',
-    'fnmatch', 'functools', 'gc', 'getopt', 'getpass', 'gettext',
-    'glob', 'hashlib', 'heapq', 'hmac', 'html', 'http', 'importlib',
-    'inspect', 'io', 'itertools', 'json', 'keyword', 'linecache',
-    'locale', 'logging', 'math', 'mimetypes', 'mmap', 'multiprocessing',
-    'netrc', 'numbers', 'operator', 'optparse', 'os', 'pathlib',
-    'pickle', 'platform', 'pprint', 'profile', 'pstats', 'pty',
-    'queue', 'random', 're', 'reprlib', 'runpy', 'sched', 'secrets',
-    'select', 'shelve', 'shlex', 'shutil', 'signal', 'socket',
-    'socketserver', 'sqlite3', 'ssl', 'stat', 'statistics', 'string',
-    'struct', 'subprocess', 'sys', 'sysconfig', 'tarfile', 'tempfile',
-    'textwrap', 'threading', 'time', 'timeit', 'tkinter', 'token',
-    'traceback', 'types', 'typing', 'unicodedata', 'unittest', 'urllib',
-    'uuid', 'venv', 'warnings', 'weakref', 'webbrowser', 'xml', 'xmlrpc',
-    'zipfile', 'zipimport', 'zlib'
-])
+def run(command: list[str], cwd: Path = PROJECT_ROOT, check: bool = True) -> subprocess.CompletedProcess:
+    print("[setup]", subprocess.list2cmdline(command), flush=True)
+    return subprocess.run(command, cwd=cwd, check=check, text=True)
 
-def get_imported_libs(project_root='.'):
-    imported = set()
-    py_files = Path(project_root).rglob('*.py')
-    for py_file in py_files:
-        if py_file.name.startswith('install_deps'):
-            continue
+
+def venv_python(venv: Path) -> Path:
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def configured_model() -> str:
+    path = PROJECT_ROOT / "Main" / "default_param.yaml"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("local_llm_model:"):
+            return line.split(":", 1)[1].strip().strip("\"'")
+    return "qwen3-coder:30b"
+
+
+def inspect_ollama(model: str) -> dict:
+    result = {"check_only": True, "executable": None, "version": None, "service_reachable": False, "configured_model": model, "model_present": False, "models": []}
+    executable = shutil.which("ollama")
+    result["executable"] = executable
+    if executable:
         try:
-            with open(py_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            matches = re.findall(r'^(?:from|import)\s+([a-zA-Z0-9_]+)', content, re.MULTILINE)
-            for m in matches:
-                if m not in STDLIB and not m.startswith('_'):
-                    imported.add(m)
-        except Exception:
-            continue
-    return imported
-
-def upgrade_pip_and_all_packages(mirror=None):
-    """升级 pip 以及所有已安装的第三方库"""
-    print("=" * 60)
-    print("开始升级 pip 和所有已安装的第三方库...")
-    print("=" * 60)
-
-    # 1. 升级 pip 自身
-    pip_cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip']
-    if mirror:
-        pip_cmd.extend(['-i', mirror])
+            version = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5, check=False)
+            result["version"] = (version.stdout or version.stderr).strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result["version_error"] = str(exc)
     try:
-        subprocess.check_call(pip_cmd)
-        print("✓ pip 升级成功")
-    except subprocess.CalledProcessError as e:
-        print(f"✗ pip 升级失败: {e}")
+        with urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        names = sorted({str(item.get("name") or item.get("model")) for item in payload.get("models", []) if item.get("name") or item.get("model")})
+        result.update({"service_reachable": True, "models": names, "model_present": any(name == model or name.startswith(model + ":") for name in names)})
+    except Exception as exc:
+        result["service_error"] = str(exc)
+    return result
 
-    # 2. 获取所有已安装的第三方库（排除标准库、setuptools、wheel、pip 本身等）
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', 'list', '--format=freeze'],
-            capture_output=True, text=True, check=True
-        )
-        installed_packages = []
-        for line in result.stdout.splitlines():
-            pkg_name = line.split('==')[0].strip()
-            # 跳过一些基础包，避免冲突
-            if pkg_name.lower() in ('pip', 'setuptools', 'wheel', 'distribute'):
-                continue
-            installed_packages.append(pkg_name)
-        print(f"发现 {len(installed_packages)} 个第三方库，开始逐个升级...")
-    except subprocess.CalledProcessError as e:
-        print(f"✗ 获取已安装列表失败: {e}")
-        return
 
-    # 3. 逐个升级（若指定镜像则使用）
-    success_count = 0
-    fail_count = 0
-    for pkg in installed_packages:
-        print(f"  升级 {pkg} ...", end=f" 已完成 {success_count + fail_count} ")
-        cmd = [sys.executable, '-m', 'pip', 'install', '--upgrade']
-        if mirror:
-            cmd.extend(['-i', mirror])
-        cmd.append(pkg)
+def verify_imports() -> tuple[list[str], dict[str, str]]:
+    passed, failed = [], {}
+    for distribution, module in IMPORT_CHECKS.items():
         try:
-            subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("✓")
-            success_count += 1
-        except subprocess.CalledProcessError:
-            print("✗")
-            fail_count += 1
+            importlib.import_module(module)
+            passed.append(distribution)
+        except Exception as exc:
+            failed[distribution] = f"{type(exc).__name__}: {exc}"
+    return passed, failed
 
-    print(f"升级完成: 成功 {success_count} 个，失败 {fail_count} 个")
-    return success_count, fail_count
 
-def check_and_install(packages, mirror=None):
-    installed = []
-    missing = []
-    failed = []
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Install and verify all Quant-Ultra Python dependencies")
+    parser.add_argument("--venv", type=Path, default=REPOSITORY_ROOT / ".venv-full")
+    parser.add_argument("--mirror")
+    parser.add_argument("--inside-venv", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--no-pip-upgrade", action="store_true")
+    return parser.parse_args()
 
-    print("=" * 60)
-    print("开始检查依赖库是否完整安装...")
-    print("=" * 60)
 
-    pip_name_map = {
-        'sklearn': 'scikit-learn',
-        'cvxpy': 'cvxpy',
-        'statsmodels': 'statsmodels',
-        'lightgbm': 'lightgbm',
-        'pytz': 'pytz',
-        'numpy': 'numpy',
-        'pandas': 'pandas',
-        'scipy': 'scipy',
-        'matplotlib': 'matplotlib',
-        'tabulate': 'tabulate',
-        'pandas_market_calendars': 'pandas_market_calendars',
-        'yaml': 'pyyaml',
-        'requests': 'requests',
-        'pyarrow': 'pyarrow',
-        'psutil': 'psutil',
-        'akshare': 'akshare',      # 新增
-        'baostock': 'baostock',    # 新增
+def main() -> int:
+    args = parse_args()
+    target = args.venv.resolve()
+    python = venv_python(target)
+    if not args.inside_venv:
+        if not python.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            run([sys.executable, "-m", "venv", str(target)])
+        command = [str(python), str(Path(__file__).resolve()), "--venv", str(target), "--inside-venv"]
+        if args.mirror: command += ["--mirror", args.mirror]
+        if args.skip_tests: command.append("--skip-tests")
+        if args.no_pip_upgrade: command.append("--no-pip-upgrade")
+        return run(command).returncode
+
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pip_base = [sys.executable, "-m", "pip", "install"]
+    if args.mirror: pip_base += ["--index-url", args.mirror]
+    if not args.no_pip_upgrade:
+        run(pip_base + ["--upgrade", "pip", "setuptools", "wheel"])
+    run(pip_base + ["--requirement", str(REQUIREMENTS)])
+    pip_check = run([sys.executable, "-m", "pip", "check"], check=False)
+    passed, failed = verify_imports()
+    compile_check = run([sys.executable, "-m", "compileall", "-q", "Main", "Phase_1", "Phase_2", "Phase_3", "Phase_4", "Phase_5", "Phase_6", "Phase_7", "Phase_8", "Phase_9", "Phase_10", "Phase_11"], check=False)
+    test_code = None
+    if not args.skip_tests:
+        test_code = run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_improvements.py"], check=False).returncode
+    ollama = inspect_ollama(configured_model())
+    success = pip_check.returncode == 0 and not failed and compile_check.returncode == 0 and test_code in (None, 0)
+    report = {
+        "generated_at": datetime.now().astimezone().isoformat(), "success": success,
+        "project_root": str(PROJECT_ROOT), "venv": str(target), "python": sys.executable,
+        "requirements": str(REQUIREMENTS), "imports_passed": passed, "imports_failed": failed,
+        "pip_check_exit_code": pip_check.returncode, "compile_exit_code": compile_check.returncode,
+        "test_exit_code": test_code, "ollama": ollama,
+        "notes": ["Ollama/model checks are read-only", "Native Cython build is optional; verified NumPy fallback remains available"],
     }
+    REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if success else 1
 
-    for pkg in packages:
-        if pkg in STDLIB:
-            continue
-        pip_name = pip_name_map.get(pkg, pkg)
-        try:
-            importlib.import_module(pkg)
-            print(f"✓ {pkg} 已安装")
-            installed.append(pkg)
-        except ImportError:
-            print(f"✗ {pkg} 未安装，正在安装...")
-            missing.append(pkg)
-            cmd = [sys.executable, '-m', 'pip', 'install']
-            if mirror:
-                cmd.extend(['-i', mirror])
-            cmd.append(pip_name)
-            try:
-                subprocess.check_call(cmd, stderr=subprocess.STDOUT)
-                print(f"  ✅ {pkg} 安装成功")
-                installed.append(pkg)
-            except subprocess.CalledProcessError:
-                print(f"  ❌ {pkg} 安装失败，请手动安装")
-                failed.append(pkg)
 
-    return installed, missing, failed
-
-def main():
-    parser = argparse.ArgumentParser(description='Quant-Ultra 依赖自动安装（增强版）')
-    parser.add_argument('--mirror', type=str, default=None,
-                        help='指定 pip 镜像源，如 https://pypi.tuna.tsinghua.edu.cn/simple')
-    parser.add_argument('--scan', action='store_true',
-                        help='扫描项目代码自动识别依赖（推荐）')
-    parser.add_argument('--no-upgrade', action='store_true',
-                        help='跳过全局 pip 和所有库的升级（默认会进行升级）')
-    args = parser.parse_args()
-
-    # 1. 升级 pip 和所有已安装库（除非用户明确跳过）
-    if not args.no_upgrade:
-        upgrade_pip_and_all_packages(args.mirror)
-    else:
-        print("已跳过全局升级（--no-upgrade）")
-
-    # 2. 确定需要检查的包列表
-    if args.scan:
-        print("正在扫描项目源代码中的导入...")
-        libs = get_imported_libs()
-        third_party = [lib for lib in libs if not lib.startswith('step') and not lib.startswith('test')]
-        packages = list(set(REQUIRED_LIBRARIES + third_party))
-    else:
-        packages = REQUIRED_LIBRARIES
-
-    print(f"将检查以下库: {', '.join(packages)}")
-
-    # 3. 检查并安装缺失的库
-    installed, missing, failed = check_and_install(packages, args.mirror)
-
-    print("\n" + "=" * 60)
-    print("安装结果汇总")
-    print("=" * 60)
-    print(f"已安装/成功: {len(installed)} 个")
-    if missing:
-        print(f"原缺失但已安装: {len(missing)} 个")
-    if failed:
-        print(f"安装失败: {len(failed)} 个")
-        print("请根据错误信息手动安装这些库。")
-        sys.exit(1)
-    else:
-        print("所有依赖库均已就绪，可以启动项目。")
-        sys.exit(0)
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -49,11 +49,14 @@ Phase 3 还会动态探测本地 Ollama 和 `local_llm_model`。模型存在时�
 
 ```powershell
 Set-Location D:\Quant-Ultra\Quant-4
-$env:TEMP='D:\Quant-Ultra-Env\tmp'
-$env:TMP='D:\Quant-Ultra-Env\tmp'
-D:\Quant-Ultra-Env\venv\Scripts\python.exe -m pip install -r requirements.txt
-D:\Quant-Ultra-Env\venv\Scripts\python.exe Main\main.py --symbols "600519.SH,000001.SZ,510300.SH" --force-recompute --non-interactive
+Set-Location D:\Quant-Ultra
+.\setup.ps1
+D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\Main\main.py --force-recompute --non-interactive
 ```
+
+`setup.ps1` 一键创建或复用 `D:\Quant-Ultra\.venv-full`，安装主引擎、全市场数据源、回测、优化、统计、增强模块和测试所需依赖，并运行导入、`pip check`、编译与单元测试验收。结果写入 `Quant-4/reports/setup/setup_report.json`。可使用 `-Mirror <URL>` 指定 PyPI 镜像、`-SkipTests` 跳过测试、`-NoPipUpgrade` 跳过 pip/setuptools/wheel 升级。
+
+Ollama、Ollama 服务和 `local_llm_model` 只进行只读检查：安装脚本不会安装或启动 Ollama，不会拉取、删除或修改任何本地模型。缺少 Ollama 不会阻止核心分析引擎安装成功。
 
 常用参数：`--only-phase 6` 运行目标及依赖；`--resume-from 6` 从指定阶段继续；`--offline` 只用缓存；`--download-workers 1` 限制并发。报告位于 `Quant-4/reports/runs/<run-id>/`，含双语标题、结论解读、输出摘要、术语表和证据哈希。全部请求阶段结束后，同一目录会自动生成自包含的 `execute_report.html` 和结构化底稿 `execute_report_data.json`，汇总执行结论、资源分配、阶段证据与耗时、治理门禁、成本、净值以及 Phase 11 四阶段主导方法。
 
