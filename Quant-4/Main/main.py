@@ -95,6 +95,7 @@ def run_pipeline(args):
         "rotation_minimum_market_coverage": 500,
         "rotation_minimum_stock_coverage": 1000,
         "market_source_timeout_seconds": 30.0,
+        "market_source_cooldown_seconds": 60.0, "market_source_max_cooldown_seconds": 600.0,
     }
     config = default_config.copy()
     config["phase11_interactive"] = not args.non_interactive
@@ -125,7 +126,7 @@ def run_pipeline(args):
     startup_manifest = write_startup_manifest(PROJECT_ROOT / "reports", RUN_TIMESTAMP, run_fingerprint, fingerprint_material, dag_audit)
 
     # ---- 核心组件 ----
-    data_manager = FreeDataSourceManager(offline_debug=args.offline, source_timeout_seconds=float(config.get("market_source_timeout_seconds", 30.0)))
+    data_manager = FreeDataSourceManager(offline_debug=args.offline, source_timeout_seconds=float(config.get("market_source_timeout_seconds", 30.0)), source_cooldown_seconds=float(config.get("market_source_cooldown_seconds", 60.0)), source_max_cooldown_seconds=float(config.get("market_source_max_cooldown_seconds", 600.0)))
     audit_logger = AuditLogger(LOG_DIR, RUN_TIMESTAMP)
     stage_reporter = StageReporter(PROJECT_ROOT / "reports", RUN_TIMESTAMP, get_git_hash())
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)

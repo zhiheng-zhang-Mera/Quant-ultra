@@ -98,11 +98,11 @@ def refresh_full_market_cache(
     cache_dir: Path, start_date: str, end_date: str, workers: int = 4,
     excluded_prefixes=DEFAULT_EXCLUDED_PREFIXES,
     minimum_market_coverage: int = 500, minimum_stock_coverage: int = 1000,
-    source_timeout_seconds: float = 30.0,
+    source_timeout_seconds: float = 30.0, source_cooldown_seconds: float = 60.0,
 ) -> dict:
     """Query the broad real A-share universe and materialize evidence-backed daily histories."""
     cache_dir = Path(cache_dir)
-    seed = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False, source_timeout_seconds=source_timeout_seconds)
+    seed = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False, source_timeout_seconds=source_timeout_seconds, source_cooldown_seconds=source_cooldown_seconds)
     universe = seed.fetch_full_market_list(include_delisted=True)
     eligible = [s for s in universe if symbol_purchase_eligibility(s, excluded_prefixes)[0]]
     stock_count = sum(asset_type_for_symbol(s) == "stock" for s in eligible)
@@ -112,7 +112,7 @@ def refresh_full_market_cache(
     def fetch(symbol: str) -> tuple[str, bool]:
         manager = getattr(_THREAD_LOCAL, "manager", None)
         if manager is None:
-            manager = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False, source_timeout_seconds=source_timeout_seconds)
+            manager = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False, source_timeout_seconds=source_timeout_seconds, source_cooldown_seconds=source_cooldown_seconds)
             _THREAD_LOCAL.manager = manager
         frame = manager.fetch_historical(symbol, start_date, end_date)
         return symbol, frame is not None and not frame.empty

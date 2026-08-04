@@ -295,6 +295,23 @@ def test_stock_list_timeout_switches_to_static_channel(tmp_path):
     assert len(symbols)==600
     assert "akshare_spot_list" in manager._disabled_sources
 
+def test_timed_out_channel_and_symbol_reenter_after_cooldown(tmp_path):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager=FreeDataSourceManager(cache_dir=tmp_path,offline_debug=True,source_timeout_seconds=.005,source_cooldown_seconds=.02)
+    manager.offline_debug=False
+    calls={"count":0}
+    def recovering(*args):
+        calls["count"]+=1
+        if calls["count"]==1: time.sleep(.03)
+        return _market_frame()
+    manager._sources=[("recovering",recovering)]
+    assert manager.fetch_historical("600519.SH","2024-01-01","2024-04-09") is None
+    time.sleep(.03)
+    result=manager.fetch_historical("600519.SH","2024-01-01","2024-04-09")
+    assert result is not None and len(result)==100
+    assert "recovering" not in manager._disabled_sources
+    assert "600519.SH" not in manager._failed_symbols
+
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
     first=walk_forward_backtest(original,_small_grid(),train_size=180,test_size=60,embargo=5)

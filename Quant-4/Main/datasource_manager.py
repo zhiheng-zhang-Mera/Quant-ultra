@@ -12,8 +12,11 @@ from Main.env_config import PROJECT_ROOT
 from Main.us_pipeline import fetch_us_historical, fetch_us_trading_calendar as _fetch_us_calendar
 from Main.data_quality import validate_ohlcv, write_manifest
 
+class CircuitOpenError(RuntimeError):
+    pass
+
 class FreeDataSourceManager:
-    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None, source_timeout_seconds: float = 30.0):
+    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None, source_timeout_seconds: float = 30.0, source_cooldown_seconds: float = 60.0, source_max_cooldown_seconds: float = 600.0):
         self.cache_dir = cache_dir or (PROJECT_ROOT / "data_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir = self.cache_dir / "evidence"
@@ -30,11 +33,29 @@ class FreeDataSourceManager:
         self._init_sources()
         self.DEFAULT_START = "2005-01-01"
         self._failed_symbols: Set[str] = set()
+        self._failed_symbol_retry_at: dict[str, float] = {}
         self.source_timeout_seconds = max(float(source_timeout_seconds), 0.01)
         self._disabled_sources: Set[str] = set()
+        self.source_cooldown_seconds = max(float(source_cooldown_seconds), 0.01)
+        self.source_max_cooldown_seconds = max(float(source_max_cooldown_seconds), self.source_cooldown_seconds)
+        self._source_retry_at: dict[str, float] = {}
+        self._source_timeout_counts: dict[str, int] = {}
+        self._circuit_lock = threading.Lock()
+
+    def _source_retry_remaining(self, name: str) -> float:
+        with self._circuit_lock:
+            remaining = self._source_retry_at.get(name, 0.0) - time.monotonic()
+            if remaining <= 0:
+                self._disabled_sources.discard(name)
+                self._source_retry_at.pop(name, None)
+                return 0.0
+            return remaining
 
     def _bounded_source_call(self, name: str, func, *args, **kwargs):
         """Run one provider within a hard wall-clock budget and circuit-break timeouts."""
+        remaining = self._source_retry_remaining(name)
+        if remaining > 0:
+            raise CircuitOpenError(f"{name} cooling down; retry in {remaining:.2f}s")
         results: queue.Queue = queue.Queue(maxsize=1)
         def invoke():
             try:
@@ -45,11 +66,20 @@ class FreeDataSourceManager:
         worker.start()
         worker.join(self.source_timeout_seconds)
         if worker.is_alive():
-            self._disabled_sources.add(name)
-            raise TimeoutError(f"{name} exceeded {self.source_timeout_seconds:.2f}s")
+            with self._circuit_lock:
+                count = self._source_timeout_counts.get(name, 0) + 1
+                self._source_timeout_counts[name] = count
+                cooldown = min(self.source_cooldown_seconds * (2 ** (count - 1)), self.source_max_cooldown_seconds)
+                self._disabled_sources.add(name)
+                self._source_retry_at[name] = time.monotonic() + cooldown
+            raise TimeoutError(f"{name} exceeded {self.source_timeout_seconds:.2f}s; retry after {cooldown:.2f}s")
         ok, value = results.get_nowait()
         if not ok:
             raise value
+        with self._circuit_lock:
+            self._disabled_sources.discard(name)
+            self._source_retry_at.pop(name, None)
+            self._source_timeout_counts.pop(name, None)
         return value
 
     def _write_download_audit(self, symbol: str, attempts: list, status: str) -> None:
@@ -111,7 +141,10 @@ class FreeDataSourceManager:
         if symbol in {"000300.SH", "000905.SH"}:
             return self.fetch_index_historical(symbol, start_date, end_date)
         if symbol in self._failed_symbols:
-            return None
+            if time.monotonic() < self._failed_symbol_retry_at.get(symbol, 0.0):
+                return None
+            self._failed_symbols.discard(symbol)
+            self._failed_symbol_retry_at.pop(symbol, None)
         c_path = self.cache_dir / f"{symbol}_history.parquet"
         if c_path.exists():
             try:
@@ -138,8 +171,9 @@ class FreeDataSourceManager:
             return None
         attempts = []
         for name, func in self._sources:
-            if name in self._disabled_sources:
-                attempts.append({"provider": name, "status": "CIRCUIT_OPEN"})
+            retry_remaining = self._source_retry_remaining(name)
+            if retry_remaining > 0:
+                attempts.append({"provider": name, "status": "CIRCUIT_OPEN", "retry_after_seconds": round(retry_remaining, 3)})
                 continue
             started = time.monotonic()
             try:
@@ -164,6 +198,8 @@ class FreeDataSourceManager:
                     mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
                     attempts.append({"provider": name, "status": "ACCEPTED", "elapsed_seconds": elapsed, "rows": len(df), "sha256": evidence["sha256"]})
                     self._write_download_audit(symbol, attempts, "COMPLETE")
+                    self._failed_symbols.discard(symbol)
+                    self._failed_symbol_retry_at.pop(symbol, None)
                     # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
                     self._logger.info("由数据源管理器查询A股实时数据 | 来源: %s | 结果: 行数: %d | 意义: 多源回退成功", name, len(df))
                     return df.loc[mask].copy()
@@ -175,6 +211,7 @@ class FreeDataSourceManager:
                 attempts.append({"provider": name, "status": "ERROR", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
                 continue
         self._failed_symbols.add(symbol)
+        self._failed_symbol_retry_at[symbol] = time.monotonic() + self.source_cooldown_seconds
         self._write_download_audit(symbol, attempts, "FAILED_ALL_CHANNELS")
         return None
 

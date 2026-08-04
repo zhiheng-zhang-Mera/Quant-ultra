@@ -139,7 +139,7 @@ Selection, entry, holding, and take-profit now form a regime-gated expert chain 
 
 ```powershell
 Set-Location D:\Quant-Ultra\Quant-4
-D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 1 --fee-rate 0.001 --minimum-market-coverage 500 --minimum-stock-coverage 1000 --download-workers 4 --source-timeout-seconds 30 --max-positions 5 --min-exposure 0.15 --max-exposure 0.90 --max-holding-days 20
+D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 1 --fee-rate 0.001 --minimum-market-coverage 500 --minimum-stock-coverage 1000 --download-workers 4 --source-timeout-seconds 30 --source-cooldown-seconds 60 --max-positions 5 --min-exposure 0.15 --max-exposure 0.90 --max-holding-days 20
 ```
 
 输出位于 `Quant-4/reports/advice_portfolio_backtest/`。该脚本模拟执行分析建议以评估历史表现，不发送订单，也不证明未来收益；样本池过窄时，结论只能视为工程验证。
@@ -148,4 +148,4 @@ D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --
 
 首次全市场刷新需要下载大量真实历史数据，耗时取决于数据源限流。`--cache-only` 只用于离线工程诊断；若合格历史数量低于 `--minimum-market-coverage`，或其中股票数量低于 `--minimum-stock-coverage`，脚本失败关闭，ETF 数量不能替代股票覆盖。主引擎生产轮动模式同样拒绝固定 `--symbols`，非离线全市场数量不足 500 或股票不足 1000 时不会运行。
 
-证券清单和历史行情的每个提供商都受独立 `--source-timeout-seconds` 时间预算约束。接口超时会打开该通道的熔断器并立即切换 AkShare、Baostock、Tushare 或 EFinance 的下一可用通道；空响应、日期区间缺失、OHLCV 质量失败或证据哈希不匹配同样不会写入正式缓存。每个证券的 `Data_Cache/evidence/*_download_audit.json` 保存全部通道尝试和最终接受来源。
+证券清单和历史行情的每个提供商都受独立 `--source-timeout-seconds` 时间预算约束。接口超时会打开该通道的临时熔断器并立即切换 AkShare、Baostock、Tushare 或 EFinance 的下一可用通道；经过 `--source-cooldown-seconds` 后自动进入半开探测，成功即恢复，连续超时才指数延长冷却且最长 600 秒。证券级全通道失败也只临时缓存，不会在长任务中永久消失。空响应、日期区间缺失、OHLCV 质量失败或证据哈希不匹配不会写入正式缓存。每个证券的 `Data_Cache/evidence/*_download_audit.json` 保存全部通道尝试和最终接受来源。
