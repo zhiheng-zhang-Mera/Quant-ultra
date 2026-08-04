@@ -183,7 +183,10 @@ class FreeDataSourceManager:
     def fetch_stock_list(self) -> List[str]:
         c_path = self.cache_dir / "stock_list.parquet"
         if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 1:
-            return pd.read_parquet(c_path)["symbol"].tolist()
+            cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
+            if len(cached) >= 500:
+                return cached
+            self._logger.warning("Rejected undersized stock-list cache: %s symbols", len(cached))
         if self.offline_debug:
             return ["600000.SH", "600036.SH", "600519.SH", "000001.SZ", "000002.SZ"]
         try:
@@ -193,6 +196,38 @@ class FreeDataSourceManager:
                 pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
                 return syms
         except: pass
+        if hasattr(self, "_ak"):
+            try:
+                frame = self._ak.stock_info_a_code_name()
+                code_col = next((c for c in frame.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
+                if code_col is not None:
+                    syms = []
+                    for raw in frame[code_col].astype(str):
+                        code = raw.strip().split(".")[0].zfill(6)
+                        if len(code) == 6 and code.isdigit():
+                            syms.append(f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ")
+                    syms = sorted(set(syms))
+                    if len(syms) >= 500:
+                        pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
+                        return syms
+            except Exception:
+                pass
+        if hasattr(self, "_bs"):
+            try:
+                self._bs.login()
+                result = self._bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+                codes = []
+                while result.next():
+                    raw = result.get_row_data()[0]
+                    exchange, code = raw.split(".", 1)
+                    if len(code) == 6 and code.isdigit():
+                        codes.append(f"{code}.{exchange.upper()}")
+                syms = sorted(set(codes))
+                if len(syms) >= 500:
+                    pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
+                    return syms
+            except Exception:
+                pass
         if hasattr(self, "_ts_pro"):
             try:
                 df_ts = self._ts_pro.stock_basic(list_status='L', fields='ts_code')
@@ -214,8 +249,42 @@ class FreeDataSourceManager:
                             return syms
             except: pass
         if c_path.exists():
-            return pd.read_parquet(c_path)["symbol"].tolist()
-        return ["600000.SH", "600036.SH", "600519.SH", "000001.SZ", "000002.SZ"] * 16
+            cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
+            if len(cached) >= 500:
+                return cached
+        return []
+
+    def fetch_full_market_list(self, include_delisted: bool = True) -> List[str]:
+        """Return the broad A-share research universe, including delisted codes when available."""
+        active = set(self.fetch_stock_list())
+        if not self.offline_debug and hasattr(self, "_ak"):
+            try:
+                etfs = self._ak.fund_etf_spot_em()
+                code_col = next((c for c in etfs.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
+                if code_col is not None:
+                    for raw in etfs[code_col].astype(str):
+                        code = raw.strip().split(".")[0].zfill(6)
+                        if len(code) == 6 and code.isdigit():
+                            active.add(f"{code}.SH" if code.startswith(("50", "51", "56", "58")) else f"{code}.SZ")
+            except Exception as exc:
+                self._logger.warning("Unable to extend universe with ETFs: %s", exc)
+        if include_delisted and not self.offline_debug and hasattr(self, "_ak"):
+            for method_name in ("stock_info_sh_delist", "stock_info_sz_delist"):
+                try:
+                    frame = getattr(self._ak, method_name)()
+                    code_col = next((c for c in frame.columns if "代码" in str(c) or str(c).lower() in {"code", "symbol"}), None)
+                    if code_col is None:
+                        continue
+                    for raw in frame[code_col].astype(str):
+                        code = raw.strip().split(".")[0].zfill(6)
+                        if len(code) == 6 and code.isdigit():
+                            active.add(f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ")
+                except Exception as exc:
+                    self._logger.warning("Unable to extend universe from %s: %s", method_name, exc)
+        symbols = sorted(active)
+        if symbols:
+            pd.DataFrame({"symbol": symbols}).to_parquet(self.cache_dir / "full_market_universe.parquet", index=False)
+        return symbols
 
     def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = datetime.now().year) -> pd.DatetimeIndex:
         c_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"

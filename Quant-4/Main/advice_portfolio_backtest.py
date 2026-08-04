@@ -8,12 +8,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from Main.portfolio_analytics import recommendation
 from Main.data_quality import validate_ohlcv
+from Main.datasource_manager import FreeDataSourceManager
 
 DEFAULT_EXCLUDED_PREFIXES = ("200", "300", "301", "4", "8", "92", "688", "689", "900")
 FORBIDDEN_PROVIDERS = {"synthetic", "simulated", "mock", "offline_debug"}
+_THREAD_LOCAL = threading.local()
 
 
 @dataclass(frozen=True)
@@ -78,11 +82,50 @@ def symbol_purchase_eligibility(symbol: str, excluded_prefixes=DEFAULT_EXCLUDED_
     code, dot, exchange = str(symbol).upper().partition(".")
     if not dot or exchange not in {"SH", "SZ"} or len(code) != 6 or not code.isdigit():
         return False, "NOT_STANDARD_A_SHARE"
-    if any(code.startswith(prefix) for prefix in excluded_prefixes):
+    is_etf = code.startswith(("15", "16", "50", "51", "56", "58"))
+    if not is_etf and any(code.startswith(prefix) for prefix in excluded_prefixes):
         return False, "EXCLUDED_ACCOUNT_PERMISSION_PREFIX"
-    if not code.startswith(("0", "6")):
+    if not code.startswith(("0", "6")) and not is_etf:
         return False, "UNSUPPORTED_PURCHASE_CODE"
     return True, "ELIGIBLE_CODE"
+
+
+def asset_type_for_symbol(symbol: str) -> str:
+    return "ETF" if symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) else "stock"
+
+
+def refresh_full_market_cache(
+    cache_dir: Path, start_date: str, end_date: str, workers: int = 4,
+    excluded_prefixes=DEFAULT_EXCLUDED_PREFIXES,
+    minimum_market_coverage: int = 500, minimum_stock_coverage: int = 1000,
+) -> dict:
+    """Query the broad real A-share universe and materialize evidence-backed daily histories."""
+    cache_dir = Path(cache_dir)
+    seed = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False)
+    universe = seed.fetch_full_market_list(include_delisted=True)
+    eligible = [s for s in universe if symbol_purchase_eligibility(s, excluded_prefixes)[0]]
+    stock_count = sum(asset_type_for_symbol(s) == "stock" for s in eligible)
+    if len(eligible) < minimum_market_coverage or stock_count < minimum_stock_coverage:
+        raise RuntimeError(f"full-market source coverage is insufficient before history download: securities={len(eligible)}/{minimum_market_coverage}, stocks={stock_count}/{minimum_stock_coverage}")
+
+    def fetch(symbol: str) -> tuple[str, bool]:
+        manager = getattr(_THREAD_LOCAL, "manager", None)
+        if manager is None:
+            manager = FreeDataSourceManager(cache_dir=cache_dir, offline_debug=False)
+            _THREAD_LOCAL.manager = manager
+        frame = manager.fetch_historical(symbol, start_date, end_date)
+        return symbol, frame is not None and not frame.empty
+
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 16))) as pool:
+        futures = [pool.submit(fetch, symbol) for symbol in eligible]
+        for future in as_completed(futures):
+            try:
+                _, ok = future.result()
+                succeeded += int(ok)
+            except Exception:
+                continue
+    return {"queried_symbols": len(universe), "permission_eligible_symbols": len(eligible), "eligible_stocks": sum(asset_type_for_symbol(s) == "stock" for s in eligible), "eligible_etfs": sum(asset_type_for_symbol(s) == "ETF" for s in eligible), "histories_available": succeeded, "start_date": start_date, "end_date": end_date}
 
 
 def _load_evidence(cache_dir: Path, symbol: str) -> dict | None:
@@ -173,6 +216,10 @@ def _summary(returns: pd.DataFrame, fee_rate: float, signals: pd.DataFrame, deci
         "time_harvest_exits": int((signals["exit_reason"] == "TIME_HARVEST").sum()) if not signals.empty else 0,
         "average_historical_universe": float(returns["historically_eligible_assets"].mean()),
         "minimum_historical_universe": int(returns["historically_eligible_assets"].min()),
+        "full_market_ready": int(sum(d.included for d in decisions)) >= 500 and int(sum(d.included and asset_type_for_symbol(d.symbol) == "stock" for d in decisions)) >= 1000,
+        "eligible_stocks": int(sum(d.included and asset_type_for_symbol(d.symbol) == "stock" for d in decisions)),
+        "eligible_etfs": int(sum(d.included and asset_type_for_symbol(d.symbol) == "ETF" for d in decisions)),
+        "universe_scope": "broad market cache with daily as-of eligibility; not a fixed ticker list",
         "execution_rule": "close[t] advice -> open[t+1] execution; open-to-open portfolio returns",
         "data_policy": "real source evidence required; no synthetic/mock/offline-debug provider accepted",
     }
@@ -271,7 +318,7 @@ def run_advice_portfolio_backtest(
             candidates, metadata, engine_qualified_count = [], {}, 0
             for symbol in as_of_universe:
                 history = frames[symbol].loc[:date].tail(max(lookback, 252)).reset_index()
-                rec = recommendation(history, asset_type="stock")
+                rec = recommendation(history, asset_type=asset_type_for_symbol(symbol))
                 close = float(frames[symbol].at[date, "close"])
                 pnl = close / entry_prices[symbol] - 1 if entry_prices[symbol] > 0 else 0.0
                 exit_reason = ""

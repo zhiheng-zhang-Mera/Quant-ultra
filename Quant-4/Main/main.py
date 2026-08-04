@@ -27,6 +27,7 @@ from Main.orchestration_guard import build_run_fingerprint, validate_orchestrati
 from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resolve_phase_name
 from Main.distributed_compute import apply_resource_plan, initialize_distributed_compute
 from Main.execute_report import generate_execute_report
+from Main.advice_portfolio_backtest import symbol_purchase_eligibility
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -90,6 +91,9 @@ def run_pipeline(args):
         "local_llm_model": "qwen3-coder:30b", "local_llm_base_url": "http://127.0.0.1:11434",
         "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
         "local_llm_max_records_per_symbol": 2, "local_llm_max_chars_per_record": 300,
+        "rotation_mode": "FULL_MARKET_DAILY_GUERRILLA", "rotation_rebalance_days": 1,
+        "rotation_minimum_market_coverage": 500,
+        "rotation_minimum_stock_coverage": 1000,
     }
     config = default_config.copy()
     config["phase11_interactive"] = not args.non_interactive
@@ -126,8 +130,15 @@ def run_pipeline(args):
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
     requested_symbols = [symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip()]
     if requested_symbols:
-        data_bus.set_universe(requested_symbols)
-        logger.info("Using bounded real-data universe with %d symbols", len(requested_symbols))
+        raise ValueError("full-market rotation mode does not accept a fixed --symbols list")
+    full_market = data_manager.fetch_full_market_list(include_delisted=True)
+    full_market = [symbol for symbol in full_market if symbol_purchase_eligibility(symbol)[0]]
+    minimum_coverage = int(config.get("rotation_minimum_market_coverage", 500))
+    minimum_stocks = int(config.get("rotation_minimum_stock_coverage", 1000))
+    stock_count = sum(not symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) for symbol in full_market)
+    if not args.offline and (len(full_market) < minimum_coverage or stock_count < minimum_stocks):
+        raise RuntimeError(f"full-market rotation requires at least {minimum_coverage} securities and {minimum_stocks} stocks; found {len(full_market)} and {stock_count}")
+    data_bus.set_universe(full_market)
 
     # ---- 双市场日历对齐 ----
     sh_tz = pytz.timezone("Asia/Shanghai")

@@ -216,6 +216,7 @@ def test_purchase_eligibility_excludes_permission_and_non_a_share_codes():
     from Main.advice_portfolio_backtest import symbol_purchase_eligibility
     assert symbol_purchase_eligibility("600519.SH")[0]
     assert symbol_purchase_eligibility("000001.SZ")[0]
+    assert symbol_purchase_eligibility("510300.SH")[0]
     for symbol in ("300001.SZ","688001.SH","920001.BJ","900901.SH","AAPL.US"):
         assert not symbol_purchase_eligibility(symbol)[0]
 
@@ -249,6 +250,20 @@ def test_dynamic_calendar_does_not_require_identical_listing_dates():
     decisions=[UniverseDecision("600519.SH",True,"test"),UniverseDecision("000001.SZ",True,"test")]
     result=run_advice_portfolio_backtest({"600519.SH":first,"000001.SZ":second},decisions,years=1,lookback=60,min_assets=2,max_holding_days=10)
     assert result["returns"]["historically_eligible_assets"].min() <= result["returns"]["historically_eligible_assets"].max()
+
+def test_full_market_refresh_fails_before_download_when_stock_coverage_is_thin(tmp_path,monkeypatch):
+    import Main.advice_portfolio_backtest as module
+    class ThinSource:
+        def __init__(self,**kwargs): pass
+        def fetch_full_market_list(self,include_delisted=True): return ["510300.SH"]*600
+        def fetch_historical(self,*args,**kwargs): raise AssertionError("history download must not start")
+    monkeypatch.setattr(module,"FreeDataSourceManager",ThinSource)
+    try:
+        module.refresh_full_market_cache(tmp_path,"2020-01-01","2024-01-01",minimum_stock_coverage=1000)
+    except RuntimeError as exc:
+        assert "stocks=" in str(exc)
+    else:
+        raise AssertionError("undersized stock coverage must fail closed")
 
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
