@@ -39,6 +39,11 @@ local_llm_timeout_seconds: 20
 local_llm_max_records_total: 6
 local_llm_max_records_per_symbol: 2
 local_llm_max_chars_per_record: 300
+distributed_cpu_worker_cap: 16
+distributed_io_worker_cap: 24
+distributed_allow_gpu: true
+distributed_gpu_backend_ready: false
+connectivity_probe_timeout: 1.0
 lambda_decay: 0.01
 vol_window: 20
 threshold_multiplier: 0.5

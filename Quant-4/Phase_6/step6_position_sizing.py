@@ -185,7 +185,7 @@ def execute(pipeline_context: dict) -> dict:
                 else:
                     return sym, "综合"
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=int(config.get('optimization_workers', 16))) as executor:
                 futures = {executor.submit(fetch_sector, sym): sym for sym in missing_syms}
                 for future in concurrent.futures.as_completed(futures):
                     try:

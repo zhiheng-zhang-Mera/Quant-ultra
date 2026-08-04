@@ -57,6 +57,10 @@ D:\Quant-Ultra-Env\venv\Scripts\python.exe Main\main.py --symbols "600519.SH,000
 
 常用参数：`--only-phase 6` 运行目标及依赖；`--resume-from 6` 从指定阶段继续；`--offline` 只用缓存；`--download-workers 1` 限制并发。报告位于 `Quant-4/reports/runs/<run-id>/`，含双语标题、结论解读、输出摘要、术语表和证据哈希。
 
+### 自适应分布式计算
+
+初始化时系统检查逻辑/物理 CPU、可用内存、GPU、D 盘剩余空间、市场 HTTPS、DNS 和本地 Ollama。随后生成 CPU、I/O、下载、数据加载、优化和模型训练预算，并写入 `compute_audit`。CPU 工作数同时受物理核心、保留核心、每工作进程 1.5 GB 可用内存和配置上限约束；离线时下载并发自动降为 1。Phase 1/3 的 I/O 池、Phase 5 的 LightGBM 线程、Phase 6 的优化池以及 NumPy/BLAS/OpenMP 线程统一使用该预算，避免不同模块各自占满设备导致过度订阅。GPU 会被探测并记录，但只有确认对应库已构建 GPU 后端并显式设置 `distributed_gpu_backend_ready` 才会启用，避免把“检测到显卡”误当成“已使用显卡”。联机失败时自动保持 CPU/缓存路径，用户显式设置的工作线程数优先保留。
+
 ### 风险与成本默认值
 
 - 现金缓冲 5%，动态最低有效投资仓位 10%，单日换手上限 25%。
@@ -106,6 +110,8 @@ Configure `news_input_path` and `forum_input_path` with CSV/JSONL records contai
 Phase 3 dynamically checks the local Ollama model configured by `local_llm_model`. If present, it enhances only a bounded recent sample (6 records total, 2 per symbol, 300 characters each, reasoning disabled, and a 20-second batch timeout by default). A missing model, stopped service, timeout, or malformed response falls back to lexical sentiment without blocking the pipeline.
 
 Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/reports/runs/<run-id>/`, including an interpretation, glossary, output summary, Git hash, and evidence digest.
+
+At startup, the adaptive compute orchestrator inspects CPU, available memory, GPU, D-drive capacity, market/DNS connectivity, and local Ollama. It produces bounded budgets for downloads, I/O loading, optimization, model training, and numerical libraries. Offline downloads fall back to one worker; missing GPUs or connectivity never block the CPU/cache path, and explicit user worker overrides are preserved.
 
 Engineering acceptance, backtests, sentiment scores, and deterministic reconciliation do not guarantee investment performance. A failed audit or reconciliation produces `HOLD_FOR_REVIEW`; Phase 11 remains `OBSERVATION_ONLY` and must not be treated as executable advice.
 

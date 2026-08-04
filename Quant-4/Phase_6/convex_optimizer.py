@@ -46,7 +46,7 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
     def _get_upper(sym):
         return _compute_individual_shares_upper(bus, sym, date, nav, config)
         
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=int(config.get('optimization_workers', 16))) as executor:
         upper_bounds = np.array(list(executor.map(_get_upper, assets)))
     min_invested = feasible_investment_floor(configured_min_invested, upper_bounds, 1.0 - cash_buffer)
 

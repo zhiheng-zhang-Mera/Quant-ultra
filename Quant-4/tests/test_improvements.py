@@ -16,6 +16,7 @@ from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
 from Main.stage_reporter import StageReporter
 from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
+from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -118,6 +119,20 @@ def test_dominant_method_directly_changes_next_stage_prior():
         compatible = TRANSITIONS.get(dominant, set()) & set(STAGE_METHODS[following])
         assert compatible
         assert all(chain[following]["transition_boost"][method] > 0 for method in compatible)
+
+def test_distributed_plan_respects_hardware_memory_and_network_caps():
+    profile = HardwareProfile(32, 16, 6.2, 32, 100, [], "test")
+    plan = build_resource_plan(profile, {"distributed_cpu_worker_cap": 12, "distributed_io_worker_cap": 20}, {"market_https": False})
+    assert plan["cpu_workers"] == 4
+    assert plan["download_workers"] == 1
+    assert plan["optimization_workers"] <= plan["io_workers"]
+    merged = apply_resource_plan({"lgb_params": {"deterministic": True}}, {"resource_plan": plan})
+    assert merged["lgb_params"]["num_threads"] == plan["model_threads"]
+
+def test_user_worker_override_is_preserved_by_resource_plan():
+    profile = HardwareProfile(8, 4, 16, 32, 100, [], "test")
+    plan = build_resource_plan(profile, {"download_workers": 2, "data_load_workers": 3}, {"market_https": True})
+    assert plan["download_workers"] == 2 and plan["data_load_workers"] == 3
 
 def test_candidate_report_is_readable_and_hashed(tmp_path):
     rec=recommendation(_market_frame(),model_weight=.08)

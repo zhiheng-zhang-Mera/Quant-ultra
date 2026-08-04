@@ -25,6 +25,7 @@ from Main.context_io import save_phase_result, load_phase_result, save_context_s
 from Main.stage_reporter import StageReporter
 from Main.orchestration_guard import build_run_fingerprint, validate_orchestration, write_startup_manifest
 from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resolve_phase_name
+from Main.distributed_compute import apply_resource_plan, initialize_distributed_compute
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -80,6 +81,8 @@ def run_pipeline(args):
         "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
         "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
         "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
+        "distributed_cpu_worker_cap": 16, "distributed_io_worker_cap": 24,
+        "distributed_allow_gpu": True, "distributed_gpu_backend_ready": False, "connectivity_probe_timeout": 1.0,
         "news_input_path": None, "forum_input_path": None, "local_llm_sentiment_enabled": True,
         "local_llm_model": "qwen3-coder:30b", "local_llm_base_url": "http://127.0.0.1:11434",
         "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
@@ -102,6 +105,9 @@ def run_pipeline(args):
         except Exception as e:
             logger.warning(f"外部配置加载失败: {e}")
 
+    compute_audit = initialize_distributed_compute(config, PROJECT_ROOT)
+    config = apply_resource_plan(config, compute_audit)
+    logger.info("Distributed compute initialized | hardware=%s | connectivity=%s | plan=%s", compute_audit["hardware"], compute_audit["connectivity"], compute_audit["resource_plan"])
     dag_audit = validate_orchestration(PHASE_MODULES, PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA)
     run_fingerprint, fingerprint_material = build_run_fingerprint(get_git_hash(), config, PHASE_MODULES)
     startup_manifest = write_startup_manifest(PROJECT_ROOT / "reports", RUN_TIMESTAMP, run_fingerprint, fingerprint_material, dag_audit)
@@ -159,6 +165,7 @@ def run_pipeline(args):
     pipeline_context = {
         "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash(), "run_fingerprint": run_fingerprint, "startup_manifest": str(startup_manifest)},
         "config": config,
+        "compute_audit": compute_audit,
         "data_bus": data_bus,
         "data_manager": data_manager,
         "audit_logger": audit_logger,
