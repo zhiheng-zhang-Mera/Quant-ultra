@@ -1,139 +1,100 @@
 # Quant-Ultra
 
-面向 A 股、ETF 与美股研究的可审计量化流水线。本分支在原有 Phase 1–10 基础上增加 Cython 热路径、跨网络环境的数据源回退、逐阶段证据报告、数据质量门禁和指定持仓交互分析。
+[中文](#中文) · [English](#english)
 
-> 重要：本项目用于研究与工程验证，不构成投资建议。任何免费数据源或代理都无法承诺在所有国家、地区和网络中永久可用；系统通过多源回退、可配置代理、缓存和完整性证据降低风险，但不伪造“全球绝对可用”保证。
+> 研究与工程验证系统，不构成投资建议。回测、情绪评分和确定性测试均不能保证未来收益。
 
-## 1. 系统要求
+## 中文
 
-- Windows 10/11 或 Linux；Python 3.11–3.13 推荐
-- 64 位 C/C++ 编译器（仅编译 Cython 扩展需要）
-- 建议至少 16 GB 内存
-- 本仓库放在 D 盘时，缓存、日志、阶段结果与报告默认也全部留在 D 盘
+Quant-Ultra 是面向 A 股、ETF 与美股研究的可审计量化流水线，覆盖数据质量、时点特征、另类数据、机器学习、运筹优化、交易成本、回测、压力测试、MLOps、CIO 治理与观察型投顾。每个阶段输出中英双语 Markdown/JSON 证据报告。
 
-## 2. 安装
+### 核心原则
+
+- Point-in-Time：新闻、论坛、价格和标签只使用当时已经发布的信息。
+- 风险优先：仓位受现金缓冲、单标的/行业上限、换手和流动性约束。
+- 成本后收益：佣金最低收费、经手费、证管费、卖出印花税、滑点及 ETF 管理费均进入计算。
+- 失败关闭：审计或对账不通过时返回 `HOLD_FOR_REVIEW`，Phase 11 降级为 `OBSERVATION_ONLY`。
+- 可复核：每阶段报告包含 Git 哈希、运行时间、结构摘要和 SHA-256。
+
+### 十一阶段完整功能
+
+| 阶段 | 功能 | 主要输出与结论含义 |
+|---|---|---|
+| Phase 1 | 标的池、退市残值、交易状态、流动性和容量筛选 | `assets`、`adv_data`、存续矩阵、AUM 上限；判断数据底座能否进入研究流程 |
+| Phase 2 | 训练/验证/测试切片、跨市场日历对齐、embargo | 时间隔离证据；防止训练与测试窗口重叠 |
+| Phase 3 | PIT 特征、市场状态、新闻/论坛情绪、资金池变化 | `feature_panel_*`、`alternative_signals`、来源哈希；缺源时明确标记而不伪造情绪 |
+| Phase 4 | 方向/收益标签、事件去重、样本权重 | `y_clf_all`、`y_reg_all`、`sample_weights`；限制重复事件过度计权 |
+| Phase 5 | 方向分类、分位数模型、特征选择与校准 | 模型、特征、预测区间和误差证据；不直接等同交易信号 |
+| Phase 6 | Black–Litterman、稳健协方差、风险预算、凸优化 | 每日目标权重、区间、ADV20；包含现金、集中度、换手和成本约束 |
+| Phase 7 | FSM 回测、停牌/涨跌停、整手成交、冲击和费用 | 净值、收益、违规、费用分类账；体现可执行结果而非理想权重 |
+| Phase 8 | DSR/覆盖率、容量、冲击和历史压力测试 | `audit_summary`、`audit_passed`；关键红线失败即阻止执行 |
+| Phase 9 | 目标/执行仓位对账、PSI 漂移、拥挤度治理 | MAE、漂移和拥挤门禁；异常时保持人工复核 |
+| Phase 10 | CIO 双语治理汇总和参数提案 | `cio_decision`、证据清单；不自动接受未经验证的参数 |
+| Phase 11 | 候选、买点、仓位、止盈止损和持仓问答 | 双语报告与 CSV；治理未通过时仅观察、不可执行 |
+
+### 另类数据输入
+
+Phase 3 支持 `news_input_path` 和 `forum_input_path`，文件为 CSV 或 JSONL，至少包含：
+
+```text
+published_at,symbol,text
+2026-08-03T08:00:00+08:00,600519.SH,公司披露增长与回购计划
+```
+
+晚于运行时点的记录会被排除。系统分别计算新闻和论坛词典情绪，并用 `close × volume` 构造 5 日相对 20 日资金池变化；综合权重为新闻 35%、论坛 25%、资金池 40%。词典模型不能可靠理解反讽、否定、传闻或操纵性发帖，正式使用应接入授权来源和经过验证的中文模型。
+
+### D 盘安装与运行
 
 ```powershell
 Set-Location D:\Quant-Ultra\Quant-4
-py -3.12 -m venv .venv
-.\.venv\Scripts\python -m pip install --upgrade pip
-.\.venv\Scripts\python -m pip install -r requirements.txt
+$env:TEMP='D:\Quant-Ultra-Env\tmp'
+$env:TMP='D:\Quant-Ultra-Env\tmp'
+D:\Quant-Ultra-Env\venv\Scripts\python.exe -m pip install -r requirements.txt
+D:\Quant-Ultra-Env\venv\Scripts\python.exe Main\main.py --symbols "600519.SH,000001.SZ,510300.SH" --force-recompute --non-interactive
 ```
 
-不要使用旧版 `install_deps.py` 的“升级全部系统包”方式。固定虚拟环境可减少依赖漂移。
+常用参数：`--only-phase 6` 运行目标及依赖；`--resume-from 6` 从指定阶段继续；`--offline` 只用缓存；`--download-workers 1` 限制并发。报告位于 `Quant-4/reports/runs/<run-id>/`，含双语标题、结论解读、输出摘要、术语表和证据哈希。
 
-## 3. Cython 加速
+### 风险与成本默认值
+
+- 现金缓冲 5%，动态最低有效投资仓位 10%，单日换手上限 25%。
+- 单标的建议不高于 8%，并受 0.75% 组合损失预算约束。
+- 买点基于 MA20/ATR，禁止给出高于最新价的追高区间。
+- 止盈 3%–12%，须覆盖预计往返成本并保留最低净利润目标。
+- 实际券商佣金和基金管理费必须在 `Main/default_param.yaml` 按合同调整。
+
+### 验证与术语
 
 ```powershell
-.\.venv\Scripts\python setup.py build_ext --inplace
-.\.venv\Scripts\python -c "from Main.fast_math import BACKEND; print(BACKEND)"
-```
-
-输出 `cython` 表示扩展已加载；无编译器时自动使用经过同一测试的 NumPy 回退，不影响正确性。当前扩展加速日志收益率和下行标准差等高频数值循环；Pandas/网络 I/O 不适合盲目 Cython 化。
-
-## 4. 数据访问与代理
-
-默认 A 股按 AkShare、BaoStock、Tushare（配置 token 时）、efinance 回退；美股使用 yfinance 与 AkShare 灾备。下载结果写入 `Quant-4/data_cache`，每次成功来源在 `data_cache/evidence` 记录：
-
-- 来源与抓取时间
-- 行数和日期边界
-- OHLCV 结构、不重复、有限数值和价格区间校验
-- 内容 SHA-256
-- 是否使用代理
-
-在受限网络中显式配置由你信任的 HTTP(S) 代理：
-
-```powershell
-$env:QUANT_ULTRA_PROXY='http://127.0.0.1:7890'
-```
-
-也兼容标准 `HTTPS_PROXY`。系统不自动采用互联网上的匿名免费代理：这类节点可能窃听、篡改数据、突然离线，不能作为可信金融数据通道。建议使用用户自行控制的免费开源客户端与合法可用节点。
-
-## 5. 运行流水线
-
-```powershell
-Set-Location D:\Quant-Ultra\Quant-4
-.\.venv\Scripts\python Main\main.py --force-recompute --portfolio-query
-```
-
-常用参数：
-
-```text
---only-phase 6       运行指定阶段及其依赖
---resume-from 6      从指定阶段恢复
---skip-phases ...    跳过阶段
---offline            只使用已验证本地缓存
---force-recompute    忽略阶段缓存
-```
-
-每一阶段都会在 `Quant-4/reports/runs/<运行时间>/` 生成独立 `.md` 与 `.json` 报告。十阶段结束后还会生成 `post_pipeline_candidates.md/csv`，逐项给出筛选后的股票/ETF、理想买入区间、建议配置仓位和理想止盈比例。`--portfolio-query` 会在其后进入持仓查询。
-
-## 6. 指定 A 股 / ETF 持仓分析
-
-```powershell
-.\.venv\Scripts\python analyze_cn_asset.py --end-token END
-```
-
-输入格式为 `总资金 代码 持仓数量 平均成本 [可选类型]`：
-
-```text
-1000000 600519 300 1450 stock
-1000000 510300 20000 3.85 etf
-END
-```
-
-输出包括年化收益与波动、Sharpe、Sortino、最大回撤、Calmar、95% VaR/CVaR、ATR、20/60 日均线、浮盈亏、账户实际仓位、模型目标仓位、目标持股数、应增减数量、入仓区间、止盈价、风险参考价、操作建议和触发理由。A股数量按100股整数批次计算，目标仓位带10%单标的上限；使用前仍需结合税费、流动性、停牌、涨跌停和个人风险约束。
-
-## 7. 数学定义
-
-- 对数收益：`r_t = ln(P_t / P_{t-1})`
-- 年化波动：`sigma_a = std(r) sqrt(252)`
-- Sharpe：`(R_a - R_f) / sigma_a`
-- Sortino：`(R_a - R_f) / sigma_downside`
-- Calmar：`R_a / |MDD|`
-- 风险平价：各资产风险贡献 `w_i (Sigma w)_i / sqrt(w' Sigma w)` 相等
-- Black–Litterman：以市场隐含收益和观点矩阵的精度加权获得后验收益
-
-协方差矩阵在优化前投影到半正定空间，避免负特征值导致虚假的风险估计。
-
-## 8. 验证
-
-```powershell
-.\.venv\Scripts\python -m pytest -q
-.\.venv\Scripts\python tests\run_acceptance.py
-.\.venv\Scripts\python -m compileall Main cython analyze_cn_asset.py
+D:\Quant-Ultra-Env\venv\Scripts\python.exe -m pytest tests -q
+D:\Quant-Ultra-Env\venv\Scripts\python.exe tests\run_acceptance.py
 git diff --check
 ```
 
-## 8.1 无未来预知的参数自适应回测
+PIT = 时点可见信息；NAV = 账户净值；ADV20 = 20 日平均成交额；VaR/CVaR = 风险价值/条件风险价值；PSI = 群体稳定性指数；DSR = 校正多重尝试后的夏普证据；Embargo = 训练与测试间的时间隔离带。
 
-```powershell
-.\.venv\Scripts\python run_adaptive_backtest.py 600519 --kind stock
-.\.venv\Scripts\python run_adaptive_backtest.py 510300 --kind etf --train-size 504 --test-size 63 --embargo 5
-```
+单元测试证明接口和规则在测试样本上成立，不证明第三方数据真实或未来盈利。免费源可能限流/改版；模拟成交不能替代券商回单；小标的池运行只是工程验收。
 
-回测使用 expanding walk-forward：每一折只在测试期之前的训练窗选择快慢均线、波动窗口和目标波动率，参数随后在整段测试窗冻结。训练窗与测试窗之间强制保留 embargo；`t` 日收盘信号只能在 `t+1` 日开盘成交，收益使用 `t+1` 到 `t+2` 的开盘价格。任何 `signal_time >= execution_time` 或训练/测试重叠都会立即终止。报告位于 `Quant-4/reports/adaptive_backtests`，包含每折参数、时间边界、收益明细及防泄漏审计。
+## English
 
-参数自适应不是用测试集反复调参：测试结果不反馈给同一折的参数选择。需要进一步避免研究者对全部历史测试结果的人为过拟合时，应另留从未查看的最终 holdout 数据。
+Quant-Ultra is an auditable research pipeline for China A-shares, ETFs, and US equities. It covers data quality, PIT features, alternative data, ML, operations-research allocation, execution costs, backtesting, stress testing, MLOps, CIO governance, and observation-only advisory output.
 
-正常 Python 发行版使用 pytest；缺少 `unittest` 的裁剪版/嵌入式 Python 可运行第二条独立验收命令。测试覆盖数据门禁的正反例、Cython/NumPy 数值等价接口、风险平价不变量，以及股票/ETF 代码归一化。联网数据正确性还需查看当次 `evidence` 清单；离线单元测试不能证明第三方实时行情本身真实。
+### Complete workflow
 
-## 9. 目录
+1. Phase 1 builds the survivorship-aware universe, liquidity evidence, and capacity limits.
+2. Phase 2 creates isolated train, validation, test, and embargo windows.
+3. Phase 3 builds PIT features and processes optional news/forum sentiment and turnover-pool changes.
+4. Phase 4 creates labels and event-aware sample weights.
+5. Phase 5 trains and calibrates direction and quantile models.
+6. Phase 6 solves robust weights under cash, concentration, turnover, liquidity, and cost constraints.
+7. Phase 7 runs the execution FSM with board lots, halts, slippage, taxes, commissions, and ETF fees.
+8. Phase 8 performs coverage, capacity, statistical, and stress audits.
+9. Phase 9 reconciles target/executed holdings and monitors drift and crowding.
+10. Phase 10 produces the CIO governance decision and controlled parameter proposals.
+11. Phase 11 emits entry ranges, sizing, exits, and friction estimates; failed gates force observation-only mode.
 
-```text
-Quant-4/
-├─ Main/                 编排、数据、报告与金融数学
-├─ Phase_1 ... Phase_10/ 原流水线阶段
-├─ cython/               Cython 热路径源码
-├─ tests/                确定性测试
-├─ analyze_cn_asset.py   A股/ETF 交互分析
-├─ requirements.txt      隔离环境依赖
-└─ setup.py              Cython 构建入口
-```
+Configure `news_input_path` and `forum_input_path` with CSV/JSONL records containing `published_at`, `symbol`, and `text`. Future-dated records are excluded. Missing optional sources are reported and receive neutral scores; the system never fabricates sentiment evidence.
 
-## 10. 已知边界
+Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/reports/runs/<run-id>/`, including an interpretation, glossary, output summary, Git hash, and evidence digest.
 
-- 免费第三方接口可能改版、限流或因当地政策不可达。
-- 哈希和结构校验可证明“下载后未静默改变、格式和数值关系合理”，不能单独证明发行方数据绝对真实。
-- 首次全市场运行耗时和存储占用较大；建议先运行单阶段及小范围标的。
-- 交易信号是透明、可复算的规则模型，不是收益承诺。
+Engineering acceptance, backtests, sentiment scores, and deterministic reconciliation do not guarantee investment performance. A failed audit or reconciliation produces `HOLD_FOR_REVIEW`; Phase 11 remains `OBSERVATION_ONLY` and must not be treated as executable advice.

@@ -13,6 +13,8 @@ from Main.orchestration_guard import build_run_fingerprint, validate_orchestrati
 from Main.parameter_governance import validate_parameter_proposal
 from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA, resolve_phase_name, validate_phase_contract
 from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
+from Main.stage_reporter import StageReporter
+from Phase_3.alternative_data import build_alternative_signals, score_text
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -61,6 +63,24 @@ def test_cost_model_applies_minimum_commission_and_sell_stamp_tax():
     assert sell["stamp_tax"] > 0
     assert etf_sell["stamp_tax"] == 0
     assert round_trip_friction_rate(10000, symbol="510300.SH", holding_days=20) > 0
+
+def test_alternative_data_is_pit_and_reports_missing_optional_sources(tmp_path):
+    assert score_text("增长 回购 bullish") > 0
+    prices = _market_frame().rename(columns={"date": "unused"})
+    context = {"assets": ["600519.SH"], "asset_ohlcv": {"600519.SH": prices}, "trading_days_dt": [pd.Timestamp("2026-08-04")], "config": {}}
+    result = build_alternative_signals(context)
+    assert result["alternative_data_evidence"]["future_records_excluded"]
+    assert result["alternative_data_evidence"]["news"]["status"] == "MISSING_OPTIONAL_SOURCE"
+    assert np.isfinite(result["alternative_signals"].loc[0, "alternative_signal"])
+
+def test_stage_report_is_bilingual_and_interpreted(tmp_path):
+    reporter = StageReporter(tmp_path, "run", "abc123")
+    reporter.start("Phase_3.step3_pit_setup")
+    report = reporter.finish("Phase_3.step3_pit_setup", {"alternative_signals": pd.DataFrame({"x": [1]})}, True)
+    text = report.read_text(encoding="utf-8")
+    assert "结论解读 / Conclusion" in text
+    assert "术语 / Glossary" in text
+    assert "PIT features and alternative data" in text
 
 def test_candidate_report_is_readable_and_hashed(tmp_path):
     rec=recommendation(_market_frame(),model_weight=.08)

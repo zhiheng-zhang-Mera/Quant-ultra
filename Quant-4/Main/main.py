@@ -80,6 +80,7 @@ def run_pipeline(args):
         "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
         "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
         "domain_adaptation_loss_type": "MMD", "pure_ashare_baseline_loss": None, "negative_transfer_rollback_flag": False,
+        "news_input_path": None, "forum_input_path": None,
     }
     config = default_config.copy()
     config["phase11_interactive"] = not args.non_interactive

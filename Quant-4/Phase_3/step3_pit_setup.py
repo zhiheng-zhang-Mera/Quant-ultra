@@ -7,6 +7,7 @@ from Phase_3.data_loader import load_all_assets_parallel
 from Phase_3.step_3_1_regime import run_online_regime_labels
 from Phase_3.step_3_2_3_guards import run_preserve_raw_prices_check, run_cross_sectional_guard, run_federated_privacy_firewall
 from Phase_3.step_3_4_features import run_whitebox_feature_panel
+from Phase_3.alternative_data import build_alternative_signals
 
 logger = logging.getLogger("Phase3")
 
@@ -29,6 +30,7 @@ def execute(pipeline_context: dict) -> dict:
     run_cross_sectional_guard(pipeline_context)
     run_whitebox_feature_panel(pipeline_context)
     run_federated_privacy_firewall(pipeline_context)
+    pipeline_context.update(build_alternative_signals(pipeline_context))
     
     pipeline_context['pit_setup_ready'] = True
     
