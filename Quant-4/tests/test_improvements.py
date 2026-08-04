@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ from Main.stage_reporter import StageReporter
 from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
+from Main.execute_report import generate_execute_report
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -133,6 +135,16 @@ def test_user_worker_override_is_preserved_by_resource_plan():
     profile = HardwareProfile(8, 4, 16, 32, 100, [], "test")
     plan = build_resource_plan(profile, {"download_workers": 2, "data_load_workers": 3}, {"market_https": True})
     assert plan["download_workers"] == 2 and plan["data_load_workers"] == 3
+
+def test_execute_report_integrates_phase_evidence_and_governance(tmp_path):
+    reporter = StageReporter(tmp_path, "run", "abc123")
+    reporter.start("Phase_1.step1_data_foundation"); reporter.finish("Phase_1.step1_data_foundation", {"assets": ["A"]}, True)
+    context = {"run_metadata": {"git_hash": "abc123"}, "cio_decision": "HOLD_FOR_REVIEW", "audit_passed": False, "recon_passed": False, "final_nav": 99.0, "transaction_costs": {"total": 1.25}, "compute_audit": {"hardware": {"logical_cpu": 8}, "connectivity": {"market_https": True}, "resource_plan": {"cpu_workers": 4}}}
+    report, data = generate_execute_report(reporter.root, context, ["Phase_1.step1_data_foundation"])
+    rendered = report.read_text(encoding="utf-8")
+    assert "执行报告 / Execute Report" in rendered and "HOLD_FOR_REVIEW" in rendered
+    assert "Phase Evidence" in rendered and "Data SHA-256" in rendered
+    assert json.loads(data.read_text(encoding="utf-8"))["passed_phases"] == 1
 
 def test_candidate_report_is_readable_and_hashed(tmp_path):
     rec=recommendation(_market_frame(),model_weight=.08)

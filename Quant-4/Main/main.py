@@ -26,6 +26,7 @@ from Main.stage_reporter import StageReporter
 from Main.orchestration_guard import build_run_fingerprint, validate_orchestration, write_startup_manifest
 from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resolve_phase_name
 from Main.distributed_compute import apply_resource_plan, initialize_distributed_compute
+from Main.execute_report import generate_execute_report
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -234,6 +235,10 @@ def run_pipeline(args):
 
         save_context_snapshot(pipeline_context, phase, RUN_TIMESTAMP, LOG_DIR)
 
+    execute_report_path, execute_report_data_path = generate_execute_report(stage_reporter.root, pipeline_context, phases_to_run)
+    pipeline_context["execute_report_path"] = str(execute_report_path)
+    pipeline_context["execute_report_data_path"] = str(execute_report_data_path)
+    logger.info("Execute report generated | HTML=%s | data=%s", execute_report_path, execute_report_data_path)
     logger.info("请求的 %d 个阶段已按合约执行完成", len(phases_to_run))
     return pipeline_context
 
