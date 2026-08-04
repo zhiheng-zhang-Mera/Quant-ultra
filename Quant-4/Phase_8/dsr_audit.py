@@ -5,7 +5,6 @@ Quant-Ultra Flow - Step 8.1 & 8.2: Decreased Sharpe Ratio (DSR) Multi-Trial Audi
 import logging
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 from Phase_8.config import DEFAULT_CONFIG
 from Phase_8.utils import safe_get_shadow
 
@@ -47,8 +46,14 @@ def run_dsr_audit(context: dict) -> None:
         context["nominal_sharpe"] = sharpe
 
         # 刚性读取 Phase-0/Phase_5 搜参空间的试验总次数
-        N = safe_get_shadow(context, "num_trials", 100)
-        context["num_trials"] = N
+        N = context.get("num_trials")
+        if not isinstance(N, (int, np.integer)) or N < 1:
+            logger.error("DSR audit rejected: Phase 5 did not provide a valid num_trials evidence value.")
+            context["dsr_pass"] = False
+            context["dsr_evidence_status"] = "MISSING_NUM_TRIALS"
+            return
+        context["num_trials"] = int(N)
+        from scipy.stats import norm
 
         skew = returns.skew()
         kurt = returns.kurtosis()

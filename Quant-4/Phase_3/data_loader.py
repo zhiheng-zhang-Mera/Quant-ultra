@@ -4,7 +4,6 @@ Quant-Ultra Flow - Phase_3 Parallel Data Loader & PIT Access Subsystem
 """
 import time
 import logging
-import numpy as np
 import pandas as pd
 from datetime import datetime
 # from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,20 +32,19 @@ def _load_asset_data(data_manager, asset: str, start_date: str, end_date: str) -
     df["adv_ma20"] = df["adv"].rolling(20, min_periods=1).mean()
     
     is_a_share = any(suffix in asset.upper() for suffix in [".SH", ".SZ", ".BJ"]) or asset.isdigit()
-    np.random.seed(hash(asset) % 1234567)
-    n_rows = len(df)
-    
+    # Optional PIT fields must remain explicitly missing when the source did not
+    # provide them.  Fabricating deterministic-looking random values makes the
+    # run reproducible but does not make the evidence real.
     if is_a_share:
         if "Limit_Price_Matrix" not in df.columns: df["Limit_Price_Matrix"] = df["close"] * 1.10
         if "ST_Status" not in df.columns: df["ST_Status"] = 0
-        if "Free_Float_Cap" not in df.columns: df["Free_Float_Cap"] = df["close"] * 1e8 * np.random.uniform(0.5, 2.0, size=n_rows)
-        if "Northbound_Flow" not in df.columns: df["Northbound_Flow"] = np.random.normal(0, 1e6, size=n_rows)
-        if "Dragon_Tiger_Seats" not in df.columns: df["Dragon_Tiger_Seats"] = np.random.choice([0, 1], size=n_rows, p=[0.95, 0.05])
+        optional_fields = ["Free_Float_Cap", "Northbound_Flow", "Dragon_Tiger_Seats"]
     else:
-        if "Short_Interest" not in df.columns: df["Short_Interest"] = np.random.uniform(0.01, 0.15, size=n_rows)
-        if "VIX_Implied" not in df.columns: df["VIX_Implied"] = np.random.uniform(10, 35, size=n_rows)
-        if "Earnings_Window" not in df.columns: df["Earnings_Window"] = np.random.choice([0, 1], size=n_rows, p=[0.90, 0.10])
-        if "Insider_Trading" not in df.columns: df["Insider_Trading"] = np.random.normal(0, 1000, size=n_rows)
+        optional_fields = ["Short_Interest", "VIX_Implied", "Earnings_Window", "Insider_Trading"]
+    missing_optional = [field for field in optional_fields if field not in df.columns]
+    for field in missing_optional:
+        df[field] = pd.NA
+    df.attrs["missing_optional_pit_fields"] = missing_optional
             
     return df
 

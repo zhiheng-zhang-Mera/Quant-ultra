@@ -75,10 +75,6 @@ def execute(pipeline_context: dict) -> dict:
         raise ValueError("Test chronology partition vacant. Even calendar complement extraction failed.")
         
     test_dates = sorted([pd.Timestamp(d).tz_localize(None) for d in test_dates_raw])
-    if len(test_dates) > 3:
-        logger.warning("🚨 [DEBUG MODE] 触发短时间测试剪裁，已跳过前 %d 天，仅运行最后 3 天！", len(test_dates) - 3)
-        test_dates = test_dates[-3:]
-
     assets = local_context['assets']
     data_bus = local_context['data_bus']
     

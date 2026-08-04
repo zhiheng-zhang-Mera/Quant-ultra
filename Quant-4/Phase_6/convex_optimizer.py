@@ -10,6 +10,7 @@ from typing import Optional
 import concurrent.futures
 from Phase_6.utils import _compute_individual_shares_upper
 from Main.trading_costs import merged_cost_config
+from Main.allocation_constraints import apply_allocation_cap
 
 logger = logging.getLogger("PositionSizing.ConvexOptimizer")
 
@@ -48,6 +49,7 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         
     with concurrent.futures.ThreadPoolExecutor(max_workers=int(config.get('optimization_workers', 16))) as executor:
         upper_bounds = np.array(list(executor.map(_get_upper, assets)))
+    upper_bounds = apply_allocation_cap(upper_bounds, context, config)
     min_invested = feasible_investment_floor(configured_min_invested, upper_bounds, 1.0 - cash_buffer)
 
     # 行业映射提取

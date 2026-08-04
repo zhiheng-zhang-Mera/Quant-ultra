@@ -51,6 +51,8 @@ def execute(pipeline_context: dict) -> dict:
     run_feature_filtering(pipeline_context)
     fit_model_bundle(pipeline_context)
     run_cascade_calibration(pipeline_context)
+    if pipeline_context.get('num_trials', 0) < 1:
+        raise RuntimeError("Phase 5 cannot prove num_trials from calibration evidence.")
     
     # 构造并向主总线安全递交持久化资产令牌
     return {
@@ -59,6 +61,8 @@ def execute(pipeline_context: dict) -> dict:
         "direction_classifier": pipeline_context['direction_classifier'],
         "quantile_models": pipeline_context['quantile_models'],
         "gamma_star": pipeline_context['gamma_star'],
+        "num_trials": pipeline_context['num_trials'],
+        "trial_evidence": pipeline_context['trial_evidence'],
         "q_error_threshold_dict": pipeline_context['q_error_threshold_dict'],
         "fractional_features_cube": pipeline_context['fractional_features_cube'],
         "feature_scaler": pipeline_context['feature_scaler'],

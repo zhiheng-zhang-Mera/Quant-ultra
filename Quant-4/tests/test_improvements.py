@@ -19,6 +19,7 @@ from Phase_3.alternative_data import build_alternative_signals, enhance_sentimen
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
 from Main.execute_report import generate_execute_report
+from Main.allocation_constraints import apply_allocation_cap
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
@@ -281,3 +282,23 @@ def test_phase11_downgrades_to_observation_when_cio_holds(tmp_path,monkeypatch):
     result=phase11.execute({"phase10_ready":True,"cio_decision":"HOLD_FOR_REVIEW","run_metadata":{"timestamp":"test"},"config":{"phase11_interactive":False}})
     assert result["phase11_observation_only"]
     assert not result["investment_candidates"]["action_allowed"].any()
+
+def test_phase3_loader_marks_optional_pit_data_missing_instead_of_fabricating():
+    from Phase_3.data_loader import _load_asset_data
+    class Manager:
+        def fetch_historical(self, *args): return _market_frame()
+    loaded = _load_asset_data(Manager(), "600519.SH", "2024-01-01", "2024-12-31")
+    optional = {"Free_Float_Cap", "Northbound_Flow", "Dragon_Tiger_Seats"}
+    assert optional == set(loaded.attrs["missing_optional_pit_fields"])
+    assert loaded[list(optional)].isna().all().all()
+
+def test_crowding_cap_is_a_hard_optimizer_upper_bound():
+    bounded = apply_allocation_cap(np.array([0.30, 0.08, -0.01]), {"enforce_crowded_allocation_cap": 0.10}, {})
+    assert np.allclose(bounded, [0.10, 0.08, 0.0])
+
+def test_dsr_fails_closed_without_num_trials_evidence():
+    from Phase_8.dsr_audit import run_dsr_audit
+    context = {"daily_nav": pd.Series(np.linspace(100, 120, 300)), "config": {"min_samples_for_dsr": 20}}
+    run_dsr_audit(context)
+    assert not context["dsr_pass"]
+    assert context["dsr_evidence_status"] == "MISSING_NUM_TRIALS"

@@ -17,3 +17,4 @@ yfinance>=0.2.40
 Cython>=3.0
 setuptools>=69
 pytest>=8
+tqdm>=4.66

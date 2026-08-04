@@ -83,28 +83,26 @@ def run_whitebox_feature_panel(context: dict):
                 limit_mat = close_1 * (1.0 + up_pct)
                 
             free_cap = get_last_valid_value(df, target_date, 'Free_Float_Cap')
-            if free_cap is None or np.isnan(free_cap): free_cap = float(close_T * 5e8)
-            north_flow = get_last_valid_value(df, target_date, 'Northbound_Flow') or 0.0
-            seats_data = get_last_valid_value(df, target_date, 'Dragon_Tiger_Seats') or 0.0
+            north_flow = get_last_valid_value(df, target_date, 'Northbound_Flow')
+            seats_data = get_last_valid_value(df, target_date, 'Dragon_Tiger_Seats')
             
-            p_vec = np.array([limit_mat, st_stat, free_cap, north_flow, seats_data], dtype=np.float64)
-            if np.isfinite(p_vec).all(): feature_panel_private_a[sym] = p_vec
+            private_values = [limit_mat, st_stat, free_cap, north_flow, seats_data]
+            if all(pd.notna(value) for value in private_values):
+                p_vec = np.asarray(private_values, dtype=np.float64)
+                if np.isfinite(p_vec).all(): feature_panel_private_a[sym] = p_vec
         else:
             short_int = get_last_valid_value(df, target_date, 'Short_Interest')
-            if short_int is None or np.isnan(short_int):
-                short_int = float(np.clip(((high_T - low_T) / close_T) * 0.15, 0.01, 0.40))
-                logger.debug("[OP] Proxy Option Liquidity Estimation | [SOURCE] Non-Linear High-Low Price Spread | [RESULT] Derivative Short Interest: %.4f | [SIGNIFICANCE] Employs historical trading physics instead of random walk generation during network loss", short_int)
-                logger.debug("[操作] 代理衍生空头筹码估计 | [来源] 日内非线性最高最低价差物理形变 | [结果] 派生卖空比例特征值: %.4f | [意义] 彻底物理拔除 np.random 毒素，网络破损时利用微观物理行情常态逼近替代")
-                
             vix_imp = get_last_valid_value(df, target_date, 'VIX_Implied')
-            if vix_imp is None or np.isnan(vix_imp):
-                vix_imp = context.get('data_bus').query_by_pit(".INX", target_date.strftime("%Y-%m-%d") if hasattr(target_date, 'strftime') else str(target_date)[:10], "vix_close") or 0.18
+            if vix_imp is None or pd.isna(vix_imp):
+                vix_imp = context.get('data_bus').query_by_pit(".INX", target_date.strftime("%Y-%m-%d") if hasattr(target_date, 'strftime') else str(target_date)[:10], "vix_close")
                 
-            earn_win = get_last_valid_value(df, target_date, 'Earnings_Window') or 0.0
-            insider = get_last_valid_value(df, target_date, 'Insider_Trading') or 0.0
+            earn_win = get_last_valid_value(df, target_date, 'Earnings_Window')
+            insider = get_last_valid_value(df, target_date, 'Insider_Trading')
             
-            p_vec = np.array([short_int, vix_imp, earn_win, insider], dtype=np.float64)
-            if np.isfinite(p_vec).all(): feature_panel_private_us[sym] = p_vec
+            private_values = [short_int, vix_imp, earn_win, insider]
+            if all(pd.notna(value) for value in private_values):
+                p_vec = np.asarray(private_values, dtype=np.float64)
+                if np.isfinite(p_vec).all(): feature_panel_private_us[sym] = p_vec
                 
     context['feature_panel_shared'] = feature_panel_shared
     context['feature_panel_private_a'] = feature_panel_private_a

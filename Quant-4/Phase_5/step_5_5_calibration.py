@@ -13,6 +13,12 @@ def run_cascade_calibration(context: dict):
     logger.info("[Step 5.5] Activating asymmetric asset margin utility calibration loops.")
     config = context.get('config', {})
     gamma_grid = config.get('train_b1_grid_gamma', GAMMA_GRID)
+    if len(gamma_grid) < 1:
+        raise ValueError("train_b1_grid_gamma must contain at least one audited trial.")
+    gamma_trials = int(len(gamma_grid))
+    evidence = context.setdefault('trial_evidence', {})
+    evidence['gamma_candidates'] = gamma_trials
+    context['num_trials'] = int(context.get('num_trials', 0)) + gamma_trials
     error_window = config.get('error_threshold_window', ERROR_THRESHOLD_WINDOW)
     error_min_samples = config.get('error_min_samples', ERROR_MIN_SAMPLES)
     

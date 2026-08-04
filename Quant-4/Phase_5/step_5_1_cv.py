@@ -45,6 +45,8 @@ def run_walk_forward_cv(context: dict):
     best_d, best_score = 0.40, -1.0
     best_params = BASE_LGB_PARAMS.copy()
     monitor = context.get("negative_transfer_monitor", {"consecutive_violation_count": 0, "triggered_melt": False})
+    context['num_trials'] = int(len(D_MIN_SEARCH_SPACE))
+    context['trial_evidence'] = {'fractional_d_candidates': int(len(D_MIN_SEARCH_SPACE))}
     patience = context['config'].get("negative_transfer_patience", NEGATIVE_TRANSFER_PATIENCE)
 
     best_scaler = None
