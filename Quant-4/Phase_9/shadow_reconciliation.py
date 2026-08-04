@@ -129,7 +129,7 @@ def enforce_reconciliation_gate(context: dict) -> dict:
         return context
 
     context["trading_halted"] = True
-    if context.get("is_live") is True:
+    if context.get("is_live") is True and context.get("config", {}).get("analysis_only") is not True:
         context["kill_switch_report"] = trigger_physical_hard_kill_switch(
             context.get("fsm_engine"), context.get("counterparty_gateway")
         )

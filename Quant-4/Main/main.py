@@ -62,6 +62,8 @@ def run_pipeline(args):
 
     # ---- 完整默认配置 ----
     default_config = {
+        "analysis_only": True,
+        "analysis_only": True,
         "adv_window": 20, "min_adv_threshold": 1e7, "ipo_safety_days": 20, "max_participation_rate": 0.05,
         "expected_turnover": 0.05, "max_single_stock_weight": 0.05, "default_residual_rate": 0.0,
         "impact_alpha": 0.5, "impact_kappa_base": 0.05, "spread_lookback_days": 60, "stock_cap_pct": 0.045,
@@ -105,6 +107,10 @@ def run_pipeline(args):
             print("[操作] 加载外部配置 | [来源] YAML文件解析器 | [结果] 成功合并自定义参数 | [意义] 覆盖默认内核超参数")
         except Exception as e:
             logger.warning(f"外部配置加载失败: {e}")
+    if config.get("analysis_only") is not True:
+        raise ValueError("Quant-4 is an analysis-only engine; analysis_only must remain true")
+    if config.get("analysis_only") is not True:
+        raise ValueError("Quant-4 is an analysis-only engine; analysis_only must remain true")
 
     compute_audit = initialize_distributed_compute(config, PROJECT_ROOT)
     config = apply_resource_plan(config, compute_audit)

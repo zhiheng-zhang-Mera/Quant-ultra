@@ -28,10 +28,10 @@ def run_preflight(*, require_clean_git: bool = True) -> dict:
     config_path = PROJECT_ROOT / "Main" / "default_param.yaml"
     try:
         config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        config_ok = isinstance(config, dict) and bool(config)
+        config_ok = isinstance(config, dict) and bool(config) and config.get("analysis_only") is True
     except Exception as exc:
         config, config_ok = {"error": repr(exc)}, False
-    checks["default_config"] = {"passed": config_ok, "path": str(config_path), "keys": len(config) if isinstance(config, dict) else 0}
+    checks["default_config"] = {"passed": config_ok, "path": str(config_path), "keys": len(config) if isinstance(config, dict) else 0, "analysis_only": config.get("analysis_only") if isinstance(config, dict) else None}
 
     try:
         dag = validate_orchestration(PHASE_MODULES, PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA)

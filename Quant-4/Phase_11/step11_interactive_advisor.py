@@ -16,8 +16,9 @@ def execute(context: dict) -> dict:
         context.get("audit_passed") is not True,
         context.get("recon_passed") is not True,
     ))
-    candidates["action_allowed"] = not observation_only
-    candidates["advisory_mode"] = "OBSERVATION_ONLY" if observation_only else "ACTIONABLE_RESEARCH"
+    candidates["action_allowed"] = False
+    candidates["direct_execution_supported"] = False
+    candidates["advisory_mode"] = "OBSERVATION_ONLY" if observation_only else "ANALYSIS_ONLY"
     md_path, csv_path = write_candidate_report(candidates, report_dir)
     interactive = bool(context.get("config", {}).get("phase11_interactive", False)) and sys.stdin.isatty()
     if interactive:
@@ -29,5 +30,6 @@ def execute(context: dict) -> dict:
         "phase11_csv_path": str(csv_path),
         "phase11_interactive_started": interactive,
         "phase11_observation_only": observation_only,
+        "phase11_analysis_only": True,
         "phase11_ready": True,
     }

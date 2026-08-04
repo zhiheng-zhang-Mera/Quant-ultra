@@ -57,6 +57,18 @@ D:\Quant-Ultra-Env\venv\Scripts\python.exe Main\main.py --symbols "600519.SH,000
 
 常用参数：`--only-phase 6` 运行目标及依赖；`--resume-from 6` 从指定阶段继续；`--offline` 只用缓存；`--download-workers 1` 限制并发。报告位于 `Quant-4/reports/runs/<run-id>/`，含双语标题、结论解读、输出摘要、术语表和证据哈希。全部请求阶段结束后，同一目录会自动生成自包含的 `execute_report.html` 和结构化底稿 `execute_report_data.json`，汇总执行结论、资源分配、阶段证据与耗时、治理门禁、成本、净值以及 Phase 11 四阶段主导方法。
 
+### 按新数据迭代参数
+
+`run_adaptive_backtest.py` 默认启用跨运行参数迭代。首次运行使用基础网格并生成下一代候选；只有数据截止日推进后才使用候选并增加代数。同一份数据重复运行会复现上一代，不会反复优化同一历史。状态按标的保存在 `reports/adaptive_backtests/parameter_state/`，包含数据截止日、候选网格、折内参数频率和 SHA-256；篡改、基础网格变化或时间倒退均会失败关闭。
+
+```powershell
+D:\Quant-Ultra-Env\venv\Scripts\python.exe run_adaptive_backtest.py 600519 --kind stock --years 8
+# 诊断时禁用跨运行迭代
+D:\Quant-Ultra-Env\venv\Scripts\python.exe run_adaptive_backtest.py 600519 --kind stock --years 8 --disable-self-optimize
+```
+
+迭代仅扩展后续分析运行的搜索网格；每个 walk-forward 测试折仍只使用该折之前的训练数据选参。它不会改写默认生产配置，也不会产生交易授权。
+
 ### 自适应分布式计算
 
 初始化时系统检查逻辑/物理 CPU、可用内存、GPU、D 盘剩余空间、市场 HTTPS、DNS 和本地 Ollama。随后生成 CPU、I/O、下载、数据加载、优化和模型训练预算，并写入 `compute_audit`。CPU 工作数同时受物理核心、保留核心、每工作进程 1.5 GB 可用内存和配置上限约束；离线时下载并发自动降为 1。Phase 1/3 的 I/O 池、Phase 5 的 LightGBM 线程、Phase 6 的优化池以及 NumPy/BLAS/OpenMP 线程统一使用该预算，避免不同模块各自占满设备导致过度订阅。GPU 会被探测并记录，但只有确认对应库已构建 GPU 后端并显式设置 `distributed_gpu_backend_ready` 才会启用，避免把“检测到显卡”误当成“已使用显卡”。联机失败时自动保持 CPU/缓存路径，用户显式设置的工作线程数优先保留。
@@ -114,5 +126,7 @@ Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/repor
 At startup, the adaptive compute orchestrator inspects CPU, available memory, GPU, D-drive capacity, market/DNS connectivity, and local Ollama. It produces bounded budgets for downloads, I/O loading, optimization, model training, and numerical libraries. Offline downloads fall back to one worker; missing GPUs or connectivity never block the CPU/cache path, and explicit user worker overrides are preserved.
 
 Engineering acceptance, backtests, sentiment scores, and deterministic reconciliation do not guarantee investment performance. A failed audit or reconciliation produces `HOLD_FOR_REVIEW`; Phase 11 remains `OBSERVATION_ONLY` and must not be treated as executable advice.
+
+`run_adaptive_backtest.py` keeps a checksum-protected parameter state per symbol. A first run proposes a bounded next grid, the same data cutoff replays without advancing, and only a newer data cutoff starts the next generation. Cross-run iteration never changes the analysis-only boundary or authorizes execution; use `--disable-self-optimize` for a fixed-grid diagnostic run.
 
 Selection, entry, holding, and take-profit now form a regime-gated expert chain with at least eight methods per stage. Market trend, volatility, drawdown, liquidity, and sentiment change each stage's softmax weights. The dominant method directly shifts compatible priors in the following stage through an explicit transition matrix. Decisions use nonlinear `atanh` pooling plus a top-expert interaction term, rather than a linear weighted sum.

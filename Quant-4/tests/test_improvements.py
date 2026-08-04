@@ -170,6 +170,47 @@ def test_walk_forward_proves_temporal_order_and_frozen_parameters():
     assert (pd.to_datetime(result["returns"]["signal_time"]) < pd.to_datetime(result["returns"]["execution_time"])).all()
     assert result["audit"]["parameters_frozen"].all()
     assert (pd.to_datetime(result["folds"]["train_end"]) < pd.to_datetime(result["folds"]["test_start"])).all()
+    assert np.allclose(result["returns"]["turnover"], result["returns"]["weight"].diff().abs().fillna(result["returns"]["weight"].abs()))
+    assert "benchmark_annual_return" in result["summary"]
+    assert 0 <= result["summary"]["positive_fold_ratio"] <= 1
+
+def test_walk_forward_rejects_negative_costs():
+    try:
+        walk_forward_backtest(_backtest_frame(),_small_grid(),train_size=180,test_size=60,embargo=5,fee_rate=-0.001)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("negative trading costs must be rejected")
+
+def test_adaptive_parameter_iteration_advances_only_on_new_data(tmp_path):
+    from Main.adaptive_parameter_state import prepare_iteration, finalize_iteration
+    base=_small_grid(); symbol="600519.SH"
+    first=prepare_iteration(symbol,"2026-08-01",base,tmp_path)
+    result=walk_forward_backtest(_backtest_frame(),base,train_size=180,test_size=60,embargo=5)
+    evidence=finalize_iteration(symbol,first,result["folds"])
+    assert evidence["generation"]==1 and evidence["advanced"]
+    replay=prepare_iteration(symbol,"2026-08-01",base,tmp_path)
+    assert replay["status"]=="REPLAY_NO_NEW_DATA" and not replay["advance"]
+    assert finalize_iteration(symbol,replay,result["folds"])["generation"]==1
+    advanced=prepare_iteration(symbol,"2026-08-02",base,tmp_path)
+    assert advanced["status"]=="NEW_DATA_ITERATION" and advanced["generation"]==2
+    assert all(len(values)<=5 for values in advanced["grid"].values())
+
+def test_adaptive_parameter_state_rejects_tampering(tmp_path):
+    from Main.adaptive_parameter_state import prepare_iteration, finalize_iteration
+    base=_small_grid(); symbol="600519.SH"
+    prepared=prepare_iteration(symbol,"2026-08-01",base,tmp_path)
+    result=walk_forward_backtest(_backtest_frame(),base,train_size=180,test_size=60,embargo=5)
+    finalize_iteration(symbol,prepared,result["folds"])
+    path=tmp_path/"600519_SH.json"
+    state=json.loads(path.read_text(encoding="utf-8")); state["generation"]=99
+    path.write_text(json.dumps(state),encoding="utf-8")
+    try:
+        prepare_iteration(symbol,"2026-08-02",base,tmp_path)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("tampered adaptive state must be rejected")
 
 def test_future_mutation_cannot_change_first_fold():
     original=_backtest_frame()
@@ -342,6 +383,16 @@ def test_phase11_defense_in_depth_rejects_false_reconciliation(tmp_path,monkeypa
     monkeypatch.setattr(phase11,"write_candidate_report",lambda frame,path:(tmp_path/"x.md",tmp_path/"x.csv"))
     result=phase11.execute({"phase10_ready":True,"cio_decision":"ELIGIBLE_FOR_PHASE_11","audit_passed":True,"recon_passed":False,"run_metadata":{"timestamp":"test"},"config":{"phase11_interactive":False}})
     assert result["phase11_observation_only"]
+    assert not result["investment_candidates"]["action_allowed"].any()
+
+def test_phase11_eligible_research_still_cannot_authorize_trades(tmp_path,monkeypatch):
+    import Phase_11.step11_interactive_advisor as phase11
+    monkeypatch.setattr(phase11,"build_pipeline_recommendations",lambda context: pd.DataFrame([{"symbol":"510300.SH"}]))
+    monkeypatch.setattr(phase11,"write_candidate_report",lambda frame,path:(tmp_path/"x.md",tmp_path/"x.csv"))
+    result=phase11.execute({"phase10_ready":True,"cio_decision":"ELIGIBLE_FOR_PHASE_11","audit_passed":True,"recon_passed":True,"run_metadata":{"timestamp":"test"},"config":{"phase11_interactive":False,"analysis_only":True}})
+    assert not result["phase11_observation_only"]
+    assert result["phase11_analysis_only"]
+    assert result["investment_candidates"]["advisory_mode"].eq("ANALYSIS_ONLY").all()
     assert not result["investment_candidates"]["action_allowed"].any()
 
 def test_production_preflight_reports_boundaries():

@@ -80,6 +80,8 @@ def walk_forward_backtest(
     fee_rate: float = 0.001,
 ) -> dict:
     """Expanding-window selection; parameters are frozen in each out-of-sample fold."""
+    if fee_rate < 0:
+        raise ValueError("fee_rate must be non-negative")
     data = _prepare(frame)
     candidates = _grid(param_grid)
     if train_size < max(p.slow_window for p in candidates) * 2 or test_size < 2 or embargo < 1:
@@ -98,13 +100,11 @@ def walk_forward_backtest(
         full_stream = _signals(data.iloc[:test_end + 2], best)
         test_index = data.index[test_start:test_end]
         stream = full_stream.loc[test_index].dropna(subset=["execution_time", "asset_return"]).copy()
-        turnover = stream["weight"].diff().abs().fillna(stream["weight"].abs())
-        stream["strategy_return"] = stream["weight"] * stream["asset_return"] - turnover * fee_rate
         stream["fold"] = fold
         violation = (pd.to_datetime(stream["signal_time"]) >= pd.to_datetime(stream["execution_time"])).any()
         if violation or train.index.max() >= data.index[test_start]:
             raise RuntimeError("检测到未来数据泄漏或训练/测试时间重叠")
-        return_parts.append(stream[["fold", "signal_time", "execution_time", "weight", "asset_return", "strategy_return"]])
+        return_parts.append(stream[["fold", "signal_time", "execution_time", "weight", "asset_return"]])
         fold_rows.append({
             "fold": fold, "train_start": str(train.index.min()), "train_end": str(train.index.max()),
             "embargo_days": embargo, "test_start": str(data.index[test_start]),
@@ -116,17 +116,27 @@ def walk_forward_backtest(
     if not return_parts:
         raise ValueError("数据长度不足以形成走步回测折")
     returns = pd.concat(return_parts).sort_index()
+    returns["turnover"] = returns["weight"].diff().abs().fillna(returns["weight"].abs())
+    returns["strategy_return"] = returns["weight"] * returns["asset_return"] - returns["turnover"] * fee_rate
     folds = pd.DataFrame(fold_rows)
     audit = pd.DataFrame(audit_rows)
     equity = (1 + returns["strategy_return"]).cumprod()
+    benchmark_equity = (1 + returns["asset_return"]).cumprod()
     r = returns["strategy_return"]
     annual_return = float(equity.iloc[-1] ** (252 / len(r)) - 1)
+    benchmark_annual_return = float(benchmark_equity.iloc[-1] ** (252 / len(r)) - 1)
     annual_vol = float(r.std(ddof=1) * np.sqrt(252))
     max_drawdown = float((equity / equity.cummax() - 1).min())
+    fold_returns = returns.groupby("fold")["strategy_return"].apply(lambda values: float((1 + values).prod() - 1))
     summary = {
         "observations": len(r), "folds": fold, "annual_return": annual_return,
-        "annual_volatility": annual_vol, "sharpe": (annual_return / annual_vol if annual_vol else 0.0),
+        "annual_volatility": annual_vol, "sharpe": (float(r.mean() / r.std(ddof=1) * np.sqrt(252)) if annual_vol else 0.0),
         "max_drawdown": max_drawdown, "final_equity": float(equity.iloc[-1]),
+        "benchmark_annual_return": benchmark_annual_return, "benchmark_final_equity": float(benchmark_equity.iloc[-1]),
+        "annualized_excess_return": float((equity.iloc[-1] / benchmark_equity.iloc[-1]) ** (252 / len(r)) - 1),
+        "average_exposure": float(returns["weight"].mean()), "annualized_turnover": float(returns["turnover"].sum() * 252 / len(r)),
+        "positive_fold_ratio": float((fold_returns > 0).mean()), "fee_rate": float(fee_rate),
+        "test_start": str(returns.index.min()), "test_end": str(returns.index.max()),
         "lookahead_audit_passed": bool(audit[["train_before_test", "signal_before_execution", "parameters_frozen"]].all(axis=None)),
         "execution_rule": "close[t] signal -> open[t+1] execution -> open[t+2] return",
     }
