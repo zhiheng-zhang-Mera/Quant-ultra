@@ -388,6 +388,44 @@ class FreeDataSourceManager:
             pd.DataFrame({"symbol": symbols}).to_parquet(self.cache_dir / "full_market_universe.parquet", index=False)
         return symbols
 
+    def fetch_asset_names(self, symbols: List[str]) -> dict[str, str]:
+        """Resolve stock/ETF names from the same market-data sources, never a hard-coded list."""
+        requested = {str(symbol).upper() for symbol in symbols}
+        if not requested:
+            return {}
+        cache_path = self.cache_dir / "security_master.parquet"
+        cached = pd.DataFrame(columns=["symbol", "asset_name"])
+        if cache_path.exists():
+            try:
+                cached = pd.read_parquet(cache_path)
+            except Exception:
+                pass
+        result = dict(zip(cached.get("symbol", pd.Series(dtype=str)).astype(str).str.upper(), cached.get("asset_name", pd.Series(dtype=str)).astype(str)))
+        missing = requested - set(result)
+        if missing and not self.offline_debug and hasattr(self, "_ak"):
+            frames = []
+            for source, method in (("stock_name_master", "stock_zh_a_spot_em"), ("etf_name_master", "fund_etf_spot_em")):
+                try:
+                    frames.append(self._bounded_source_call(source, getattr(self._ak, method)))
+                except Exception:
+                    continue
+            master_rows = []
+            for frame in frames:
+                if frame is None or frame.empty:
+                    continue
+                code_col = next((c for c in frame if frame[c].astype(str).str.fullmatch(r"\\d{6}").mean() > .5), None)
+                name_col = next((c for c in frame if c != code_col and frame[c].dtype == object and frame[c].astype(str).str.len().between(2, 40).mean() > .5), None)
+                if code_col is None or name_col is None:
+                    continue
+                for code, name in zip(frame[code_col].astype(str), frame[name_col].astype(str)):
+                    symbol = f"{code}.SH" if code.startswith(("5", "6", "9")) else f"{code}.SZ"
+                    master_rows.append({"symbol": symbol, "asset_name": name})
+            if master_rows:
+                master = pd.concat([cached, pd.DataFrame(master_rows)], ignore_index=True).drop_duplicates("symbol", keep="last")
+                master.to_parquet(cache_path, index=False)
+                result.update(dict(zip(master["symbol"].astype(str).str.upper(), master["asset_name"].astype(str))))
+        return {symbol: result.get(symbol, "名称数据不可用 / Name data unavailable") for symbol in requested}
+
     def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = datetime.now().year) -> pd.DatetimeIndex:
         c_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
         if c_path.exists():

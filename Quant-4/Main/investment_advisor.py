@@ -25,6 +25,8 @@ def build_pipeline_recommendations(context: dict, top_n: int = 20) -> pd.DataFra
     rows = []
     alternative = context.get("alternative_signals")
     alternative_map = dict(zip(alternative["symbol"], alternative["alternative_signal"])) if isinstance(alternative, pd.DataFrame) and not alternative.empty else {}
+    asset_names = manager.fetch_asset_names(list(symbols))
+    context["asset_names"] = asset_names
     for symbol in symbols:
         try:
             frame = manager.fetch_historical(str(symbol), str(start), str(end))
@@ -33,7 +35,7 @@ def build_pipeline_recommendations(context: dict, top_n: int = 20) -> pd.DataFra
             asset_type = infer_kind(str(symbol))
             rec = recommendation(frame, model_weight=float(latest_weights[symbol]), asset_type=asset_type, cost_config=context.get("config"), alternative_signal=float(alternative_map.get(symbol, 0.0)))
             if rec["qualified"]:
-                rows.append({"symbol": symbol, "asset_type": asset_type, **rec})
+                rows.append({"symbol": symbol, "asset_name": asset_names.get(str(symbol).upper(), "名称数据不可用 / Name data unavailable"), "asset_type": asset_type, **rec})
         except Exception:
             continue
     if not rows:
