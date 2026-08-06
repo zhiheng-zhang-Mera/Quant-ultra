@@ -9,6 +9,7 @@ pyarrow>=14
 PyYAML>=6
 pytz>=2023.3
 requests>=2.31
+aiohttp>=3.10
 tenacity>=8.2
 akshare>=1.13
 baostock>=0.8.9

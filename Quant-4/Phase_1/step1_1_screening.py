@@ -83,10 +83,18 @@ def run_screening(context: dict, data_bus, data_manager):
     end_date = now.strftime('%Y-%m-%d')
     start_date = (now - timedelta(days=400)).strftime('%Y-%m-%d')
     logger.info("[RANGE] Data pull window: %s to %s", start_date, end_date)
+
+    # Fill parquet caches in hardware-sized batches before analytics workers run.
+    # Existing DataBus calls then become local reads, preserving the engine API.
+    batch_fetch = getattr(data_manager, "fetch_historical_batch", None)
+    if callable(batch_fetch) and not getattr(data_manager, "offline_debug", False):
+        logger.info("[DOWNLOAD] Warming %s history caches in batches", len(symbols))
+        batch_fetch(symbols, start_date, end_date)
     
     limiter = AdaptiveConcurrencyLimiter() if HAS_PSUTIL else None
     configured_workers = context.get("config", {}).get("download_workers")
-    max_workers = configured_workers or (CONFIG.get("ADAPTIVE_MAX_WORKERS", 4) if HAS_PSUTIL else CONFIG.get("DOWNLOAD_WORKERS", 8))
+    runtime_plan = getattr(data_manager, "download_plan", None)
+    max_workers = configured_workers or (runtime_plan.workers if runtime_plan else (CONFIG.get("ADAPTIVE_MAX_WORKERS", 4) if HAS_PSUTIL else CONFIG.get("DOWNLOAD_WORKERS", 8)))
     logger.info("[PARALLEL] Using max_workers=%s, adaptive=%s", max_workers, HAS_PSUTIL)
     
     raw_results = []

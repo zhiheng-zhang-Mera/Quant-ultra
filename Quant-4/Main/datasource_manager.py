@@ -4,6 +4,7 @@ import logging
 import queue
 import threading
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Set
@@ -11,12 +12,13 @@ import pandas as pd
 from Main.env_config import PROJECT_ROOT
 from Main.us_pipeline import fetch_us_historical, fetch_us_trading_calendar as _fetch_us_calendar
 from Main.data_quality import validate_ohlcv, write_manifest
+from Main.download_runtime import AsyncRestBatchClient, build_download_plan, create_persistent_session
 
 class CircuitOpenError(RuntimeError):
     pass
 
 class FreeDataSourceManager:
-    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None, source_timeout_seconds: float = 30.0, source_cooldown_seconds: float = 60.0, source_max_cooldown_seconds: float = 600.0):
+    def __init__(self, cache_dir: Path = None, offline_debug: bool = False, proxy_url: str = None, source_timeout_seconds: float = 30.0, source_cooldown_seconds: float = 60.0, source_max_cooldown_seconds: float = 600.0, download_workers: int = None):
         self.cache_dir = cache_dir or (PROJECT_ROOT / "data_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir = self.cache_dir / "evidence"
@@ -30,6 +32,9 @@ class FreeDataSourceManager:
         if self.proxy_url:
             os.environ["HTTPS_PROXY"] = self.proxy_url
             os.environ["HTTP_PROXY"] = self.proxy_url
+        self.download_plan = build_download_plan(download_workers)
+        self.http_session = create_persistent_session(self.download_plan, self.proxy_url)
+        self.rest_client = AsyncRestBatchClient(self.download_plan, source_timeout_seconds, self.proxy_url)
         self._init_sources()
         self.DEFAULT_START = "2005-01-01"
         self._failed_symbols: Set[str] = set()
@@ -41,6 +46,41 @@ class FreeDataSourceManager:
         self._source_retry_at: dict[str, float] = {}
         self._source_timeout_counts: dict[str, int] = {}
         self._circuit_lock = threading.Lock()
+        self._symbol_locks: dict[str, threading.Lock] = {}
+        self._symbol_locks_guard = threading.Lock()
+
+    def _symbol_lock(self, symbol: str) -> threading.Lock:
+        with self._symbol_locks_guard:
+            return self._symbol_locks.setdefault(symbol, threading.Lock())
+
+    @staticmethod
+    def _slice(df: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFrame:
+        dates = pd.to_datetime(df["date"])
+        return df.loc[(dates >= pd.Timestamp(start_date)) & (dates <= pd.Timestamp(end_date))].copy()
+
+    @staticmethod
+    def _merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.DataFrame:
+        frames = [frame for frame in (cached, fresh) if frame is not None and not frame.empty]
+        merged = pd.concat(frames, ignore_index=True)
+        merged["date"] = pd.to_datetime(merged["date"])
+        return merged.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+    def fetch_historical_batch(self, symbols, start_date: str, end_date: str, freq: str = "d") -> dict[str, Optional[pd.DataFrame]]:
+        """Warm many symbol caches with one hardware-sized scheduling batch."""
+        unique = list(dict.fromkeys(symbols))
+        results: dict[str, Optional[pd.DataFrame]] = {}
+        for offset in range(0, len(unique), self.download_plan.batch_size):
+            batch = unique[offset:offset + self.download_plan.batch_size]
+            with ThreadPoolExecutor(max_workers=min(self.download_plan.workers, len(batch))) as pool:
+                futures = {pool.submit(self.fetch_historical, symbol, start_date, end_date, freq): symbol for symbol in batch}
+                for future in as_completed(futures):
+                    symbol = futures[future]
+                    try:
+                        results[symbol] = future.result()
+                    except Exception:
+                        self._logger.exception("Batch history download failed for %s", symbol)
+                        results[symbol] = None
+        return results
 
     def _source_retry_remaining(self, name: str) -> float:
         with self._circuit_lock:
@@ -57,13 +97,19 @@ class FreeDataSourceManager:
         if remaining > 0:
             raise CircuitOpenError(f"{name} cooling down; retry in {remaining:.2f}s")
         results: queue.Queue = queue.Queue(maxsize=1)
+        invocation_started = threading.Event()
         def invoke():
+            invocation_started.set()
             try:
                 results.put((True, func(*args, **kwargs)))
             except BaseException as exc:
                 results.put((False, exc))
         worker = threading.Thread(target=invoke, name=f"market-source-{name}", daemon=True)
         worker.start()
+        # Start the provider budget only after the OS has scheduled the worker.
+        # This avoids charging thread-start latency while preserving a strict
+        # wall-clock limit for the provider itself.
+        invocation_started.wait(timeout=1.0)
         worker.join(self.source_timeout_seconds)
         if worker.is_alive():
             with self._circuit_lock:
@@ -146,6 +192,7 @@ class FreeDataSourceManager:
             self._failed_symbols.discard(symbol)
             self._failed_symbol_retry_at.pop(symbol, None)
         c_path = self.cache_dir / f"{symbol}_history.parquet"
+        cached_df = None
         if c_path.exists():
             try:
                 df = pd.read_parquet(c_path)
@@ -160,16 +207,24 @@ class FreeDataSourceManager:
                     except (OSError, json.JSONDecodeError, ValueError, TypeError):
                         continue
                 if validation["valid"] and matching:
-                    mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
-                    cached = df.loc[mask].copy()
-                    if not cached.empty:
-                        return cached
-                self._logger.warning("Rejected cache without matching valid evidence: %s", symbol)
+                    cached_df = df.sort_values("date").drop_duplicates("date", keep="last")
+                    requested = self._slice(cached_df, start_date, end_date)
+                    # A cache hit is complete only when it covers both requested
+                    # boundaries. Otherwise retain it and fetch just the missing tail.
+                    if (not requested.empty and cached_df["date"].min() <= pd.Timestamp(start_date)
+                            and cached_df["date"].max() >= pd.Timestamp(end_date)):
+                        return requested
+                else:
+                    self._logger.warning("Rejected cache without matching valid evidence: %s", symbol)
             except Exception:
                 c_path.unlink(missing_ok=True)
         if self.offline_debug:
             return None
         attempts = []
+        fetch_start = self.DEFAULT_START
+        if cached_df is not None and not cached_df.empty and cached_df["date"].min() <= pd.Timestamp(start_date):
+            fetch_start = (cached_df["date"].max() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+        fetch_end = end_date
         for name, func in self._sources:
             retry_remaining = self._source_retry_remaining(name)
             if retry_remaining > 0:
@@ -177,14 +232,15 @@ class FreeDataSourceManager:
                 continue
             started = time.monotonic()
             try:
-                df = self._bounded_source_call(name, func, symbol, self.DEFAULT_START, datetime.now().strftime("%Y-%m-%d"), freq)
+                df = self._bounded_source_call(name, func, symbol, fetch_start, fetch_end, freq)
                 elapsed = round(time.monotonic() - started, 3)
                 if df is None or df.empty:
                     attempts.append({"provider": name, "status": "EMPTY", "elapsed_seconds": elapsed})
                     continue
                 if df is not None and not df.empty:
+                    df = self._merge_history(cached_df, df)
                     evidence = validate_ohlcv(df, symbol)
-                    requested = df[(pd.to_datetime(df["date"]) >= pd.to_datetime(start_date)) & (pd.to_datetime(df["date"]) <= pd.to_datetime(end_date))] if "date" in df else pd.DataFrame()
+                    requested = self._slice(df, start_date, end_date) if "date" in df else pd.DataFrame()
                     if evidence["valid"] and requested.empty:
                         evidence["valid"] = False
                         evidence["errors"].append("no rows in requested date range")
@@ -194,15 +250,17 @@ class FreeDataSourceManager:
                         attempts.append({"provider": name, "status": "INCOMPLETE_OR_INVALID", "elapsed_seconds": elapsed, "errors": evidence["errors"]})
                         self._logger.warning("Rejected invalid dataset %s from %s: %s", symbol, name, evidence["errors"])
                         continue
-                    df.to_parquet(c_path, index=False)
-                    mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
+                    tmp_path = c_path.with_suffix(".parquet.tmp")
+                    with self._symbol_lock(symbol):
+                        df.to_parquet(tmp_path, index=False)
+                        tmp_path.replace(c_path)
                     attempts.append({"provider": name, "status": "ACCEPTED", "elapsed_seconds": elapsed, "rows": len(df), "sha256": evidence["sha256"]})
                     self._write_download_audit(symbol, attempts, "COMPLETE")
                     self._failed_symbols.discard(symbol)
                     self._failed_symbol_retry_at.pop(symbol, None)
                     # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
                     self._logger.info("由数据源管理器查询A股实时数据 | 来源: %s | 结果: 行数: %d | 意义: 多源回退成功", name, len(df))
-                    return df.loc[mask].copy()
+                    return requested
             except TimeoutError as exc:
                 attempts.append({"provider": name, "status": "TIMEOUT_CIRCUIT_OPEN", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
                 self._logger.warning("Provider timeout for %s via %s; switching channel", symbol, name)

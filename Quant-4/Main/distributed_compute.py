@@ -51,7 +51,10 @@ def build_resource_plan(profile, config, connectivity):
     cpu_workers = min(cpu_capacity, memory_capacity, int(config.get("distributed_cpu_worker_cap", 16)))
     online = connectivity.get("market_https", False)
     io_workers = min(max(2, cpu_workers * 2), int(config.get("distributed_io_worker_cap", 24)))
-    downloads = min(io_workers, 4 if online else 1)
+    # Market downloads are I/O bound. Size them from hardware/memory instead of
+    # pinning every machine to four workers; provider circuit breakers remain the
+    # remote-rate-limit safety layer.
+    downloads = min(io_workers, max(4, profile.logical_cpu * 2), max(2, int(profile.available_memory_gb * 2))) if online else 1
     gpu_available = bool(profile.gpu_devices)
     gpu_enabled = gpu_available and bool(config.get("distributed_allow_gpu", True)) and bool(config.get("distributed_gpu_backend_ready", False))
     return {"distributed_enabled": cpu_workers > 1, "cpu_workers": cpu_workers, "io_workers": io_workers, "download_workers": int(config.get("download_workers") or downloads), "data_load_workers": int(config.get("data_load_workers") or io_workers), "optimization_workers": min(io_workers, 16), "model_threads": min(cpu_workers, 8), "gpu_available": gpu_available, "gpu_enabled": gpu_enabled, "safety_reserve_cpu": reserve, "memory_per_cpu_worker_gb": 1.5, "online_mode": online}

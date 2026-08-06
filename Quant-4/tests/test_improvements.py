@@ -19,6 +19,7 @@ from Main.stage_reporter import StageReporter
 from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
+from Main.download_runtime import AsyncRestBatchClient, build_download_plan, create_persistent_session
 from Main.execute_report import generate_execute_report
 from Main.allocation_constraints import apply_allocation_cap
 
@@ -137,6 +138,16 @@ def test_user_worker_override_is_preserved_by_resource_plan():
     profile = HardwareProfile(8, 4, 16, 32, 100, [], "test")
     plan = build_resource_plan(profile, {"download_workers": 2, "data_load_workers": 3}, {"market_https": True})
     assert plan["download_workers"] == 2 and plan["data_load_workers"] == 3
+
+def test_download_runtime_sizes_pools_and_reuses_connections():
+    plan = build_download_plan(worker_override=7)
+    assert plan.workers == 7
+    assert plan.connection_pool >= plan.workers * 2
+    assert plan.batch_size >= plan.workers
+    session = create_persistent_session(plan)
+    assert session.get_adapter("https://")._pool_maxsize == plan.connection_pool
+    assert session.headers["Connection"] == "keep-alive"
+    assert AsyncRestBatchClient(plan).plan is plan
 
 def test_execute_report_integrates_phase_evidence_and_governance(tmp_path):
     reporter = StageReporter(tmp_path, "run", "abc123")
@@ -279,6 +290,39 @@ def test_market_source_timeout_switches_channel_and_writes_audit(tmp_path):
     audit=json.loads((tmp_path/"evidence"/"600519.SH_download_audit.json").read_text(encoding="utf-8"))
     assert [item["status"] for item in audit["attempts"]]==["TIMEOUT_CIRCUIT_OPEN","ACCEPTED"]
     assert "slow" in manager._disabled_sources
+
+def test_history_cache_downloads_only_incremental_tail_and_merges_atomically(tmp_path):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager = FreeDataSourceManager(cache_dir=tmp_path, offline_debug=True, download_workers=2)
+    manager.offline_debug = False
+    cached = _market_frame().iloc[:80].copy()
+    cache_path = tmp_path / "600519.SH_history.parquet"
+    cached.to_parquet(cache_path, index=False)
+    evidence = validate_ohlcv(cached, "600519.SH")
+    evidence["provider"] = "fixture"
+    (tmp_path / "evidence" / "600519.SH_fixture.json").write_text(json.dumps(evidence), encoding="utf-8")
+    calls = []
+    def incremental(symbol, start, end, freq):
+        calls.append((start, end))
+        return _market_frame().iloc[74:].copy()
+    manager._sources = [("incremental", incremental)]
+    result = manager.fetch_historical("600519.SH", "2024-01-01", "2024-04-09")
+    assert calls == [("2024-03-15", "2024-04-09")]
+    assert len(result) == 100
+    stored = pd.read_parquet(cache_path)
+    assert len(stored) == 100 and not cache_path.with_suffix(".parquet.tmp").exists()
+
+def test_batch_history_interface_deduplicates_symbols(tmp_path, monkeypatch):
+    from Main.datasource_manager import FreeDataSourceManager
+    manager = FreeDataSourceManager(cache_dir=tmp_path, offline_debug=True, download_workers=3)
+    calls = []
+    def fake(symbol, start, end, freq="d"):
+        calls.append(symbol)
+        return _market_frame()
+    monkeypatch.setattr(manager, "fetch_historical", fake)
+    results = manager.fetch_historical_batch(["A", "B", "A"], "2024-01-01", "2024-04-09")
+    assert set(results) == {"A", "B"}
+    assert sorted(calls) == ["A", "B"]
 
 def test_stock_list_timeout_switches_to_static_channel(tmp_path):
     from Main.datasource_manager import FreeDataSourceManager

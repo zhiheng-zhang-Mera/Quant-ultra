@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+__pycache__/
+.pytest_cache/
 *.pyd
 *.so
 build/
