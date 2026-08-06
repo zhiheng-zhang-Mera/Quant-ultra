@@ -342,7 +342,7 @@ class FreeDataSourceManager:
         c_path = self.cache_dir / "stock_list.parquet"
         if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 1:
             cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
-            if len(cached) >= 500:
+            if len(cached) >= 50:
                 return cached
             self._logger.warning("Rejected undersized stock-list cache: %s symbols", len(cached))
         if self.offline_debug:
@@ -365,7 +365,7 @@ class FreeDataSourceManager:
                         if len(code) == 6 and code.isdigit():
                             syms.append(f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ")
                     syms = sorted(set(syms))
-                    if len(syms) >= 500:
+                    if len(syms) >= 50:
                         pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
                         return syms
             except Exception:
@@ -383,7 +383,7 @@ class FreeDataSourceManager:
                     exchange, code = raw.split(".", 1)
                     if len(code) == 6 and code.isdigit(): codes.append(f"{code}.{exchange.upper()}")
                 syms = sorted(set(codes))
-                if len(syms) >= 500:
+                if len(syms) >= 50:
                     pd.DataFrame({"symbol": syms}).to_parquet(c_path, index=False)
                     return syms
             except Exception:
@@ -410,7 +410,7 @@ class FreeDataSourceManager:
             except: pass
         if c_path.exists():
             cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
-            if len(cached) >= 500:
+            if len(cached) >= 50:
                 return cached
         return []
 

@@ -192,7 +192,7 @@ def build_triple_barrier_labels_for_universe(
             y_reg[key] = float(ret)
         
         processed += 1
-        if processed % 500 == 0:
+        if processed % 100 == 0:
             logger.info("[OP] Progressively Build Triple-Barrier Labels | [SOURCE] Point-In-Time Price Bars | [RESULT] Processed %s assets | [SIGNIFICANCE] Generating path-dependent profit/loss targets", processed)
     
     logger.info("[OP] Terminate Triple-Barrier Labeling | [SOURCE] Universe Loop | [RESULT] Success: %s, Skips: %s | [SIGNIFICANCE] Dynamic barrier targets replace fixed-horizon labels", processed, skipped)

@@ -94,7 +94,7 @@ def build_dual_track_labels(
             y_clf_all[key] = int(y_clf[i])
 
         processed_count += 1
-        if processed_count % 500 == 0:
+        if processed_count % 50 == 0:
             logger.info("[OP] Progressively Compute Dual Labels | [SOURCE] Point-In-Time Historical Index Traces | [RESULT] Tracked Accumulation: %s active assets | [SIGNIFICANCE] Feeds clean categorical signals into downstream optimization graphs", processed_count)
             logger.info("[操作] 步进式编译双轨标记面板 | [来源] 时点不可变历史行情索引 | [结果] 累计成功解算资产数: %s 只 | [意义] 提炼无前瞻偏差的非线性分类信号，安全投喂给下游优化器决策网络")
 

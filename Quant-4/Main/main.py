@@ -92,8 +92,8 @@ def run_pipeline(args):
         "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
         "local_llm_max_records_per_symbol": 2, "local_llm_max_chars_per_record": 300,
         "rotation_mode": "FULL_MARKET_DAILY_GUERRILLA", "rotation_rebalance_days": 1,
-        "rotation_minimum_market_coverage": 500,
-        "rotation_minimum_stock_coverage": 1000,
+        "rotation_minimum_market_coverage": 50,
+        "rotation_minimum_stock_coverage": 100,
         "market_source_timeout_seconds": 30.0,
         "market_source_cooldown_seconds": 60.0, "market_source_max_cooldown_seconds": 600.0,
     }
