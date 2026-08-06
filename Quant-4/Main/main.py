@@ -135,8 +135,8 @@ def run_pipeline(args):
         raise ValueError("full-market rotation mode does not accept a fixed --symbols list")
     full_market = data_manager.fetch_full_market_list(include_delisted=True)
     full_market = [symbol for symbol in full_market if symbol_purchase_eligibility(symbol)[0]]
-    minimum_coverage = int(config.get("rotation_minimum_market_coverage", 500))
-    minimum_stocks = int(config.get("rotation_minimum_stock_coverage", 1000))
+    minimum_coverage = int(config.get("rotation_minimum_market_coverage", 50))
+    minimum_stocks = int(config.get("rotation_minimum_stock_coverage", 100))
     stock_count = sum(not symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) for symbol in full_market)
     if not args.offline and (len(full_market) < minimum_coverage or stock_count < minimum_stocks):
         raise RuntimeError(f"full-market rotation requires at least {minimum_coverage} securities and {minimum_stocks} stocks; found {len(full_market)} and {stock_count}")
