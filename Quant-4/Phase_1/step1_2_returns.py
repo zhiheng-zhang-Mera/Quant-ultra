@@ -40,7 +40,8 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
     now = datetime.now(data_bus._tz)
     latest_trading_day = context.get('effective_latest_trading_day')
     
-    delisted = [] if context.get("config", {}).get("bounded_universe") else _get_delisted_a_stocks(data_manager)
+    limited_universe = context.get("config", {}).get("bounded_universe") or context.get("sector_rotation_active")
+    delisted = [] if limited_universe else _get_delisted_a_stocks(data_manager)
     all_stocks = list(set(assets + delisted))
     
     logger.info("[OP] Integrate Deceased Corporate Vectors | [SOURCE] Remote Mirroring Exchange Tables | [RESULT] Combined Universe Count: %s (Active: %s, Delisted: %s) | [SIGNIFICANCE] Forcibly reconstructs historical dead asset matrices to resolve flaw A-8", len(all_stocks), len(assets), len(delisted))
@@ -52,7 +53,7 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
             existing_df = pd.read_parquet(cache_path)
             if not existing_df.empty:
                 existing_df['date'] = pd.to_datetime(existing_df['date'])
-                if context.get("config", {}).get("bounded_universe"):
+                if limited_universe:
                     existing_df = existing_df[existing_df['symbol'].isin(set(all_stocks))].copy()
                 if existing_df['date'].max().date() >= latest_trading_day.date():
                     cached_symbols = set(existing_df['symbol'].unique())

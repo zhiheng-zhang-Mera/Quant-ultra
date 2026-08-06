@@ -12,6 +12,9 @@ CONFIG = {
     "EXPECTED_TURNOVER": 0.05,            # 预期换手率
     "MAX_SINGLE_STOCK_WEIGHT": 0.05,      # 单股最大权重
     "CACHE_EXPIRE_DAYS": 7,               # 缓存失效周期
+    "SECTOR_TOP_N": 3,
+    "SECTOR_MAX_ANNUAL_VOLATILITY": 0.40,
+    "SECTOR_MIN_AMOUNT_SHARE_5D": 0.01,
     
     # 防封锁安全降级风控（由于拉取多年历史数据包极大，调低线程以严防触发防火墙 RST 硬拦截）
     "DOWNLOAD_WORKERS": 4,                 # 固定降级线程数（从 8 调降至 4，安全脱水）

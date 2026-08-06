@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from Phase_1.config import CONFIG
 from Phase_1.concurrency import AdaptiveConcurrencyLimiter, HAS_PSUTIL
+from Phase_1.sector_rotation import select_sector_universe
 
 logger = logging.getLogger("Orchestrator.Phase1.Screening")
 
@@ -57,14 +58,24 @@ def run_screening(context: dict, data_bus, data_manager):
     context['effective_latest_trading_day'] = latest_trading_day
     logger.info("[TIMING] Effective latest trading day resolved: %s", latest_trading_day.strftime('%Y-%m-%d'))
 
+    if not context.get("config", {}).get("bounded_universe") and not getattr(data_manager, "offline_debug", False):
+        symbols, sector_ranking = select_sector_universe(
+            data_manager,
+            latest_trading_day.strftime("%Y-%m-%d"),
+            top_n=int(context.get("config", {}).get("sector_top_n", CONFIG.get("SECTOR_TOP_N", 3))),
+        )
+        data_bus.set_universe(symbols)
+        context["sector_rotation_active"] = True
+        context["selected_sectors"] = sector_ranking["sector"].tolist()
+        context["sector_ranking"] = sector_ranking
+
     screening_cache = data_manager.cache_dir / "screening_results.parquet"
-    if screening_cache.exists():
+    if screening_cache.exists() and not context.get("sector_rotation_active"):
         try:
             df_cache = pd.read_parquet(screening_cache)
             if 'cache_date' in df_cache.columns and pd.to_datetime(df_cache['cache_date'].iloc[0]).date() == latest_trading_day.date():
-                if context.get("config", {}).get("bounded_universe"):
-                    allowed = set(data_bus.get_universe())
-                    df_cache = df_cache[df_cache['symbol'].isin(allowed)].copy()
+                allowed = set(data_bus.get_universe())
+                df_cache = df_cache[df_cache['symbol'].isin(allowed)].copy()
                 if df_cache.empty:
                     raise ValueError("screening cache has no rows for the requested bounded universe")
                 context['assets'] = df_cache['symbol'].tolist()

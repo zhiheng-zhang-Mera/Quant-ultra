@@ -20,6 +20,7 @@ from Phase_3.alternative_data import build_alternative_signals, enhance_sentimen
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
 from Main.download_runtime import AsyncRestBatchClient, build_download_plan, create_persistent_session
+from Phase_1.sector_rotation import score_sector_histories, select_sector_universe
 from Main.execute_report import generate_execute_report
 from Main.allocation_constraints import apply_allocation_cap
 
@@ -323,6 +324,67 @@ def test_batch_history_interface_deduplicates_symbols(tmp_path, monkeypatch):
     results = manager.fetch_historical_batch(["A", "B", "A"], "2024-01-01", "2024-04-09")
     assert set(results) == {"A", "B"}
     assert sorted(calls) == ["A", "B"]
+
+def _sector_frame(momentum=0.10, amount=100.0, volatility=0.005, end="2026-08-05"):
+    dates = pd.bdate_range(end=end, periods=80)
+    rng = np.random.default_rng(abs(hash((momentum, amount))) % (2**32))
+    daily = momentum / 20 + rng.normal(0, volatility, len(dates))
+    close = 100 * np.exp(np.cumsum(daily))
+    return pd.DataFrame({"date": dates, "open": close, "high": close * 1.01, "low": close * .99, "close": close, "amount": amount})
+
+def test_sector_scoring_applies_momentum_liquidity_and_volatility_gates():
+    histories = {
+        "leader": _sector_frame(.20, 400),
+        "steady": _sector_frame(.10, 300),
+        "third": _sector_frame(.05, 200),
+        "illiquid": _sector_frame(.30, 1),
+        "volatile": _sector_frame(.40, 100, volatility=.08),
+    }
+    ranking = score_sector_histories(histories, "2026-08-05")
+    eligible = ranking.loc[ranking["eligible"], "sector"].tolist()
+    assert "illiquid" not in eligible
+    assert "volatile" not in eligible
+    assert set(eligible[:3]) == {"leader", "steady", "third"}
+    assert np.allclose(ranking["score"], .4 * ranking["momentum_rank"] + .3 * ranking["amount_share_rank"] + .3 * ranking["adv_ratio_rank"])
+
+def test_sector_first_selection_updates_indexes_but_only_loads_top_three_constituents(tmp_path):
+    board_names = ["leader", "steady", "third", "laggard"]
+    histories = {
+        "leader": _sector_frame(.20, 400),
+        "steady": _sector_frame(.10, 300),
+        "third": _sector_frame(.05, 200),
+        "laggard": _sector_frame(-.10, 100),
+    }
+    class Ak:
+        history_starts = []
+        constituent_calls = []
+        def stock_board_industry_name_em(self):
+            return pd.DataFrame({"板块代码": [f"BK{i}" for i in range(4)], "板块名称": board_names})
+        def stock_board_industry_hist_em(self, symbol, period, start_date, end_date, adjust):
+            self.history_starts.append((symbol, start_date))
+            return histories[symbol].rename(columns={"date":"日期","open":"开盘","high":"最高","low":"最低","close":"收盘","amount":"成交额"})
+        def stock_board_industry_cons_em(self, symbol):
+            self.constituent_calls.append(symbol)
+            offset = board_names.index(symbol)
+            return pd.DataFrame({"代码": [f"6000{offset}1", f"0000{offset}2"]})
+    class Manager:
+        cache_dir = tmp_path
+        _ak = Ak()
+        def _bounded_source_call(self, name, func, *args, **kwargs):
+            return func(*args, **kwargs)
+    manager = Manager()
+    symbols, selected = select_sector_universe(manager, "2026-08-05", top_n=3)
+    assert len(selected) == 3 and len(symbols) == 6
+    assert set(manager._ak.constituent_calls) == set(selected["sector"])
+    assert len(manager._ak.history_starts) == 4
+    first_snapshot = tmp_path / "sector_rotation" / "selections" / "2026-08-05.json"
+    assert first_snapshot.exists()
+
+    manager._ak.constituent_calls.clear(); manager._ak.history_starts.clear()
+    select_sector_universe(manager, "2026-08-06", top_n=3)
+    assert first_snapshot.exists()
+    assert (tmp_path / "sector_rotation" / "selections" / "2026-08-06.json").exists()
+    assert all(start > "20260101" for _, start in manager._ak.history_starts)
 
 def test_stock_list_timeout_switches_to_static_channel(tmp_path):
     from Main.datasource_manager import FreeDataSourceManager
