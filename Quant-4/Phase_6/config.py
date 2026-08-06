@@ -14,5 +14,12 @@ DEFAULT_CONFIG = {
     'transaction_cost_coeff': 0.0003,       # 单边调仓换手交易摩擦冲击惩罚系数
     'lookback_cov': 252,                    # 稳健协方差滚动历史回溯期 (252天)
     'lookback_adv': 20,                     # 个人流动性硬约束平均成交额回溯期 (20天)
-    'individual_account_equity': 10000000.0  # 个人账户分配可用总权益名义本金基准底座 (1000万)
+    'individual_account_equity': 10000000.0, # 个人账户分配可用总权益名义本金基准底座 (1000万)
+    'allow_native_solver': True,
+    'native_solver_min_memory_gb': 2.0,
+    'parallel_time_slices': True,
+    'parallel_slice_min_dates': 4,
+    'parallel_time_slice_cap': 8,
+    'python_solver_iterations': 250,
+    'python_solver_step': 0.05,
 }

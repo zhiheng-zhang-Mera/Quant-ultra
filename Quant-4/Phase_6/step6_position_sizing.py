@@ -24,6 +24,45 @@ os.environ["NUMEXPR_NUM_THREADS"] = num_cores
 
 logger = logging.getLogger("PositionSizing")
 
+def _phase6_parallelism(context: dict, date_count: int) -> int:
+    config = context.get("config", {})
+    plan = context.get("compute_audit", {}).get("resource_plan", config.get("compute_resource_plan", {}))
+    capacity = int(plan.get("optimization_workers", max(1, (os.cpu_count() or 1) - 1)))
+    if not config.get("parallel_time_slices", True) or capacity < 2 or date_count < int(config.get("parallel_slice_min_dates", 4)):
+        return 1
+    return min(capacity, date_count, int(config.get("parallel_time_slice_cap", 8)))
+
+def solve_time_slices(context: dict, test_dates, nav: float):
+    """Solve contiguous date slices concurrently, preserving order within a slice."""
+    slice_workers = _phase6_parallelism(context, len(test_dates))
+    chunks = [list(chunk) for chunk in np.array_split(np.asarray(test_dates, dtype=object), slice_workers) if len(chunk)]
+    inner_workers = max(1, int(context.get("config", {}).get("optimization_workers", 16)) // slice_workers)
+
+    def solve_chunk(chunk_index, dates):
+        local = context.copy()
+        local["config"] = dict(context.get("config", {}), optimization_workers=inner_workers)
+        local["smoothed_width"] = dict(context.get("smoothed_width", {}))
+        local.pop("cvx_prob_cache_v2", None)
+        previous = np.zeros(len(local["assets"]))
+        records = []
+        for date in dates:
+            local["directional_symbol_masks"] = step_m_1_directional_mask(local, date)
+            R_BL, Sigma_robust, Q_view, Omega_diag = step_m_2_black_litterman_fusion(local, date, previous)
+            local.update({"R_BL": R_BL, "Sigma_robust": Sigma_robust, "Q_view": Q_view, "Omega_diag": Omega_diag})
+            weights = step_m_3_convex_optimization(local, date, nav, previous)
+            records.append((date, weights))
+            previous = weights.copy()
+        return chunk_index, records, local.get("phase6_solver_backend", {})
+
+    if slice_workers == 1:
+        solved = [solve_chunk(0, chunks[0])]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=slice_workers) as executor:
+            solved = list(executor.map(lambda args: solve_chunk(*args), enumerate(chunks)))
+    ordered = sorted((item for _, records, _ in solved for item in records), key=lambda item: item[0])
+    audit = {"parallel": slice_workers > 1, "slice_workers": slice_workers, "slice_lengths": [len(chunk) for chunk in chunks], "inner_workers": inner_workers, "boundary_policy": "independent_contiguous_slices; chronological dependency preserved within each slice", "solver_backends": [backend for _, _, backend in solved]}
+    return ordered, audit
+
 def execute(pipeline_context: dict) -> dict:
     logger.info("=" * 60)
     logger.info("[OP] Enter Phase_6 Sizing Orchestrator | [SOURCE] Global Main Pipeline Stream")
@@ -252,22 +291,10 @@ def execute(pipeline_context: dict) -> dict:
             
     local_context['bulk_history_cache'] = bulk_history_cache
 
-    weight_records = []
-    w_prev = np.zeros(len(assets))
     current_nav = config.get('individual_account_equity', 10000000.0)
-
-    counter = 0
-    for t_date in test_dates:
-        logger.info(f"=== Phase 6: 正在计算 {t_date.strftime('%Y-%m-%d')} 的每日权重向量 | 进度 {counter}/{len(test_dates)} ===")
-        counter += 1
-        local_context['directional_symbol_masks'] = step_m_1_directional_mask(local_context, t_date)
-        
-        R_BL, Sigma_robust, Q_view, Omega_diag = step_m_2_black_litterman_fusion(local_context, t_date, w_prev)
-        local_context.update({'R_BL': R_BL, 'Sigma_robust': Sigma_robust, 'Q_view': Q_view, 'Omega_diag': Omega_diag})
-        
-        w_new = step_m_3_convex_optimization(local_context, t_date, current_nav, w_prev)
-        weight_records.append(w_new)
-        w_prev = w_new.copy()
+    solved_records, slice_audit = solve_time_slices(local_context, test_dates, current_nav)
+    weight_records = [weights for _, weights in solved_records]
+    pipeline_context['phase6_time_slice_audit'] = slice_audit
 
     weights_df = pd.DataFrame(weight_records, index=[d.strftime('%Y-%m-%d') for d in test_dates], columns=assets)
     intervals_df = pd.DataFrame(0.02, index=[d.strftime('%Y-%m-%d') for d in test_dates], columns=assets)
@@ -297,5 +324,6 @@ def execute(pipeline_context: dict) -> dict:
         'daily_weights': weights_df,
         'daily_intervals': intervals_df,
         'daily_adv20': adv20_df,
+        'phase6_time_slice_audit': slice_audit,
         'position_sizing_ready': True
     }

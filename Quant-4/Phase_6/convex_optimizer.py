@@ -3,7 +3,11 @@
 Quant-Ultra Flow - Step 6.3: Conformal Non-Linear Convex Optimizer Core (DPP Parametrized & Multi-Thread Bounds)
 """
 import numpy as np
-import cvxpy as cp
+import os
+try:
+    import cvxpy as cp
+except ImportError:
+    cp = None
 import logging
 from datetime import datetime
 from typing import Optional
@@ -11,8 +15,56 @@ import concurrent.futures
 from Phase_6.utils import _compute_individual_shares_upper
 from Main.trading_costs import merged_cost_config
 from Main.allocation_constraints import apply_allocation_cap
+from Main.fast_math import capped_simplex_projection
 
 logger = logging.getLogger("PositionSizing.ConvexOptimizer")
+
+NATIVE_SOLVER_PREFERENCE = ("CLARABEL", "OSQP", "ECOS", "SCS")
+
+def select_solver_backend(context: dict) -> dict:
+    """Choose a compiled CVXPY backend only when local resources justify it."""
+    config = context.get("config", {})
+    audit = context.get("compute_audit", {})
+    plan = audit.get("resource_plan", config.get("compute_resource_plan", {}))
+    hardware = audit.get("hardware", {})
+    cpu_workers = int(plan.get("cpu_workers", max(1, (os.cpu_count() or 1) - 1)))
+    memory_gb = float(hardware.get("available_memory_gb", 4.0))
+    hardware_ok = cpu_workers >= 2 and memory_gb >= float(config.get("native_solver_min_memory_gb", 2.0))
+    installed = set(cp.installed_solvers()) if cp is not None else set()
+    preferred = config.get("native_solver")
+    candidates = ([str(preferred).upper()] if preferred else []) + list(NATIVE_SOLVER_PREFERENCE)
+    solver = next((name for name in candidates if name in installed), None)
+    enabled = bool(config.get("allow_native_solver", True) and hardware_ok and solver)
+    return {"backend": solver if enabled else "numpy_projected_gradient", "native": enabled, "hardware_ok": hardware_ok, "installed": sorted(installed)}
+
+def _python_matrix_solve(expected_returns, covariance, previous, upper_bounds, sector_map, assets, config):
+    """Dependency-free matrix fallback with deterministic constraint projection."""
+    n = len(assets)
+    cash_buffer = float(np.clip(config.get("cash_buffer_weight", .05), 0, .4))
+    investable = 1.0 - cash_buffer
+    gamma = float(config.get("gamma_risk_initial", 2.5))
+    concentration = float(max(config.get("concentration_penalty", .02), 0))
+    sector_limit = float(config.get("sector_limit", .3))
+    turnover_limit = float(max(config.get("max_daily_turnover", .25), 0))
+    w = capped_simplex_projection(previous, upper_bounds, investable)
+    step = float(config.get("python_solver_step", .05))
+    for _ in range(int(config.get("python_solver_iterations", 250))):
+        gradient = expected_returns - gamma * (covariance @ w) - 2 * concentration * w
+        candidate = capped_simplex_projection(w + step * gradient, upper_bounds, investable)
+        for sector in set(sector_map.values()):
+            idx = np.array([i for i, asset in enumerate(assets) if sector_map.get(asset) == sector], dtype=int)
+            exposure = candidate[idx].sum()
+            if exposure > sector_limit and exposure > 0:
+                candidate[idx] *= sector_limit / exposure
+        delta = candidate - previous
+        turnover = np.abs(delta).sum()
+        if turnover > turnover_limit and turnover > 0:
+            candidate = previous + delta * (turnover_limit / turnover)
+        if np.linalg.norm(candidate - w, ord=1) < 1e-8:
+            w = candidate
+            break
+        w = candidate
+    return np.maximum(w, 0.0)
 
 def feasible_investment_floor(configured_floor: float, upper_bounds: np.ndarray, investable_cap: float) -> float:
     """Return a conservative lower bound that cannot exceed position capacity."""
@@ -57,6 +109,13 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         try: context['sector_map'] = {s: bus.get_sector(s) for s in assets}
         except Exception: context['sector_map'] = {s: "综合" for s in assets}
     sector_map = context['sector_map']
+
+    backend = select_solver_backend(context)
+    context["phase6_solver_backend"] = backend
+    if not backend["native"]:
+        sigma = (np.asarray(Sigma, dtype=float) + np.asarray(Sigma, dtype=float).T) / 2.0
+        sigma.flat[::n + 1] += 1e-6
+        return _python_matrix_solve(np.asarray(R_BL, dtype=float), sigma, w_prev, upper_bounds, sector_map, assets, config)
 
     # ==============================================================================
     # ⚡ 提速层 2：CVXPY 静态参数化编译 (DPP - Disciplined Parametrized Programming)
@@ -141,11 +200,13 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
 
     try:
         # 2. 开启 warm_start：求解器会以“昨天的持仓权重”作为今天的搜索起点，将内点法的底层迭代计算步数直接砍掉一半！
-        prob.solve(solver=cp.OSQP, warm_start=True, verbose=False)
+        prob.solve(solver=backend["backend"], warm_start=True, verbose=False)
         
         if cache['w'].value is None or prob.status not in ["optimal", "optimal_inaccurate"]:
             # OSQP 无法收敛时，无缝切入 SCS
-            prob.solve(solver=cp.SCS, warm_start=False, verbose=False)
+            fallback = next((name for name in NATIVE_SOLVER_PREFERENCE if name in backend["installed"] and name != backend["backend"]), None)
+            if fallback:
+                prob.solve(solver=fallback, warm_start=False, verbose=False)
             
         result_w = np.array(cache['w'].value)
         if result_w is None or np.isnan(result_w).any():
@@ -155,4 +216,4 @@ def step_m_3_convex_optimization(context: dict, date: datetime, nav: float, prev
         
     except Exception as e:
         logger.error(f"[容灾] CVX 凸优化矩阵退化崩塌，降级输出防御性分布: {e}")
-        return w_prev if np.sum(w_prev) > 0 else np.ones(n) / n
+        return _python_matrix_solve(np.asarray(R_BL, dtype=float), Sigma_sym, w_prev, upper_bounds, sector_map, assets, config)

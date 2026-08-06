@@ -6,6 +6,7 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy.signal import fftconvolve
+from Main.fast_math import garman_klass_volatility, rolling_sum
 
 logger = logging.getLogger("ModelTraining.Math")
 
@@ -41,20 +42,18 @@ def compute_whitebox_features(df: pd.DataFrame) -> np.ndarray:
 
     # 2. 短期 5 日动量
     mom5 = np.full(T, np.nan)
-    for t in range(5, T): mom5[t] = np.sum(log_ret[t-5:t])
+    if T > 5: mom5[5:] = rolling_sum(log_ret, 5)[4:-1]
     features[:, 1] = mom5
 
     # 3. 中期 20 日动量
     mom20 = np.full(T, np.nan)
-    for t in range(20, T): mom20[t] = np.sum(log_ret[t-20:t])
+    if T > 20: mom20[20:] = rolling_sum(log_ret, 20)[19:-1]
     features[:, 2] = mom20
 
     # 4. Garman-Klass 白盒无偏波动率
     gk = np.full(T, np.nan)
     v = (high > 0) & (low > 0) & (close > 0) & (open_ > 0)
-    log_hl, log_co = np.log(high[v] / low[v]), np.log(close[v] / open_[v])
-    gk_var = 0.5 * (log_hl ** 2) - (2 * np.log(2) - 1) * (log_co ** 2)
-    gk[v] = np.sqrt(np.clip(gk_var, 0.0, None))
+    gk[v] = garman_klass_volatility(open_, high, low, close)[v]
     features[:, 3] = gk
 
     # 5. 横截面成交额偏离度度量

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 ROOT=Path(__file__).parents[1]; sys.path.insert(0,str(ROOT))
 from Main.data_quality import validate_ohlcv
-from Main.fast_math import log_returns
+from Main.fast_math import capped_simplex_projection, garman_klass_volatility, log_returns, momentum, rolling_sum
 from Main.portfolio_analytics import holding_advice, metrics, nearest_psd, recommendation, risk_parity_weights, technical_snapshot
 from analyze_cn_asset import normalize
 from Main.investment_advisor import write_candidate_report
@@ -33,6 +33,17 @@ def test_data_quality_proves_valid_and_rejects_bad():
 def test_fast_math_and_metrics():
     p=np.array([100.,110.,121.]); assert np.allclose(log_returns(p),np.log([1.1,1.1]))
     assert metrics(pd.Series(np.linspace(100,130,100)))["observations"]==99
+
+def test_extended_fast_math_matches_vectorized_reference():
+    values = np.arange(1.0, 9.0)
+    sums = rolling_sum(values, 3)
+    assert np.allclose(sums[2:], [6, 9, 12, 15, 18, 21])
+    prices = np.exp(np.linspace(0, .7, 8))
+    assert np.allclose(momentum(prices, 2)[2:], np.log(prices[2:] / prices[:-2]))
+    gk = garman_klass_volatility(prices, prices * 1.02, prices * .98, prices * 1.01)
+    assert np.isfinite(gk).all() and (gk >= 0).all()
+    projected = capped_simplex_projection(np.array([.8, .5, .2]), np.array([.6, .4, .3]), .75)
+    assert projected.sum() <= .75000001 and np.all(projected >= 0) and np.all(projected <= [.6, .4, .3])
 
 def test_risk_parity_invariants():
     cov=nearest_psd(np.array([[.04,.01],[.01,.09]])); w=risk_parity_weights(cov)
@@ -139,6 +150,30 @@ def test_user_worker_override_is_preserved_by_resource_plan():
     profile = HardwareProfile(8, 4, 16, 32, 100, [], "test")
     plan = build_resource_plan(profile, {"download_workers": 2, "data_load_workers": 3}, {"market_https": True})
     assert plan["download_workers"] == 2 and plan["data_load_workers"] == 3
+
+def test_phase6_solver_backend_respects_hardware_and_numpy_fallback_constraints():
+    from Phase_6.convex_optimizer import _python_matrix_solve, select_solver_backend
+    low = {"config": {"allow_native_solver": True}, "compute_audit": {"hardware": {"available_memory_gb": .5}, "resource_plan": {"cpu_workers": 1}}}
+    assert select_solver_backend(low)["backend"] == "numpy_projected_gradient"
+    weights = _python_matrix_solve(
+        np.array([.2, .1, .05]), np.eye(3) * .1, np.zeros(3), np.array([.5, .5, .5]),
+        {"A": "x", "B": "x", "C": "y"}, ["A", "B", "C"],
+        {"cash_buffer_weight": .1, "sector_limit": .45, "max_daily_turnover": .8},
+    )
+    assert np.isfinite(weights).all() and (weights >= 0).all()
+    assert weights.sum() <= .9000001 and weights[:2].sum() <= .4500001
+
+def test_phase6_time_slice_solver_parallelizes_contiguous_blocks(monkeypatch):
+    import Phase_6.step6_position_sizing as sizing
+    monkeypatch.setattr(sizing, "step_m_1_directional_mask", lambda context, date: {"A": 1})
+    monkeypatch.setattr(sizing, "step_m_2_black_litterman_fusion", lambda context, date, previous: (np.ones(1), np.eye(1), np.ones(1), np.ones(1)))
+    monkeypatch.setattr(sizing, "step_m_3_convex_optimization", lambda context, date, nav, previous: previous + 1)
+    dates = list(pd.date_range("2026-01-01", periods=6))
+    context = {"assets": ["A"], "config": {"parallel_time_slices": True, "parallel_slice_min_dates": 2, "parallel_time_slice_cap": 2, "optimization_workers": 4}, "compute_audit": {"resource_plan": {"optimization_workers": 2}}}
+    records, audit = sizing.solve_time_slices(context, dates, 1_000_000)
+    assert audit["parallel"] and audit["slice_lengths"] == [3, 3]
+    assert [date for date, _ in records] == dates
+    assert [float(weights[0]) for _, weights in records] == [1, 2, 3, 1, 2, 3]
 
 def test_download_runtime_sizes_pools_and_reuses_connections():
     plan = build_download_plan(worker_override=7)
