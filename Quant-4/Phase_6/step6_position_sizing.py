@@ -4,6 +4,7 @@ Phase 6: Multi-Market Conformal Position Sizing and Optimization Engine Layer
 """
 import logging
 import os
+import warnings
 import pandas as pd
 import numpy as np
 import json
@@ -75,6 +76,11 @@ def execute(pipeline_context: dict) -> dict:
     slices = local_context.get('slices', {})
     
     # ---- 时轴自适应检索与自愈 ----
+    # Normalize both flat {Train-A:...} and nested {CN:{...}, US:{...}} layouts.
+    if isinstance(slices, dict) and not any(k in slices for k in ('Test', 'test', 'TEST', 'Test-Set', 'test_set', 'Testing', 'testing')):
+        if isinstance(slices.get('CN'), dict) and any(k in slices['CN'] for k in ('Test', 'test', 'TEST')):
+            slices = slices['CN']
+            local_context['slices'] = slices
     test_dates_raw = []
     if isinstance(slices, dict):
         print("=== Phase 6: 测试集时间轴检索 ===")
@@ -290,6 +296,12 @@ def execute(pipeline_context: dict) -> dict:
             logger.warning("[性能] 预载 %s 历史数据失败: %s", sym, e)
             
     local_context['bulk_history_cache'] = bulk_history_cache
+    # Attach the preloaded cache to the data bus as well: the per-asset upper
+    # bound helper reads bus.context['bulk_history_cache'], so storing it only
+    # on the local pipeline copy silently bypasses the fast path.
+    if not hasattr(data_bus, "context") or not isinstance(data_bus.context, dict):
+        data_bus.context = {}
+    data_bus.context["bulk_history_cache"] = bulk_history_cache
 
     current_nav = config.get('individual_account_equity', 10000000.0)
     solved_records, slice_audit = solve_time_slices(local_context, test_dates, current_nav)
@@ -297,7 +309,45 @@ def execute(pipeline_context: dict) -> dict:
     pipeline_context['phase6_time_slice_audit'] = slice_audit
 
     weights_df = pd.DataFrame(weight_records, index=[d.strftime('%Y-%m-%d') for d in test_dates], columns=assets)
-    intervals_df = pd.DataFrame(0.02, index=[d.strftime('%Y-%m-%d') for d in test_dates], columns=assets)
+    # ==============================================================================
+    # 真实分位预测区间构建:Phase 5 的分位数模型(0.025/0.975)对每个测试日批量预测,
+    # 取代原先 0.02 常数占位。输出 MultiIndex(symbol, metric) 表供 Phase 7 FSM 的
+    # 置信区间违规检测与 Phase 8 的 Christoffersen 覆盖检验使用。
+    # ==============================================================================
+    logger.info("=== Phase 6: 构建真实分位预测区间 (q_0.025 / q_0.975) ===")
+    q_models = local_context.get("quantile_models", {}) or {}
+    q_low_model = q_models.get(0.025)
+    q_high_model = q_models.get(0.975)
+    low_rows, high_rows = [], []
+    for date in test_dates:
+        feats, syms = [], []
+        for sym in assets:
+            feat = _get_features_for_date(sym, date, local_context)
+            if feat is not None:
+                feats.append(feat)
+                syms.append(sym)
+        lows = dict.fromkeys(assets, 0.02)
+        highs = dict.fromkeys(assets, 0.02)
+        if feats and q_low_model is not None and q_high_model is not None:
+            X_batch = np.vstack(feats)
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=UserWarning)
+                    pred_low = q_low_model.predict(X_batch)
+                    pred_high = q_high_model.predict(X_batch)
+                for i, s in enumerate(syms):
+                    lows[s] = float(np.clip(pred_low[i], -1.0, 1.0))
+                    highs[s] = float(np.clip(pred_high[i], -1.0, 1.0))
+            except Exception as exc:
+                logger.warning("Quantile interval prediction failed for %s: %s", date, exc)
+        low_rows.append(lows)
+        high_rows.append(highs)
+    interval_data = {}
+    for sym in assets:
+        interval_data[(sym, "q_low")] = [row[sym] for row in low_rows]
+        interval_data[(sym, "q_high")] = [row[sym] for row in high_rows]
+    intervals_df = pd.DataFrame(interval_data, index=[d.strftime('%Y-%m-%d') for d in test_dates])
+    intervals_df.columns = pd.MultiIndex.from_tuples(intervals_df.columns, names=["symbol", "metric"])
     
     # ==============================================================================
     # ADV20 面板计算（全内存向量化）

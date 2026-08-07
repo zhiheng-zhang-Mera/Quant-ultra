@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import pandas as pd
 from Phase_2.config import MIN_SLICE_CRIT_LEN
 
 logger = logging.getLogger("DataSlicing.Validation")
@@ -15,6 +16,10 @@ def run_purge_and_embargo_validation(context: dict):
     keys = ["Train-A", "Train-B1", "Train-B2", "Validation", "Test"]
     markets = {"CN": 'trading_days_dt_cn', "US": 'trading_days_dt_us'}
 
+    flat_slices = all(k in slices for k in ("Train-A", "Train-B1", "Train-B2", "Validation", "Test"))
+    if flat_slices:
+        slices = {"CN": slices, "US": {}}
+
     for m_label, cal_key in markets.items():
         calendar = context.get(cal_key, [])
         m_slices = slices.get(m_label, {})
@@ -28,11 +33,19 @@ def run_purge_and_embargo_validation(context: dict):
 
             last_left, first_right = left[-1], right[0]
             try:
-                idx_left = calendar.index(last_left)
-                idx_right = calendar.index(first_right)
+                last_left_ts = pd.Timestamp(last_left)
+                first_right_ts = pd.Timestamp(first_right)
+                cal_norm = []
+                for c in calendar:
+                    c_ts = pd.Timestamp(c)
+                    if getattr(c_ts, "tzinfo", None) is not None:
+                        c_ts = c_ts.tz_localize(None)
+                    cal_norm.append(c_ts)
+                idx_left = cal_norm.index(last_left_ts)
+                idx_right = cal_norm.index(first_right_ts)
                 delta_days = idx_right - idx_left
             except ValueError:
-                delta_days = (first_right - last_left).days // 7 * 5
+                delta_days = (pd.Timestamp(first_right) - pd.Timestamp(last_left)).days // 7 * 5
 
             if delta_days < embargo_window:
                 err_msg = (f"【致命级风控熔断】{m_label}轨数据隔离带发生物理坍塌！"

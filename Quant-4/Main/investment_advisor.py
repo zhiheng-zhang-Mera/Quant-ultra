@@ -57,7 +57,24 @@ def write_candidate_report(frame: pd.DataFrame, report_dir: Path) -> tuple[Path,
         for _, row in frame[columns].iterrows():
             table_lines.append("| " + " | ".join(str(row[c]) for c in columns) + " |")
         table = "\n".join(table_lines)
-    md_path.write_text("# 十阶段后股票/ETF建议\n\n" + table + f"\n\n- CSV SHA-256：`{digest}`\n", encoding="utf-8")
+    layman_note = (
+        "一句话结论：本次分析没有生成可观察候选，建议先查看治理门禁与审计报告。"
+        if frame.empty
+        else f"一句话结论：系统从 {len(frame)} 只标的中筛选出值得关注的投资观察候选，均为分析观察结果，不是下单指令。"
+    )
+    governance_note = ""
+    if "advisory_mode" in frame.columns and frame["advisory_mode"].nunique() == 1:
+        mode = frame["advisory_mode"].iloc[0]
+        governance_note = f"\n\n> 治理状态：{mode}。OBSERVATION_ONLY 表示仅观察、禁止执行。"
+    md_path.write_text(
+        "# 十阶段后股票/ETF建议\n\n"
+        + layman_note
+        + governance_note
+        + "\n\n## 候选清单 / Candidate List\n\n"
+        + table
+        + f"\n\n- CSV SHA-256：`{digest}`\n",
+        encoding="utf-8",
+    )
     return md_path, csv_path
 
 

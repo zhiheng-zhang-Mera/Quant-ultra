@@ -4,6 +4,7 @@ import hashlib, json, platform, time
 from pathlib import Path
 from typing import Any
 import pandas as pd
+from Main.report_tiers import tier_text
 
 PHASE_GUIDE = {
     1: ("数据底座与流动性筛选", "Data foundation and liquidity screening", "确认标的、价格、存续状态和容量边界可用于后续计算。", "Confirms that universe, prices, survival status, and capacity limits are usable downstream."),
@@ -26,10 +27,16 @@ class StageReporter:
     def start(self, phase: str): self.started[phase] = time.perf_counter()
     def finish(self, phase: str, result: dict, contract_valid: bool, cache_hit: bool = False) -> Path:
         elapsed = time.perf_counter() - self.started.get(phase, time.perf_counter()); summary = {k: self._describe(v) for k, v in result.items() if not k.startswith("_")}; number = int(phase.split(".")[0].split("_")[1]); zh, en, zh_note, en_note = PHASE_GUIDE[number]
-        proof = {"phase": phase, "title_zh": zh, "title_en": en, "status": "PASS" if contract_valid else "FAIL", "contract_valid": contract_valid, "cache_hit": cache_hit, "elapsed_seconds": round(elapsed, 6), "git_hash": self.git_hash, "python": platform.python_version(), "interpretation_zh": zh_note, "interpretation_en": en_note, "outputs": summary, "terms": TERMS}
+        detail_levels = {tier: tier_text(number, tier) for tier in ("layman", "beginner", "expert")}
+        proof = {"phase": phase, "title_zh": zh, "title_en": en, "status": "PASS" if contract_valid else "FAIL", "contract_valid": contract_valid, "cache_hit": cache_hit, "elapsed_seconds": round(elapsed, 6), "git_hash": self.git_hash, "python": platform.python_version(), "interpretation_zh": zh_note, "interpretation_en": en_note, "detail_levels": detail_levels, "reading_guide": {"layman": "门外汉：一句话白话结论 / One-sentence plain-language conclusion", "beginner": "初学者：关键概念与组合含义 / Key concepts and portfolio meaning", "expert": "专家：完整技术细节与证据 / Full technical detail and evidence"}, "outputs": summary, "terms": TERMS}
         proof["report_sha256"] = hashlib.sha256(json.dumps(proof, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest(); slug = phase.replace(".", "_"); (self.root / f"{slug}.json").write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
         lines = [f"# Phase {number}: {zh} / {en}", "", "## 结论解读 / Conclusion", "", zh_note, "", en_note, "", "## 运行证据 / Run Evidence", "", f"- 状态 / Status: **{proof['status']}**", f"- 合约验证 / Contract valid: `{contract_valid}`", f"- 缓存命中 / Cache hit: `{cache_hit}`", f"- 耗时 / Elapsed: `{proof['elapsed_seconds']}` seconds", f"- Git: `{self.git_hash}`", f"- 证据哈希 / Evidence SHA-256: `{proof['report_sha256']}`", "", "## 输出摘要 / Output Summary", "", "| 输出 / Output | 类型 / Type | 摘要 / Summary |", "|---|---|---|"]
-        lines.extend(f"| `{k}` | {v['type']} | {v['summary']} |" for k, v in summary.items()); lines += ["", "## 术语 / Glossary", ""] + [f"- **{k}**: {v}" for k, v in TERMS.items()] + ["", "> 工程验证不等于投资收益保证。 / Engineering validation is not a guarantee of investment performance."]
+        lines.extend(f"| `{k}` | {v['type']} | {v['summary']} |" for k, v in summary.items())
+        lines += ["", "## 分层次阅读 / Read by Level", "", "> " + proof["reading_guide"]["layman"] + "  |  " + proof["reading_guide"]["beginner"] + "  |  " + proof["reading_guide"]["expert"]]
+        for tier, label in (("layman", "门外汉 / Layman"), ("beginner", "初学者 / Beginner"), ("expert", "专家 / Expert")):
+            content = detail_levels[tier]
+            lines += ["", f"### {label}", "", content["zh"], "", content["en"]]
+        lines += ["", "## 术语 / Glossary", ""] + [f"- **{k}**: {v}" for k, v in TERMS.items()] + ["", "> 工程验证不等于投资收益保证。 / Engineering validation is not a guarantee of investment performance."]
         path = self.root / f"{slug}.md"; path.write_text("\n".join(lines) + "\n", encoding="utf-8"); return path
     @staticmethod
     def _describe(value: Any) -> dict:

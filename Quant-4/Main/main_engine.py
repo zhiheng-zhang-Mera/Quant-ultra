@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""DEPRECATED - legacy orchestrator copy.
+
+``Main/main.py`` is the canonical pipeline orchestrator. This module is kept
+only for historical reference and is not imported by any pipeline component.
+New features (bounded runs, resilient data-source fallback, multi-level
+reports) are implemented in ``Main/main.py`` and will not be backported here.
+"""
 import sys
 import logging
 import argparse

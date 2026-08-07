@@ -55,16 +55,32 @@ def get_free_float_market_cap(bus_obj, asset: str, date: datetime) -> float:
         if s_key not in bus_obj._mcap_cache:
             try:
                 code = f"sh.{asset.split('.')[0]}" if asset.endswith('.SH') else f"sz.{asset.split('.')[0]}"
-                rs = bus_obj.manager._bs.query_history_k_data_plus(code=code, fields="date,free_float,close", start_date="2010-01-01", end_date="2030-12-31", adjustflag="2")
-                d = []
-                while rs.next():
-                    d.append(rs.get_row_data())
-                if d:
-                    df = pd.DataFrame(d, columns=["date", "free_float", "close"])
-                    df["mcap"] = (pd.to_numeric(df["free_float"]) * pd.to_numeric(df["close"])) / 1e4
-                    bus_obj._mcap_cache[s_key] = dict(zip(df["date"], df["mcap"]))
-                else:
-                    bus_obj._mcap_cache[s_key] = {}
+                cache_path = LOCAL_CACHE_DIR / f"mcap_{asset}.parquet"
+                mcap_series = {}
+                if cache_path.exists():
+                    try:
+                        df_disk = pd.read_parquet(cache_path)
+                        mcap_series = dict(zip(df_disk["date"].astype(str), df_disk["mcap"]))
+                    except Exception:
+                        mcap_series = {}
+                if not mcap_series:
+                    def _query_mcap():
+                        with bus_obj.manager._bs_lock:
+                            if not bus_obj.manager._bs_logged:
+                                bus_obj.manager._bs.login()
+                                bus_obj.manager._bs_logged = True
+                            rs = bus_obj.manager._bs.query_history_k_data_plus(code=code, fields="date,free_float,close", start_date="2010-01-01", end_date="2030-12-31", adjustflag="2")
+                            out = []
+                            while rs.next():
+                                out.append(rs.get_row_data())
+                            return out
+                    raw = bus_obj.manager._bounded_source_call(f"baostock_mcap:{asset}", _query_mcap)
+                    if raw:
+                        frame = pd.DataFrame(raw, columns=["date", "free_float", "close"])
+                        frame["mcap"] = (pd.to_numeric(frame["free_float"]) * pd.to_numeric(frame["close"])) / 1e4
+                        frame[["date", "mcap"]].to_parquet(cache_path, index=False)
+                        mcap_series = dict(zip(frame["date"].astype(str), frame["mcap"]))
+                bus_obj._mcap_cache[s_key] = mcap_series
             except:
                 bus_obj._mcap_cache[s_key] = {}
 
@@ -107,7 +123,7 @@ def get_sector(bus_obj, asset: str) -> str:
                 bus_obj._global_sw_df = pd.read_parquet(ASHARE_SW_CACHE_FILE)
             else:
                 logger.warning("ETL Sw-Sector Cache missing, triggering ONE-TIME fallback fetch. (NOT recommended in live mode)")
-                bus_obj._global_sw_df = bus_obj.manager._ak.stock_industry_sw()
+                bus_obj._global_sw_df = bus_obj.manager._bounded_source_call("akshare_sw_sector", bus_obj.manager._ak.stock_industry_sw)
                 bus_obj._global_sw_df.to_parquet(ASHARE_SW_CACHE_FILE)
 
         pure = asset.split('.')[0]
@@ -142,8 +158,8 @@ def is_marginable(bus_obj, asset: str) -> bool:
                 bus_obj._global_margin_set = set(df_margin['证券代码'])
             else:
                 logger.warning("ETL Margin Cache missing, ONE-TIME fallback fetch.")
-                sse = set(bus_obj.manager._ak.stock_margin_sse(start_date="", end_date="")['证券代码'])
-                szse = set(bus_obj.manager._ak.stock_margin_sz(start_date="", end_date="")['证券代码'])
+                sse = set(bus_obj.manager._bounded_source_call("akshare_margin_sse", bus_obj.manager._ak.stock_margin_sse, start_date="", end_date="")['证券代码'])
+                szse = set(bus_obj.manager._bounded_source_call("akshare_margin_sz", bus_obj.manager._ak.stock_margin_sz, start_date="", end_date="")['证券代码'])
                 bus_obj._global_margin_set = sse | szse
                 pd.DataFrame({"证券代码": list(bus_obj._global_margin_set)}).to_parquet(ASHARE_MARGIN_CACHE_FILE)
 
@@ -154,12 +170,22 @@ def is_marginable(bus_obj, asset: str) -> bool:
         return bus_obj._handle_failure("is_marginable", asset, e, False)
 
 def compute_market_risk_aversion(bus_obj, end_date: str, window_years=5) -> float:
+    # Market risk aversion is a slow-moving, market-wide parameter; compute at
+    # most once per calendar month to avoid repeated network work per day.
+    cache_key = f"ra_{end_date[:7]}_{window_years}"
+    if cache_key in bus_obj._risk_aversion_cache:
+        return bus_obj._risk_aversion_cache[cache_key]
     try:
         end = datetime.strptime(end_date, "%Y-%m-%d")
         df = bus_obj.manager.fetch_historical(bus_obj.get_benchmark_code(), (end - timedelta(days=window_years*365)).strftime("%Y-%m-%d"), end_date)
         df.set_index("date", inplace=True)
         rets = np.log(df["close"] / df["close"].shift(1)).resample('W').last()
         lambda_mkt = (rets.mean() * 52 - 0.025) / ((rets.std() * np.sqrt(52)) ** 2)
-        return lambda_mkt
+        if not np.isfinite(lambda_mkt):
+            raise ValueError("non-finite market risk aversion")
+        bus_obj._risk_aversion_cache[cache_key] = float(lambda_mkt)
+        return float(lambda_mkt)
     except Exception as e:
-        return bus_obj._handle_failure("compute_market_risk_aversion", "market", e, 0.02)
+        value = bus_obj._handle_failure("compute_market_risk_aversion", "market", e, 0.02)
+        bus_obj._risk_aversion_cache[cache_key] = value
+        return value

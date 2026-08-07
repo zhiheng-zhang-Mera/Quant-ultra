@@ -14,6 +14,10 @@ import pandas as pd
 logger = logging.getLogger("Orchestrator.Phase1.SectorRotation")
 
 
+class SectorSelectionUnavailableError(RuntimeError):
+    """Raised when sector-first selection cannot run and no cached selection exists."""
+
+
 def _column(frame: pd.DataFrame, *candidates: str) -> str:
     normalized = {str(col).strip().lower(): col for col in frame.columns}
     for candidate in candidates:
@@ -102,6 +106,48 @@ def select_sector_universe(data_manager, as_of: str, top_n: int = 3, lookback_da
     index_dir.mkdir(parents=True, exist_ok=True)
     selection_dir.mkdir(parents=True, exist_ok=True)
 
+    try:
+        return _refresh_sector_selection(data_manager, index_dir, selection_dir, as_of, top_n, lookback_days)
+    except SectorSelectionUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("[SECTOR] Network refresh failed (%s); attempting cached selection fallback", exc)
+        cached = _load_latest_cached_selection(selection_dir)
+        if cached is None:
+            raise SectorSelectionUnavailableError(
+                "sector selection unavailable and no cached selection exists; caller should fall back to full-universe screening"
+            ) from exc
+        symbols, selected, selection_date = cached
+        logger.warning("[SECTOR] Using cached sector selection from %s (degraded mode); sectors=%s constituents=%s", selection_date, selected["sector"].tolist(), len(symbols))
+        selected.attrs["degraded"] = True
+        return symbols, selected
+
+
+def _load_latest_cached_selection(selection_dir: Path):
+    """Return (symbols, ranking, selection_date) from the most recent cached selection."""
+    manifests = sorted(selection_dir.glob("*.json"))
+    if not manifests:
+        return None
+    latest = manifests[-1]
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+        symbols = payload.get("symbols") or []
+        selection_date = payload.get("selection_date", latest.stem)
+        if not symbols:
+            return None
+        ranking = pd.DataFrame(payload.get("sectors", []))
+        if ranking.empty and payload.get("sectors"):
+            ranking = pd.DataFrame({"sector": list(payload["sectors"])})
+        ranking.attrs["degraded"] = True
+        ranking.attrs["selection_date"] = selection_date
+        return symbols, ranking, selection_date
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("[SECTOR] Cached selection %s is unreadable: %s", latest, exc)
+        return None
+
+
+def _refresh_sector_selection(data_manager, index_dir: Path, selection_dir: Path, as_of: str, top_n: int, lookback_days: int):
+    """Network path: refresh board indexes, score, and select top sectors."""
     board_frame = data_manager._bounded_source_call("industry_board_list", data_manager._ak.stock_board_industry_name_em)
     name_col = _column(board_frame, "板块名称", "行业名称", "name")
     try:

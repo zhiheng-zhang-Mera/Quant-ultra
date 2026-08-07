@@ -36,7 +36,7 @@ def _determine_start_year(pipeline_context: dict) -> int:
                     if pd.to_datetime(first_date).year < 2024: earliest_dates.append(first_date)
             except Exception: continue
 
-    if earliest_dates: return int(pd.to_datetime(max(earliest_dates)).year)
+    if earliest_dates: return int(pd.to_datetime(min(earliest_dates)).year)
     return fallback_year
 
 def execute(pipeline_context: dict) -> dict:
@@ -73,8 +73,35 @@ def execute(pipeline_context: dict) -> dict:
             pipeline_context['trading_days_dt_us'] = cal_cn.tolist() 
         else: raise ValueError("Unable to extract active PIT Data Bus instance. Pipeline Validation Halt.")
 
-    run_moving_window_slicing(pipeline_context)
-    run_purge_and_embargo_validation(pipeline_context)
+    # 若编排器已注入标准固定日期切片(2010 起 Train-A/.../Test)，则保留并只
+    # 做隔离校验与 embargo 计算；否则才按比例重建切片。避免 Phase 2 覆盖
+    # 主控定义的研究窗口。
+    existing_flat = pipeline_context.get('slices') or {}
+    has_canonical = isinstance(existing_flat, dict) and 'Train-A' in existing_flat and 'Test' in existing_flat
+    if has_canonical:
+        # 计算并注入 embargo 窗口(取持仓期、ACF 自相关滞后与配置下限的最大值)
+        try:
+            from Phase_2.acf_analyzer import compute_dynamic_acf_lag
+            from Phase_2.config import DEFAULT_HOLDING_PERIOD, DEFAULT_EMBARGO_MIN
+            holding_period = pipeline_context.get('holding_period', pipeline_context.get('config', {}).get('holding_period', DEFAULT_HOLDING_PERIOD))
+            embargo_min = pipeline_context.get('config', {}).get('embargo_min', DEFAULT_EMBARGO_MIN)
+            max_lag = compute_dynamic_acf_lag(pipeline_context)
+            pipeline_context['embargo_window'] = max(int(holding_period), int(max_lag), int(embargo_min))
+            pipeline_context['holding_period'] = int(holding_period)
+        except Exception as exc:
+            logger.warning("Embargo window auto-computation failed (%s); using configured embargo_min", exc)
+            pipeline_context['embargo_window'] = int(pipeline_context.get('config', {}).get('embargo_min', 5))
+        run_purge_and_embargo_validation(pipeline_context)
+        pipeline_context['raw_split_indices'] = {
+            "Train-A_end": len(existing_flat.get("Train-A", [])),
+            "Train-B1_end": len(existing_flat.get("Train-B1", [])),
+            "Train-B2_end": len(existing_flat.get("Train-B2", [])),
+            "Validation_end": len(existing_flat.get("Validation", [])),
+            "Test_end": len(existing_flat.get("Test", [])),
+        }
+    else:
+        run_moving_window_slicing(pipeline_context)
+        run_purge_and_embargo_validation(pipeline_context)
     
     pipeline_context['slices_isolated'] = True
     

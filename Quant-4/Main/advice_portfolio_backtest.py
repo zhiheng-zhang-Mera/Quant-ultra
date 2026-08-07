@@ -14,8 +14,8 @@ import threading
 from Main.portfolio_analytics import recommendation
 from Main.data_quality import validate_ohlcv
 from Main.datasource_manager import FreeDataSourceManager
+from Main.universe_rules import DEFAULT_EXCLUDED_PREFIXES, symbol_purchase_eligibility, asset_type_for_symbol
 
-DEFAULT_EXCLUDED_PREFIXES = ("200", "300", "301", "4", "8", "92", "688", "689", "900")
 FORBIDDEN_PROVIDERS = {"synthetic", "simulated", "mock", "offline_debug"}
 _THREAD_LOCAL = threading.local()
 
@@ -76,22 +76,6 @@ def _open_to_open_return(frame: pd.DataFrame, date: pd.Timestamp, next_date: pd.
     if date not in frame.index or next_date not in frame.index:
         return 0.0
     return float(frame.at[next_date, "open"] / frame.at[date, "open"] - 1)
-
-
-def symbol_purchase_eligibility(symbol: str, excluded_prefixes=DEFAULT_EXCLUDED_PREFIXES) -> tuple[bool, str]:
-    code, dot, exchange = str(symbol).upper().partition(".")
-    if not dot or exchange not in {"SH", "SZ"} or len(code) != 6 or not code.isdigit():
-        return False, "NOT_STANDARD_A_SHARE"
-    is_etf = code.startswith(("15", "16", "50", "51", "56", "58"))
-    if not is_etf and any(code.startswith(prefix) for prefix in excluded_prefixes):
-        return False, "EXCLUDED_ACCOUNT_PERMISSION_PREFIX"
-    if not code.startswith(("0", "6")) and not is_etf:
-        return False, "UNSUPPORTED_PURCHASE_CODE"
-    return True, "ELIGIBLE_CODE"
-
-
-def asset_type_for_symbol(symbol: str) -> str:
-    return "ETF" if symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) else "stock"
 
 
 def refresh_full_market_cache(

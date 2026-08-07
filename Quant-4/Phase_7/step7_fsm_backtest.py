@@ -277,8 +277,10 @@ class FSMEngine:
         
         # 保存结果到 context
         self.context['daily_nav'] = pd.Series(self.nav_series, index=test_dates)
-        self.context['daily_returns'] = pd.Series(dict(self.daily_returns_list))
-        self.context['violations'] = pd.Series(dict(self.violations_list))
+        # Use the same Timestamp index as daily_nav so downstream audit phases
+        # (e.g. Christoffersen coverage) can intersect the series correctly.
+        self.context['daily_returns'] = pd.Series([r for _, r in self.daily_returns_list], index=test_dates)
+        self.context['violations'] = pd.Series([v for _, v in self.violations_list], index=test_dates)
         self.context['final_nav'] = self.nav_series[-1] if self.nav_series else self.cash
         self.context['transaction_costs'] = {**self.cost_ledger, "total": float(sum(self.cost_ledger.values()))}
         self.context['backtest_ready'] = True

@@ -36,9 +36,16 @@ class FreeDataSourceManager:
         self.http_session = create_persistent_session(self.download_plan, self.proxy_url)
         self.rest_client = AsyncRestBatchClient(self.download_plan, source_timeout_seconds, self.proxy_url)
         self._init_sources()
-        self.DEFAULT_START = "2005-01-01"
+        # The pipeline's earliest backtest window starts 2010-01-04; fetching
+        # older qfq-adjusted history can yield negative prices from some
+        # providers and serves no downstream purpose.
+        self.DEFAULT_START = "2010-01-01"
         self._failed_symbols: Set[str] = set()
         self._failed_symbol_retry_at: dict[str, float] = {}
+        self._head_probed: Set[str] = set()
+        if self.evidence_dir.exists():
+            for marker in self.evidence_dir.glob("*.head_probed"):
+                self._head_probed.add(marker.stem)
         self.source_timeout_seconds = max(float(source_timeout_seconds), 0.01)
         self._disabled_sources: Set[str] = set()
         self.source_cooldown_seconds = max(float(source_cooldown_seconds), 0.01)
@@ -46,6 +53,7 @@ class FreeDataSourceManager:
         self._source_retry_at: dict[str, float] = {}
         self._source_timeout_counts: dict[str, int] = {}
         self._circuit_lock = threading.Lock()
+        self._bs_lock = threading.Lock()
         self._symbol_locks: dict[str, threading.Lock] = {}
         self._symbol_locks_guard = threading.Lock()
 
@@ -60,10 +68,41 @@ class FreeDataSourceManager:
 
     @staticmethod
     def _merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.DataFrame:
-        frames = [frame for frame in (cached, fresh) if frame is not None and not frame.empty]
+        def _normalize_dates(frame: pd.DataFrame) -> pd.DataFrame:
+            out = frame.copy()
+            dates = pd.to_datetime(out["date"])
+            if getattr(dates.dt, "tz", None) is not None:
+                # Convert tz-aware timestamps to naive local wall-clock values so
+                # frames from different providers deduplicate on the same day.
+                dates = dates.dt.tz_localize(None)
+            out["date"] = dates
+            return out
+
+        frames = [_normalize_dates(frame) for frame in (cached, fresh) if frame is not None and not frame.empty]
         merged = pd.concat(frames, ignore_index=True)
-        merged["date"] = pd.to_datetime(merged["date"])
-        return merged.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+        merged["date"] = _normalize_dates(merged)["date"]
+        # Stable sort is critical: default quicksort reorders equal dates
+        # arbitrarily, so drop_duplicates(keep="last") may keep either provider's
+        # row and produce alternating adjustment bases. Stable sort preserves the
+        # concat order (cached first, fresh last) so fresh data always wins.
+        return merged.sort_values("date", kind="stable").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+    @staticmethod
+    def _read_parquet_resilient(path: Path, **kwargs) -> Optional[pd.DataFrame]:
+        """Read a parquet cache, quarantining unreadable files so they refetch."""
+        try:
+            return pd.read_parquet(path, **kwargs)
+        except Exception as exc:
+            # A corrupt or version-incompatible cache must not kill the pipeline.
+            # Remove it so the next attempt rebuilds from the provider.
+            logging.getLogger("DataSourceManager").warning(
+                "Unreadable parquet cache %s (%s); removing for refetch", path, exc
+            )
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
 
     def fetch_historical_batch(self, symbols, start_date: str, end_date: str, freq: str = "d") -> dict[str, Optional[pd.DataFrame]]:
         """Warm many symbol caches with one hardware-sized scheduling batch."""
@@ -91,6 +130,17 @@ class FreeDataSourceManager:
                 return 0.0
             return remaining
 
+    def _record_source_failure(self, name: str, cause: str) -> float:
+        """Count a failure and return the cooldown seconds (exponential backoff)."""
+        with self._circuit_lock:
+            count = self._source_timeout_counts.get(name, 0) + 1
+            self._source_timeout_counts[name] = count
+            cooldown = min(self.source_cooldown_seconds * (2 ** (count - 1)), self.source_max_cooldown_seconds)
+            self._disabled_sources.add(name)
+            self._source_retry_at[name] = time.monotonic() + cooldown
+        self._logger.warning("Circuit breaker tripped for source=%s cause=%s cooldown=%.2fs (count=%d)", name, cause, cooldown, count)
+        return cooldown
+
     def _bounded_source_call(self, name: str, func, *args, **kwargs):
         """Run one provider within a hard wall-clock budget and circuit-break timeouts."""
         remaining = self._source_retry_remaining(name)
@@ -112,15 +162,13 @@ class FreeDataSourceManager:
         invocation_started.wait(timeout=1.0)
         worker.join(self.source_timeout_seconds)
         if worker.is_alive():
-            with self._circuit_lock:
-                count = self._source_timeout_counts.get(name, 0) + 1
-                self._source_timeout_counts[name] = count
-                cooldown = min(self.source_cooldown_seconds * (2 ** (count - 1)), self.source_max_cooldown_seconds)
-                self._disabled_sources.add(name)
-                self._source_retry_at[name] = time.monotonic() + cooldown
+            cooldown = self._record_source_failure(name, "timeout")
             raise TimeoutError(f"{name} exceeded {self.source_timeout_seconds:.2f}s; retry after {cooldown:.2f}s")
         ok, value = results.get_nowait()
         if not ok:
+            # Exceptions also trip the breaker (with a shorter first cooldown),
+            # so a flaky endpoint cannot silently poison every caller.
+            self._record_source_failure(name, type(value).__name__)
             raise value
         with self._circuit_lock:
             self._disabled_sources.discard(name)
@@ -131,6 +179,14 @@ class FreeDataSourceManager:
     def _write_download_audit(self, symbol: str, attempts: list, status: str) -> None:
         payload = {"symbol": symbol, "status": status, "attempts": attempts, "generated_at": datetime.now().astimezone().isoformat()}
         (self.evidence_dir / f"{symbol}_download_audit.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _mark_head_probed(self, symbol: str) -> None:
+        """Remember that this symbol's earliest available bar was probed."""
+        self._head_probed.add(symbol)
+        try:
+            (self.evidence_dir / f"{symbol}.head_probed").write_text("probed", encoding="utf-8")
+        except OSError:
+            pass
 
     def _load_env_file(self):
         p = PROJECT_ROOT / "Main" / ".env"
@@ -210,9 +266,12 @@ class FreeDataSourceManager:
                     cached_df = df.sort_values("date").drop_duplicates("date", keep="last")
                     requested = self._slice(cached_df, start_date, end_date)
                     # A cache hit is complete only when it covers both requested
-                    # boundaries. Otherwise retain it and fetch just the missing tail.
-                    if (not requested.empty and cached_df["date"].min() <= pd.Timestamp(start_date)
-                            and cached_df["date"].max() >= pd.Timestamp(end_date)):
+                    # boundaries. A small tolerance absorbs holiday/weekend gaps
+                    # at the edges (e.g. request starts on a non-trading day).
+                    edge_tolerance = pd.Timedelta(days=10)
+                    head_ok = cached_df["date"].min() <= pd.Timestamp(start_date) + edge_tolerance or symbol in self._head_probed
+                    tail_ok = cached_df["date"].max() >= pd.Timestamp(end_date) - edge_tolerance
+                    if (not requested.empty and head_ok and tail_ok):
                         return requested
                 else:
                     self._logger.warning("Rejected cache without matching valid evidence: %s", symbol)
@@ -221,9 +280,14 @@ class FreeDataSourceManager:
         if self.offline_debug:
             return None
         attempts = []
-        fetch_start = self.DEFAULT_START
-        if cached_df is not None and not cached_df.empty and cached_df["date"].min() <= pd.Timestamp(start_date):
-            fetch_start = (cached_df["date"].max() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+        # Always begin at the requested window unless an existing cache already
+        # covers the start and only a newer tail is missing.
+        fetch_start = start_date
+        if cached_df is not None and not cached_df.empty:
+            cached_min = cached_df["date"].min()
+            if cached_min <= pd.Timestamp(start_date):
+                # Cache already covers the requested start; fetch only the tail.
+                fetch_start = (cached_df["date"].max() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
         fetch_end = end_date
         for name, func in self._sources:
             retry_remaining = self._source_retry_remaining(name)
@@ -254,6 +318,11 @@ class FreeDataSourceManager:
                     with self._symbol_lock(symbol):
                         df.to_parquet(tmp_path, index=False)
                         tmp_path.replace(c_path)
+                    # If the fresh fetch did not extend the head (e.g. the stock
+                    # listed after the requested start), mark the head probed so
+                    # later cache checks stop refetching the same impossible range.
+                    if df["date"].min() > pd.Timestamp(start_date) + pd.Timedelta(days=10):
+                        self._mark_head_probed(symbol)
                     attempts.append({"provider": name, "status": "ACCEPTED", "elapsed_seconds": elapsed, "rows": len(df), "sha256": evidence["sha256"]})
                     self._write_download_audit(symbol, attempts, "COMPLETE")
                     self._failed_symbols.discard(symbol)
@@ -261,6 +330,9 @@ class FreeDataSourceManager:
                     # self._logger.info(f"[OP] Query A-Share Live | [SOURCE] {name} | [RESULT] Rows: {len(df)} | [SIGNIFICANCE] Multi-source fallback success")
                     self._logger.info("由数据源管理器查询A股实时数据 | 来源: %s | 结果: 行数: %d | 意义: 多源回退成功", name, len(df))
                     return requested
+            except CircuitOpenError as exc:
+                attempts.append({"provider": name, "status": "CIRCUIT_OPEN", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
+                continue
             except TimeoutError as exc:
                 attempts.append({"provider": name, "status": "TIMEOUT_CIRCUIT_OPEN", "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})
                 self._logger.warning("Provider timeout for %s via %s; switching channel", symbol, name)
@@ -277,10 +349,18 @@ class FreeDataSourceManager:
         c_path = self.cache_dir / f"index_{symbol}_master.parquet"
         df = None
         if c_path.exists():
-            df = pd.read_parquet(c_path)
+            df = self._read_parquet_resilient(c_path)
         if (df is None or df.empty) and not self.offline_debug and hasattr(self, "_ak"):
             code = symbol.split(".")[0]
-            df_raw = self._ak.index_zh_a_hist(symbol=code, period="daily", start_date="20050101", end_date=datetime.now().strftime("%Y%m%d"))
+            try:
+                df_raw = self._bounded_source_call(
+                    f"akshare_index:{code}",
+                    self._ak.index_zh_a_hist,
+                    symbol=code, period="daily", start_date="20050101", end_date=datetime.now().strftime("%Y%m%d"),
+                )
+            except Exception as exc:
+                self._logger.warning("Index history fetch failed for %s (%s); using cache if present", symbol, str(exc)[:120])
+                df_raw = None
             if df_raw is not None and not df_raw.empty:
                 df_raw.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True)
                 df_raw["date"] = pd.to_datetime(df_raw["date"])
@@ -293,25 +373,53 @@ class FreeDataSourceManager:
 
     def _fetch_akshare(self, symbol: str, start: str, end: str, freq: str):
         c = symbol.split(".")[0]
-        df = self._ak.stock_zh_a_hist(symbol=c, period="daily", start_date=start.replace("-", ""), end_date=end.replace("-", ""), adjust="qfq")
-        df.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True)
-        df["date"] = pd.to_datetime(df["date"])
-        return df[["date", "open", "high", "low", "close", "volume", "amount"]]
-
-    def _fetch_baostock(self, symbol: str, start: str, end: str, freq: str):
-        if not self._bs_logged:
-            self._bs.login()
-            self._bs_logged = True
-        code = f"sh.{symbol.split('.')[0]}" if symbol.endswith(".SH") else f"sz.{symbol.split('.')[0]}"
-        rs = self._bs.query_history_k_data_plus(code=code, fields="date,open,high,low,close,volume,amount", start_date=start, end_date=end, frequency=freq, adjustflag="2")
-        data = []
-        while rs.next():
-            data.append(rs.get_row_data())
-        df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+        start_compact, end_compact = start.replace("-", ""), end.replace("-", "")
+        # Primary: eastmoney endpoint via akshare. If that host is unreachable
+        # (common on some networks), fall back to the Tencent/Sina mirrors so
+        # history downloads do not stall the whole pipeline.
+        try:
+            df = self._ak.stock_zh_a_hist(symbol=c, period="daily", start_date=start_compact, end_date=end_compact, adjust="qfq")
+            df.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount"}, inplace=True)
+            df["date"] = pd.to_datetime(df["date"])
+            return df[["date", "open", "high", "low", "close", "volume", "amount"]]
+        except Exception as exc:
+            self._logger.warning("akshare eastmoney history failed for %s (%s); trying Tencent mirror", symbol, str(exc)[:120])
+        if freq != "d":
+            raise RuntimeError(f"Tencent mirror supports daily bars only; requested freq={freq}")
+        exchange = "sh" if symbol.endswith(".SH") else "sz"
+        df = self._ak.stock_zh_a_hist_tx(symbol=f"{exchange}{c}", start_date=start_compact, end_date=end_compact, adjust="qfq")
+        if df is not None and not df.empty:
+            # Tencent's forward-adjusted (qfq) series can go negative for
+            # stocks with large historical dividends. Backward-adjusted (hfq)
+            # prices are always positive and preserve returns.
+            if (df["close"].astype(float) <= 0).any() or (df["open"].astype(float) <= 0).any():
+                self._logger.warning("Tencent qfq negative prices for %s; retrying with hfq", symbol)
+                df = self._ak.stock_zh_a_hist_tx(symbol=f"{exchange}{c}", start_date=start_compact, end_date=end_compact, adjust="hfq")
+        if df is None or df.empty:
+            return None
+        df = df.rename(columns={col: col for col in df.columns})[["date", "open", "high", "low", "close", "volume", "amount"]].copy()
         df["date"] = pd.to_datetime(df["date"])
         for col in ["open", "high", "low", "close", "volume", "amount"]:
-            df[col] = pd.to_numeric(df[col])
-        return df
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.sort_values("date").reset_index(drop=True)
+
+    def _fetch_baostock(self, symbol: str, start: str, end: str, freq: str):
+        # baostock keeps a single global socket session; concurrent login or
+        # query from multiple threads corrupts it. Serialize all access.
+        with self._bs_lock:
+            if not self._bs_logged:
+                self._bs.login()
+                self._bs_logged = True
+            code = f"sh.{symbol.split('.')[0]}" if symbol.endswith(".SH") else f"sz.{symbol.split('.')[0]}"
+            rs = self._bs.query_history_k_data_plus(code=code, fields="date,open,high,low,close,volume,amount", start_date=start, end_date=end, frequency=freq, adjustflag="2")
+            data = []
+            while rs.next():
+                data.append(rs.get_row_data())
+            df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+            df["date"] = pd.to_datetime(df["date"])
+            for col in ["open", "high", "low", "close", "volume", "amount"]:
+                df[col] = pd.to_numeric(df[col])
+            return df
 
     def _fetch_tushare(self, symbol: str, start: str, end: str, freq: str):
         df = self._ts_pro.daily(ts_code=symbol, start_date=start.replace("-", ""), end_date=end.replace("-", ""))
@@ -341,7 +449,8 @@ class FreeDataSourceManager:
     def fetch_stock_list(self) -> List[str]:
         c_path = self.cache_dir / "stock_list.parquet"
         if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 1:
-            cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
+            cached_df = self._read_parquet_resilient(c_path)
+            cached = cached_df["symbol"].dropna().astype(str).unique().tolist() if cached_df is not None else []
             if len(cached) >= 50:
                 return cached
             self._logger.warning("Rejected undersized stock-list cache: %s symbols", len(cached))
@@ -373,11 +482,14 @@ class FreeDataSourceManager:
         if hasattr(self, "_bs"):
             try:
                 def baostock_codes():
-                    self._bs.login()
-                    result = self._bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
-                    values = []
-                    while result.next(): values.append(result.get_row_data()[0])
-                    return values
+                    with self._bs_lock:
+                        if not self._bs_logged:
+                            self._bs.login()
+                            self._bs_logged = True
+                        result = self._bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+                        values = []
+                        while result.next(): values.append(result.get_row_data()[0])
+                        return values
                 codes = []
                 for raw in self._bounded_source_call("baostock_stock_list", baostock_codes):
                     exchange, code = raw.split(".", 1)
@@ -409,7 +521,8 @@ class FreeDataSourceManager:
                             return syms
             except: pass
         if c_path.exists():
-            cached = pd.read_parquet(c_path)["symbol"].dropna().astype(str).unique().tolist()
+            cached_df = self._read_parquet_resilient(c_path)
+            cached = cached_df["symbol"].dropna().astype(str).unique().tolist() if cached_df is not None else []
             if len(cached) >= 50:
                 return cached
         return []
@@ -487,10 +600,14 @@ class FreeDataSourceManager:
     def fetch_trading_calendar(self, start_year: int = 2010, end_year: int = datetime.now().year) -> pd.DatetimeIndex:
         c_path = self.cache_dir / f"trading_calendar_{start_year}_{end_year}.parquet"
         if c_path.exists():
-            return pd.DatetimeIndex(pd.read_parquet(c_path)["date"])
+            cached = self._read_parquet_resilient(c_path)
+            if cached is not None and "date" in cached and not cached.empty:
+                return pd.DatetimeIndex(cached["date"])
+            if self.offline_debug:
+                raise RuntimeError(f"Offline trading calendar cache missing or unreadable: {c_path}")
         if self.offline_debug:
             raise RuntimeError(f"Offline trading calendar cache missing: {c_path}")
-        cal = self._ak.tool_trade_date_hist_sina()
+        cal = self._bounded_source_call("akshare_trade_calendar", self._ak.tool_trade_date_hist_sina)
         cal["trade_date"] = pd.to_datetime(cal["trade_date"])
         cal = cal[(cal["trade_date"].dt.year >= start_year) & (cal["trade_date"].dt.year <= end_year)]
         dates = cal["trade_date"].tolist()

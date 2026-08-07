@@ -76,21 +76,28 @@ def execute(pipeline_context: dict) -> dict:
     
     logger.info("[PROGRESS] Building alive_mask matrix over %s dates and %s assets...", len(ashare_timeline), len(total_assets))
     mask_start = time.time()
-    for date_str in ashare_timeline:
-        current_dt = pd.to_datetime(date_str)
-        row_mask = []
-        for sym in total_assets:
-            start_born, end_death = asset_bounds[sym]
-            if start_born <= current_dt <= end_death: 
-                row_mask.append(True)
-            else: 
-                row_mask.append(False)
-        alive_mask_records.append(row_mask)
-    logger.info("[PROGRESS] alive_mask construction completed in %.2f seconds", time.time() - mask_start)
+    # Vectorized construction: one bounds table compared against every trading date.
+    bounds_df = pd.DataFrame(
+        {sym: {"born": asset_bounds[sym][0], "death": asset_bounds[sym][1]} for sym in total_assets}
+    ).T
+    timeline = pd.to_datetime(pd.Index(ashare_timeline))
+    alive_mask_df = pd.DataFrame(
+        (bounds_df["born"].values[None, :] <= timeline.values[:, None])
+        & (timeline.values[:, None] <= bounds_df["death"].values[None, :]),
+        index=ashare_timeline,
+        columns=total_assets,
+    )
+    logger.info("[PROGRESS] alive_mask construction completed in %.2f seconds (shape=%s)", time.time() - mask_start, alive_mask_df.shape)
 
-    alive_mask_df = pd.DataFrame(alive_mask_records, index=ashare_timeline, columns=total_assets)
     theoretical_aum_limit = pipeline_context.get('theoretical_aum_limit_base', 50000000.0)
-    adv_data_mock = pd.DataFrame(20000000.0, index=ashare_timeline, columns=total_assets)
+    # Use the real per-symbol ADV computed by the liquidity screening step.
+    # A constant mock matrix would silently poison downstream capacity and
+    # liquidity-impact audits, so it must never replace measured ADV.
+    adv_data = pipeline_context.get('adv_data') or {}
+    if isinstance(adv_data, dict) and adv_data:
+        logger.info("[ADV] Using %s real ADV values measured during liquidity screening", len(adv_data))
+    else:
+        logger.warning("[ADV] No measured ADV available; adv_data empty")
 
     logger.info("[OP] Finalize Phase_1 Cleanup Context | [SOURCE] Purified Pipeline Cache Trunk | [RESULT] Emits alive_mask frame shaped: %s | [SIGNIFICANCE] Satisfies schema-contract assurances across the federated framework", alive_mask_df.shape)
     logger.info("[操作] 终结 Phase_1 清洗上下文 | [来源] 纯净化流水线缓存主干 | [结果] 交付生存矩阵面板，维度为: %s | [意义] 满足联邦框架下跨阶段的 Schema 强校验合规合拢保证", alive_mask_df.shape)
@@ -99,6 +106,6 @@ def execute(pipeline_context: dict) -> dict:
     return {
         'assets': total_assets,
         'alive_mask': alive_mask_df,
-        'adv_data': adv_data_mock,
+        'adv_data': adv_data,
         'theoretical_aum_limit': theoretical_aum_limit
     }

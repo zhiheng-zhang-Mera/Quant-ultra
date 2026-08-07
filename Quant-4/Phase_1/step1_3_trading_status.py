@@ -19,7 +19,10 @@ def run_status_mapping(context: dict, data_bus, data_manager):
     if cache_path.exists():
         try:
             df_cache = pd.read_parquet(cache_path)
-            if not df_cache.empty and pd.to_datetime(df_cache['date'].iloc[0]).date() == latest_trading_day.date():
+            cached_day = pd.to_datetime(df_cache['date'].iloc[0])
+            if getattr(cached_day, 'tz', None) is not None:
+                cached_day = cached_day.tz_localize(None)
+            if not df_cache.empty and cached_day.date() == latest_trading_day.date():
                 for _, row in df_cache.iterrows():
                     dt = row['date'].to_pydatetime().replace(tzinfo=data_bus._tz)
                     data_bus.append_atom(row['symbol'], dt, {
@@ -37,7 +40,7 @@ def run_status_mapping(context: dict, data_bus, data_manager):
     for name, _ in data_manager._sources:
         try:
             if name == "akshare":
-                df_st = data_manager._ak.stock_zh_a_st_em()
+                df_st = data_manager._bounded_source_call("akshare_st_pool", data_manager._ak.stock_zh_a_st_em)
                 if df_st is not None and not df_st.empty:
                     st_codes = set(df_st["代码"].astype(str).str.strip().tolist())
                     st_source = "akshare"
@@ -45,19 +48,24 @@ def run_status_mapping(context: dict, data_bus, data_manager):
                     logger.info("[操作] 轮询风险监控注册通道 | [来源] AkShare 引擎主轨通道 | [结果] 捕获到 %s 只活跃 ST 风险标的 | [意义] 高优先级风控白名单过滤机制生效完成", len(st_codes))
                     break
             elif name == "baostock":
-                if not data_manager._bs_logged: 
-                    data_manager._bs.login()
-                    data_manager._bs_logged = True
-                rs = data_manager._bs.query_all_stock()
-                if rs is not None and rs.error_code == "0":
-                    while rs.next():
-                        row = rs.get_row_data()
-                        if row[3] in ["1", "2", "3", "4"]: 
-                            st_codes.add(row[0].split(".")[1])
-                    if st_codes:
-                        st_source = "baostock"
-                        logger.info("[OP] ST pool obtained from baostock, count=%s", len(st_codes))
-                        break
+                with data_manager._bs_lock:
+                    if not data_manager._bs_logged:
+                        data_manager._bs.login()
+                        data_manager._bs_logged = True
+                    rs = data_manager._bs.query_all_stock()
+                    if rs is not None and rs.error_code == "0":
+                        while rs.next():
+                            row = rs.get_row_data()
+                            # baostock's list is (code, type, name); it does not
+                            # expose ST flags. Type "2" marks common stocks.
+                            if len(row) >= 2 and str(row[1]) == "2":
+                                code_part = row[0].split(".")[1] if "." in str(row[0]) else str(row[0])
+                                _ = code_part  # base stock universe; ST flag unavailable from this provider
+                        logger.info("[OP] baostock provided stock universe but no ST flag; falling through to other sources")
+                        if st_codes:
+                            st_source = "baostock"
+                            logger.info("[OP] ST pool obtained from baostock, count=%s", len(st_codes))
+                            break
             # 其他源类似...
         except Exception as e:
             logger.warning(f"Priority routing fallback pass error over {name}: {e}")
@@ -75,9 +83,13 @@ def run_status_mapping(context: dict, data_bus, data_manager):
             is_st = code in st_codes
             board = data_bus.query_by_pit(sym, now, "board") or '主板'
             list_date = data_bus.query_by_pit(sym, now, "listing_date")
-            days_listed = (now - list_date).days if list_date else 999
+            try:
+                days_listed = (now - pd.Timestamp(list_date).to_pydatetime()).days if list_date else 999
+            except (TypeError, ValueError):
+                days_listed = 999
             prev_date = now - timedelta(days=1)
-            prev_price = data_bus.query_by_pit(sym, prev_date, "total_return_price") or 100.0
+            prev_price_raw = data_bus.query_by_pit(sym, prev_date, "total_return_price")
+            prev_price = float(prev_price_raw) if prev_price_raw is not None and not (isinstance(prev_price_raw, float) and pd.isna(prev_price_raw)) else 100.0
 
             if board == "美股成分股": 
                 limit_ratio = 50.0

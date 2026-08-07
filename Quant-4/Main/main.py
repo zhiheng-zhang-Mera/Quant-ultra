@@ -27,7 +27,7 @@ from Main.orchestration_guard import build_run_fingerprint, validate_orchestrati
 from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resolve_phase_name
 from Main.distributed_compute import apply_resource_plan, initialize_distributed_compute
 from Main.execute_report import generate_execute_report
-from Main.advice_portfolio_backtest import symbol_purchase_eligibility
+from Main.universe_rules import symbol_purchase_eligibility
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -64,7 +64,6 @@ def run_pipeline(args):
     # ---- 完整默认配置 ----
     default_config = {
         "analysis_only": True,
-        "analysis_only": True,
         "adv_window": 20, "min_adv_threshold": 1e7, "ipo_safety_days": 20, "max_participation_rate": 0.05,
         "expected_turnover": 0.05, "max_single_stock_weight": 0.05, "default_residual_rate": 0.0,
         "impact_alpha": 0.5, "impact_kappa_base": 0.05, "spread_lookback_days": 60, "stock_cap_pct": 0.045,
@@ -94,7 +93,7 @@ def run_pipeline(args):
         "rotation_mode": "FULL_MARKET_DAILY_GUERRILLA", "rotation_rebalance_days": 1,
         "rotation_minimum_market_coverage": 50,
         "rotation_minimum_stock_coverage": 100,
-        "market_source_timeout_seconds": 30.0,
+        "market_source_timeout_seconds": 90.0,
         "market_source_cooldown_seconds": 60.0, "market_source_max_cooldown_seconds": 600.0,
     }
     config = default_config.copy()
@@ -115,14 +114,15 @@ def run_pipeline(args):
             logger.warning(f"外部配置加载失败: {e}")
     if config.get("analysis_only") is not True:
         raise ValueError("Quant-4 is an analysis-only engine; analysis_only must remain true")
-    if config.get("analysis_only") is not True:
-        raise ValueError("Quant-4 is an analysis-only engine; analysis_only must remain true")
 
+    # The run fingerprint must be stable across hardware states: it feeds the
+    # phase cache. Hardware-derived resource-plan keys change every run and
+    # would otherwise invalidate all cached phase outputs.
+    run_fingerprint, fingerprint_material = build_run_fingerprint(get_git_hash(), config, PHASE_MODULES)
     compute_audit = initialize_distributed_compute(config, PROJECT_ROOT)
     config = apply_resource_plan(config, compute_audit)
     logger.info("Distributed compute initialized | hardware=%s | connectivity=%s | plan=%s", compute_audit["hardware"], compute_audit["connectivity"], compute_audit["resource_plan"])
     dag_audit = validate_orchestration(PHASE_MODULES, PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA)
-    run_fingerprint, fingerprint_material = build_run_fingerprint(get_git_hash(), config, PHASE_MODULES)
     startup_manifest = write_startup_manifest(PROJECT_ROOT / "reports", RUN_TIMESTAMP, run_fingerprint, fingerprint_material, dag_audit)
 
     # ---- 核心组件 ----
@@ -132,14 +132,20 @@ def run_pipeline(args):
     data_bus = PITDataBus(data_manager, audit_logger=audit_logger, strict_mode=True)
     requested_symbols = [symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip()]
     if requested_symbols:
-        raise ValueError("full-market rotation mode does not accept a fixed --symbols list")
-    full_market = data_manager.fetch_full_market_list(include_delisted=True)
-    full_market = [symbol for symbol in full_market if symbol_purchase_eligibility(symbol)[0]]
-    minimum_coverage = int(config.get("rotation_minimum_market_coverage", 50))
-    minimum_stocks = int(config.get("rotation_minimum_stock_coverage", 100))
-    stock_count = sum(not symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) for symbol in full_market)
-    if not args.offline and (len(full_market) < minimum_coverage or stock_count < minimum_stocks):
-        raise RuntimeError(f"full-market rotation requires at least {minimum_coverage} securities and {minimum_stocks} stocks; found {len(full_market)} and {stock_count}")
+        # Bounded verification runs: use exactly the requested symbols and skip
+        # the full-market rotation path. Production default (no --symbols)
+        # continues to use full-market sector rotation.
+        logger.info("Bounded universe requested: %s symbols", len(requested_symbols))
+        full_market = requested_symbols
+    else:
+        full_market = data_manager.fetch_full_market_list(include_delisted=True)
+        full_market = [symbol for symbol in full_market if symbol_purchase_eligibility(symbol)[0]]
+        minimum_coverage = int(config.get("rotation_minimum_market_coverage", 50))
+        minimum_stocks = int(config.get("rotation_minimum_stock_coverage", 100))
+        stock_count = sum(not symbol.split(".")[0].startswith(("15", "16", "50", "51", "56", "58")) for symbol in full_market)
+        if not args.offline and (len(full_market) < minimum_coverage or stock_count < minimum_stocks):
+            raise RuntimeError(f"full-market rotation requires at least {minimum_coverage} securities and {minimum_stocks} stocks; found {len(full_market)} and {stock_count}")
+    config["bounded_universe"] = bool(requested_symbols)
     data_bus.set_universe(full_market)
 
     # ---- 双市场日历对齐 ----
@@ -191,6 +197,8 @@ def run_pipeline(args):
         "audit_logger": audit_logger,
         "assets": data_bus.get_universe(),
         "trading_days_dt": trading_days_dt,
+        "trading_days_dt_cn": trading_days_dt_cn,
+        "trading_days_dt_us": trading_days_dt_us,
         "calendar_alignment": calendar_alignment,
         "slices": slices,
         "_completed_phases": set(),
@@ -211,7 +219,10 @@ def run_pipeline(args):
         phases_to_run = [p for p in PHASE_MODULES if p in phases_to_run and p not in skips]
     elif args.resume_from:
         target = resolve_phase_name(args.resume_from)
-        phases_to_run = [p for p in PHASE_MODULES[PHASE_MODULES.index(target):] if p not in skips]
+        # Resume must still traverse every phase so the cache loader can hydrate
+        # the completed predecessors; execution only starts at the target.
+        phases_to_run = [p for p in PHASE_MODULES if p not in skips]
+        logger.info("Resume requested from %s; preceding phases will load from cache", target)
     else:
         phases_to_run = [p for p in PHASE_MODULES if p not in skips]
 

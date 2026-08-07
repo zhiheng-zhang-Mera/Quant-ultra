@@ -95,7 +95,16 @@ def fetch_us_trading_calendar(cache_dir: Path, offline_debug: bool, has_yf: bool
         
     c_path = cache_dir / f"us_cal_{start_year}_{end_year}.parquet"
     if c_path.exists() and (datetime.now() - datetime.fromtimestamp(c_path.stat().st_mtime)).days < 7:
-        return pd.DatetimeIndex(pd.read_parquet(c_path)["date"])
+        try:
+            cached = pd.read_parquet(c_path)
+            if cached is not None and "date" in cached and not cached.empty:
+                return pd.DatetimeIndex(cached["date"])
+        except Exception as exc:
+            logger.warning("Unreadable US calendar cache %s (%s); removing for refetch", c_path, exc)
+            try:
+                c_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         
     if offline_debug:
         raise RuntimeError("Halt: Missing physical US market calendar.")

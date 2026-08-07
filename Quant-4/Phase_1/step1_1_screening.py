@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from Phase_1.config import CONFIG
 from Phase_1.concurrency import AdaptiveConcurrencyLimiter, HAS_PSUTIL
-from Phase_1.sector_rotation import select_sector_universe
+from Phase_1.sector_rotation import select_sector_universe, SectorSelectionUnavailableError
 
 logger = logging.getLogger("Orchestrator.Phase1.Screening")
 
@@ -59,15 +59,21 @@ def run_screening(context: dict, data_bus, data_manager):
     logger.info("[TIMING] Effective latest trading day resolved: %s", latest_trading_day.strftime('%Y-%m-%d'))
 
     if not context.get("config", {}).get("bounded_universe") and not getattr(data_manager, "offline_debug", False):
-        symbols, sector_ranking = select_sector_universe(
-            data_manager,
-            latest_trading_day.strftime("%Y-%m-%d"),
-            top_n=int(context.get("config", {}).get("sector_top_n", CONFIG.get("SECTOR_TOP_N", 3))),
-        )
-        data_bus.set_universe(symbols)
-        context["sector_rotation_active"] = True
-        context["selected_sectors"] = sector_ranking["sector"].tolist()
-        context["sector_ranking"] = sector_ranking
+        try:
+            symbols, sector_ranking = select_sector_universe(
+                data_manager,
+                latest_trading_day.strftime("%Y-%m-%d"),
+                top_n=int(context.get("config", {}).get("sector_top_n", CONFIG.get("SECTOR_TOP_N", 3))),
+            )
+            data_bus.set_universe(symbols)
+            context["sector_rotation_active"] = True
+            context["selected_sectors"] = sector_ranking["sector"].tolist()
+            context["sector_ranking"] = sector_ranking
+            logger.info("[SECTOR] Sector-first universe active with %s symbols (degraded=%s)", len(symbols), bool(sector_ranking.attrs.get("degraded")))
+        except SectorSelectionUnavailableError as exc:
+            logger.warning("[SECTOR] %s; falling back to full-universe liquidity screening", exc)
+            context["sector_rotation_active"] = False
+            context["sector_rotation_fallback_reason"] = str(exc)
 
     screening_cache = data_manager.cache_dir / "screening_results.parquet"
     if screening_cache.exists() and not context.get("sector_rotation_active"):

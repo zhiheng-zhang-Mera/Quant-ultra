@@ -4,6 +4,7 @@ Quant-Ultra Flow - Step 1.2: Survivor-Bias Free Total Return & Delisting Residua
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 logger = logging.getLogger("Orchestrator.Phase1.Returns")
@@ -18,7 +19,7 @@ def _get_delisted_a_stocks(data_manager) -> list:
             method = getattr(data_manager._ak, method_name, None)
             if method is None:
                 continue
-            frame = method()
+            frame = data_manager._bounded_source_call(f"akshare_{method_name}", method)
             if frame is not None and not frame.empty and code_col in frame.columns:
                 frames.append(frame[[code_col]].rename(columns={code_col: "code"}))
         if not frames:
@@ -55,7 +56,10 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
                 existing_df['date'] = pd.to_datetime(existing_df['date'])
                 if limited_universe:
                     existing_df = existing_df[existing_df['symbol'].isin(set(all_stocks))].copy()
-                if existing_df['date'].max().date() >= latest_trading_day.date():
+                cached_max = existing_df['date'].max()
+                if getattr(cached_max, 'tz', None) is not None:
+                    cached_max = cached_max.tz_localize(None)
+                if cached_max.date() >= latest_trading_day.date():
                     cached_symbols = set(existing_df['symbol'].unique())
                     if assets and set(assets).issubset(cached_symbols):
                         for _, row in existing_df.iterrows():
@@ -75,13 +79,28 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
     end_date = latest_trading_day.strftime('%Y-%m-%d')
     logger.info("[RANGE] Total return computation from %s to %s", start_date, end_date)
     
+    # ---- 并行下载全历史:网络 I/O 是主要瓶颈,串行下载 42 只需要约 35 分钟,
+    #      并行预取后在主线程按原顺序逐行处理,保持原子追加与审计逻辑不变。 ----
+    histories: dict[str, pd.DataFrame] = {}
+    download_workers = int(context.get("config", {}).get("download_workers", 6) or 6)
+    with ThreadPoolExecutor(max_workers=max(1, min(download_workers, len(all_stocks)))) as pool:
+        futures = {pool.submit(data_bus.load_asset_history, sym, start_date, end_date): sym for sym in all_stocks}
+        for future in tqdm(as_completed(futures), total=len(all_stocks), desc="[并行预取全历史]"):
+            sym = futures[future]
+            try:
+                frame = future.result()
+                if frame is not None and not frame.empty:
+                    histories[sym] = frame
+            except Exception:
+                continue
+
     all_price_records = []
     residual_logged = set()
     missing_residual_count = 0  # 统计缺失残值资产数
     processed_assets = 0
     
     for sym in tqdm(all_stocks, desc="[全收益+退市残值构建]"):
-        hist_df = data_bus.load_asset_history(sym, start_date, end_date)
+        hist_df = histories.get(sym)
         if hist_df is None or hist_df.empty: 
             logger.debug("No historical data for %s, skipping", sym)
             continue
@@ -91,20 +110,22 @@ def run_returns_cleaning(context: dict, data_bus, data_manager, audit_logger):
         is_delisted = sym in delisted
         processed_assets += 1
         
+        # 残值按标的一次性探测:同一标的的退市残值在循环内不变,
+        # 避免每行调用 query_by_pit 造成 O(n^2) 原子扫描。
+        residual_probe = data_bus.query_by_pit(sym, hist_df.index.min(), "delisting_residual")
+        if residual_probe is None:
+            residual = 0.0
+            if sym not in residual_logged:
+                audit_logger.log_event("DATA_MISSING_DEFAULT_RESIDUAL", {"symbol": sym, "is_delisted": is_delisted, "msg": "Official liquidation stream absent; defaulted to 0.0 fallback"})
+                residual_logged.add(sym)
+                missing_residual_count += 1
+        else:
+            residual = float(residual_probe)
+
         for idx, row in hist_df.iterrows():
             dt = idx.to_pydatetime().replace(tzinfo=data_bus._tz)
             price = float(row['close'])
             log_ret = float(row['log_return']) if pd.notna(row['log_return']) else 0.0
-            residual = data_bus.query_by_pit(sym, dt, "delisting_residual")
-            
-            if residual is None:
-                residual = 0.0
-                if sym not in residual_logged:
-                    audit_logger.log_event("DATA_MISSING_DEFAULT_RESIDUAL", {"symbol": sym, "is_delisted": is_delisted, "msg": "Official liquidation stream absent; defaulted to 0.0 fallback"})
-                    residual_logged.add(sym)
-                    missing_residual_count += 1
-            else: 
-                residual = float(residual)
             
             data_bus.append_atom(sym, dt, price, "total_return_price", dt)
             data_bus.append_atom(sym, dt, log_ret, "log_return", dt)

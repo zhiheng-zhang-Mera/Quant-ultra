@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import bisect
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import numpy as np
@@ -15,6 +16,12 @@ class PITDataBus:
         self._tz = tz
         self._cache: Dict[str, pd.DataFrame] = {}
         self._atom_storage: Dict[str, List[Dict]] = {}
+        # O(log n) atom index: parallel lists per (field, asset) kept sorted by
+        # timestamp for query_by_pit, replacing the previous linear scan.
+        self._atom_ts: Dict[str, Dict[str, list]] = {}
+        self._atom_val: Dict[str, Dict[str, list]] = {}
+        self._atom_ann: Dict[str, Dict[str, list]] = {}
+        self._atom_sorted_keys: set = set()
         self._universe: Optional[List[str]] = None
         self._logger = logging.getLogger("PITDataBus")
         self.audit_logger = audit_logger
@@ -48,6 +55,10 @@ class PITDataBus:
             "announcement_date": announced,
             "value": value,
         })
+        self._atom_ts.setdefault(field, {}).setdefault(asset, []).append(ts)
+        self._atom_val.setdefault(field, {}).setdefault(asset, []).append(value)
+        self._atom_ann.setdefault(field, {}).setdefault(asset, []).append(announced)
+        self._atom_sorted_keys.discard((field, asset))
 
     def validate_pit_coordinates(self, asset: str, request_date: Any) -> bool:
         """
@@ -177,15 +188,32 @@ class PITDataBus:
             
         # 3. 保留旧版的财务原子存储高频解析
         if field in self._atom_storage:
-            valid = [r for r in self._atom_storage[field] if r["asset"] == asset and r["announcement_date"] <= dt_tz_naive]
-            if valid:
-                valid.sort(key=lambda x: x["timestamp"])
-                return valid[-1]["value"]
+            ts_list = self._atom_ts.get(field, {}).get(asset)
+            if ts_list:
+                key = (field, asset)
+                if key not in self._atom_sorted_keys:
+                    order = sorted(range(len(ts_list)), key=lambda i: ts_list[i])
+                    ts_list[:] = [ts_list[i] for i in order]
+                    val_list = self._atom_val[field][asset]
+                    ann_list = self._atom_ann[field][asset]
+                    val_list[:] = [val_list[i] for i in order]
+                    ann_list[:] = [ann_list[i] for i in order]
+                    self._atom_sorted_keys.add(key)
+                pos = bisect.bisect_right(ts_list, dt_tz_naive) - 1
+                # Walk back from the newest timestamp until the announcement is
+                # also visible at the request date (usually the first candidate).
+                while pos >= 0:
+                    if self._atom_ann[field][asset][pos] <= dt_tz_naive:
+                        return self._atom_val[field][asset][pos]
+                    pos -= 1
+                return None
                 
         # 4. 融合新版的 I/O 预载优化 (防止逐天读盘)
         if asset not in self._cache:
-            current_year = datetime.now(self._tz).year
-            self.fetch_historical(asset, "2005-01-01", f"{current_year + 1}-12-31")
+            # Load the pipeline's actual data horizon (2010 -> today). Requesting
+            # an impossible range (e.g. 2005 -> next year) would never match the
+            # cache completeness check and would trigger a full refetch per asset.
+            self.fetch_historical(asset, "2010-01-01", datetime.now(self._tz).strftime("%Y-%m-%d"))
             
         df = self._cache.get(asset)
         
@@ -196,7 +224,13 @@ class PITDataBus:
                 search_series = pd.to_datetime(df['date']).dt.tz_localize(None)
                 idx = search_series.searchsorted(dt_tz_naive, side='right') - 1
                 if idx >= 0:
-                    return df.iloc[idx][field] if field in df.columns else df.iloc[idx].get("close", np.nan)
+                    if field in df.columns:
+                        value = df.iloc[idx][field]
+                        # Missing/NaN values must not masquerade as real data.
+                        if value is not None and not (isinstance(value, float) and np.isnan(value)):
+                            return value
+                        return None
+                    return None
                     
         return None
 
