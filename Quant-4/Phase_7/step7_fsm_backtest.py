@@ -258,8 +258,11 @@ class FSMEngine:
                     # 此时的 q_low 已经是解耦开的以 Asset 为列、Date 为行的纯净 DataFrame，.get 完美无缝运行
                     low_vec = np.array([self.q_low.loc[date].get(s, 0.0) for s in self.assets])
                     high_vec = np.array([self.q_high.loc[date].get(s, 0.0) for s in self.assets])
-                    port_low = np.average(low_vec, weights=w_vec)
-                    port_high = np.average(high_vec, weights=w_vec)
+                    # 组合级区间必须缩放到总仓位:权重和为 0.10 时,组合日收益约等于
+                    # 资产加权收益 × 总仓位。若不缩放,区间会比实际组合收益大一个
+                    # 量级,导致违规检测系统性偏松(覆盖率为 1.0)。
+                    port_low = np.average(low_vec, weights=w_vec) * total_weight
+                    port_high = np.average(high_vec, weights=w_vec) * total_weight
                     if not (port_low <= ret <= port_high):
                         violation = 1
                         logger.debug("[VIOL] %s ret %.4f outside [%.4f, %.4f]", date_str, ret, port_low, port_high)
