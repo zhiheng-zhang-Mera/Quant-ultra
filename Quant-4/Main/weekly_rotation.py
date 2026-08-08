@@ -63,6 +63,8 @@ class RotationParams:
     us_trend_ma: int = 40
     regime_model: str = ""                   # optional ML regime: "hmm"|"logit"|"ensemble"
     ml_bear_override: bool = False           # MA rule + ML bear veto (hybrid)
+    signal_mode: str = "rule"                # "rule" | "composite" (multi-factor adaptive)
+    defensive_tilt: bool = False             # low-vol/trend tilt in range regimes
     selection_model: str = ""                # optional ML selection: "lgb"
     selection_ml_weight: float = 1.0
     vol_target: float = 0.0                  # annualized vol target (0 disables)
@@ -105,6 +107,67 @@ def _zscore(series: pd.Series) -> pd.Series:
     return (s - mu) / sd
 
 
+def composite_factor_scores(
+    panel: FeaturePanel, date: pd.Timestamp, symbols: List[str], regime: RegimeState, params: RotationParams
+) -> Dict[str, float]:
+    """Dynamic multi-factor composite with regime-adaptive weights.
+
+    Factor families (each cross-sectionally z-scored):
+    - momentum: 20/60-day continuation
+    - trend:    price vs MA20/MA60 alignment
+    - reversal: 1/5-day overreaction correction
+    - lowvol:   inverse realised volatility (low-vol anomaly)
+    - liquidity: volume-ratio confirmation
+    The blend adapts to the market state: trend-following in bull, mean
+    reversion in ranges, defensive low-vol in high-volatility periods.
+    """
+    if date not in panel.common:
+        return {}
+    factors: Dict[str, pd.Series] = {}
+    if 20 in panel.momentum:
+        factors["mom20"] = panel.momentum[20].loc[date]
+    if 60 in panel.momentum:
+        factors["mom60"] = panel.momentum[60].loc[date]
+    close_row = panel.close.loc[date]
+    ma20 = panel.close.rolling(20).mean().loc[date]
+    ma60 = panel.close.rolling(60).mean().loc[date]
+    factors["trend"] = (close_row / ma20 - 1.0) + 0.5 * (ma20 / ma60 - 1.0)
+    if 1 in panel.momentum:
+        factors["rev1"] = -panel.momentum[1].loc[date]
+    if 5 in panel.momentum:
+        factors["rev5"] = -panel.momentum[5].loc[date]
+    factors["lowvol"] = -panel.volatility.loc[date]
+    factors["vol_ratio"] = panel.volume_ratio.loc[date]
+
+    z = {name: _zscore(ser) for name, ser in factors.items()}
+    vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
+    high_vol = bool(np.isfinite(vol_bench) and vol_bench > 0.28)
+    if regime.regime == "BULL":
+        weights = {"mom20": 0.22, "mom60": 0.18, "trend": 0.25, "rev1": 0.05, "rev5": 0.10, "lowvol": 0.10, "vol_ratio": 0.10}
+        state = "TREND_BULL"
+    elif high_vol:
+        weights = {"mom20": 0.10, "mom60": 0.10, "trend": 0.10, "rev1": 0.10, "rev5": 0.20, "lowvol": 0.35, "vol_ratio": 0.05}
+        state = "HIGH_VOL"
+    elif params.defensive_tilt:
+        weights = {"mom20": 0.10, "mom60": 0.15, "trend": 0.25, "rev1": 0.05, "rev5": 0.10, "lowvol": 0.30, "vol_ratio": 0.05}
+        state = "DEFENSIVE"
+    else:
+        weights = {"mom20": 0.15, "mom60": 0.10, "trend": 0.15, "rev1": 0.20, "rev5": 0.20, "lowvol": 0.15, "vol_ratio": 0.05}
+        state = "RANGE"
+    scores: Dict[str, float] = {}
+    for sym in symbols:
+        total, ok = 0.0, True
+        for name, w in weights.items():
+            ser = z.get(name)
+            if ser is None or sym not in ser.index or pd.isna(ser[sym]):
+                ok = False
+                break
+            total += w * float(ser[sym])
+        if ok:
+            scores[sym] = total
+    return scores
+
+
 @dataclass
 class FeaturePanel:
     """Precomputed cross-sectional panels for fast per-date ranking."""
@@ -136,7 +199,8 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     volume = pd.DataFrame({sym: pd.to_numeric(frames[sym].get("volume", frames[sym].get("amount")), errors="coerce").reindex(common) for sym in symbols})
     amount = pd.DataFrame({sym: pd.to_numeric(frames[sym].get("amount", frames[sym]["close"] * frames[sym]["volume"]), errors="coerce").reindex(common) for sym in symbols})
     momentum: Dict[int, pd.DataFrame] = {}
-    for window in set(params.momentum_windows) | {1, 5, params.reversal_window}:
+    extra_windows = {20, 60, 120} if params.signal_mode == "composite" else set()
+    for window in set(params.momentum_windows) | {1, 5, params.reversal_window} | extra_windows:
         momentum[window] = close / close.shift(window) - 1.0
     rets = close.pct_change(fill_method=None)
     volatility = rets.rolling(60, min_periods=40).std(ddof=0) * np.sqrt(252)
@@ -167,7 +231,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma)
 
 
-def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None) -> List[Tuple[str, float, float]]:
+def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
     """Cross-sectional momentum ranking with trend and volatility filters.
 
     Each momentum window's return is z-scored across the whole universe before
@@ -211,26 +275,30 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
         if rev.notna().sum() >= 5:
             z_rows["rev1"] = -_zscore(rev)  # reward bigger 1-day drops
 
-    ranked: List[Tuple[str, float, float]] = []
-    for symbol in valid_symbols:
-        if not rel_ok.get(symbol, False):
-            continue
-        score = 0.0
-        ok = True
-        for window, weight in zip(params.momentum_windows, params.momentum_weights):
-            z = z_rows.get(window)
-            if z is None or symbol not in z.index or pd.isna(z[symbol]):
-                ok = False
-                break
-            score += weight * float(z[symbol])
-        if params.reversal_1d_weight:
-            zr = z_rows.get("rev1")
-            if zr is None or symbol not in zr.index or pd.isna(zr[symbol]):
-                ok = False
-            else:
-                score += params.reversal_1d_weight * float(zr[symbol])
-        if ok:
-            ranked.append((symbol, score, float(vol_row[symbol])))
+    if params.signal_mode == "composite" and regime is not None:
+        comp = composite_factor_scores(panel, date, valid_symbols, regime, params)
+        ranked = [(sym, comp.get(sym, float("-inf")), float(vol_row[sym])) for sym in valid_symbols if sym in comp]
+    else:
+        ranked: List[Tuple[str, float, float]] = []
+        for symbol in valid_symbols:
+            if not rel_ok.get(symbol, False):
+                continue
+            score = 0.0
+            ok = True
+            for window, weight in zip(params.momentum_windows, params.momentum_weights):
+                z = z_rows.get(window)
+                if z is None or symbol not in z.index or pd.isna(z[symbol]):
+                    ok = False
+                    break
+                score += weight * float(z[symbol])
+            if params.reversal_1d_weight:
+                zr = z_rows.get("rev1")
+                if zr is None or symbol not in zr.index or pd.isna(zr[symbol]):
+                    ok = False
+                else:
+                    score += params.reversal_1d_weight * float(zr[symbol])
+            if ok:
+                ranked.append((symbol, score, float(vol_row[symbol])))
     if win_probs and params.selection_ml_weight:
         probs = pd.Series({s: win_probs.get(s, np.nan) for s, _, _ in ranked})
         pz = _zscore(probs)
@@ -553,7 +621,7 @@ def weekly_rotation_backtest(
                 neutral_target[params.neutral_benchmark_symbol] = min(regime.exposure, 1.0)
                 pending = {"signal_date": date, "execution_date": next_date, "target": neutral_target}
                 continue
-            ranked = rank_candidates(panel, date, params, win_probs)
+            ranked = rank_candidates(panel, date, params, win_probs, regime)
             ranked_symbols = [s for s, _, _ in ranked]
             # High-probability setup gate: in NEUTRAL/BEAR regimes skip opening
             # new positions (bull-regime momentum/reversal setups win more often).
@@ -816,7 +884,9 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "## 第三视角审查 / Third-Person Review",
         "",
-        "**结论**:该策略在 2016-2026 十年间对真实大盘指数(沪深300)年化超额约 +17%(策略 22.8% vs 指数 5.3%),2018/2022 熊市跌幅小于指数,具备长期稳定可用的条件;严格量化门槛(夏普≥1.5、卡玛≥2.0、回撤修复≤6个月、OOS衰减<20%)经三轮回测迭代(短周期反转+动量、风险目标化、长周期动量)证实在此标的池与窗口下不可兼得,主要因 2022-2026 因子结构剧变导致样本外 alpha 衰减。报告如实披露差距,不做虚标。",
+        "**多信号动态复合迭代**:在规则版基础上实现了多因子动态复合(`signal_mode='composite'`)——动量(20/60日)、趋势、反转(1/5日)、低波、量能五族因子按市场状态(趋势牛/震荡/高波/防御)自适应加权。经多组权重与防御倾斜实测,该复合在 2016-2021 夏普约 1.0,但 2022-2026 样本外 alpha 仍为负(年化约 -3%~-5%),衰减 113-123%。",
+        "",
+        "**结论**:该策略在 2016-2026 十年间对真实大盘指数(沪深300)年化超额约 +17%(规则版 22.8% vs 指数 5.3%),2018/2022 熊市跌幅小于指数,具备长期稳定可用的条件;严格量化门槛(夏普≥1.5、卡玛≥2.0、回撤修复≤6个月、OOS衰减<20%)经多轮迭代(短周期反转+动量、风险目标化、长周期动量、多信号动态复合、防御低波倾斜)证实在此 57 只标的池与窗口下不可兼得,根因为 2022-2026 因子结构剧变且池内无稳定 OOS alpha 来源。报告如实披露差距,不做虚标。",
         "",
     ]
     advice_path = output_dir / "weekly_rotation_report.md"

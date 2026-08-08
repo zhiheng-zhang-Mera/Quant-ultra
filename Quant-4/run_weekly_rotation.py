@@ -79,6 +79,7 @@ def default_params() -> RotationParams:
         max_holding_days=42,
         trend_filter_long=60,
         bull_only_trading=True,
+        require_relative_strength=False,
     )
 
 
@@ -87,6 +88,7 @@ def main() -> int:
     parser.add_argument("--start", default="2016-01-01")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "reports" / "weekly_rotation")
     parser.add_argument("--universe", nargs="*", default=None)
+    parser.add_argument("--signal-mode", choices=["rule", "composite"], default="rule")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -96,6 +98,7 @@ def main() -> int:
         return 1
     params = default_params()
     params.start_date = args.start
+    params.signal_mode = args.signal_mode
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
