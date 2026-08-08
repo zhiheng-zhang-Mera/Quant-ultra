@@ -66,6 +66,9 @@ def default_params() -> RotationParams:
         max_etf_positions=2,
         regime_ma=40,
         regime_ma_fast=10,
+        regime_confirmation_ma=200,
+        regime_model="logit",
+        ml_bear_override=True,
         bull_exposure=1.0,
         bear_exposure=0.10,
         bull_leverage=2.0,
@@ -93,7 +96,7 @@ def main() -> int:
         return 1
     params = default_params()
     params.start_date = args.start
-    result = weekly_rotation_backtest(frames, params)
+    result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
     print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "monthly_win_rate", "operation_win_rate", "position_win_rate", "closed_trades_count", "annual_volatility", "sharpe", "max_drawdown", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))

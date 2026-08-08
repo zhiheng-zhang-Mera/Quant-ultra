@@ -58,8 +58,13 @@ class RotationParams:
     require_relative_strength: bool = True   # beat the equal-weight benchmark
     min_top_momentum_gate: float = 0.0       # skip week if best raw 20d return below this
     bull_only_trading: bool = False          # only open new positions in BULL regime
+    bear_no_loss: bool = True                # hard constraint: zero exposure in BEAR
     us_trend_filter: bool = False            # require US benchmark uptrend (transfer)
     us_trend_ma: int = 40
+    regime_model: str = ""                   # optional ML regime: "hmm"|"logit"|"ensemble"
+    ml_bear_override: bool = False           # MA rule + ML bear veto (hybrid)
+    selection_model: str = ""                # optional ML selection: "lgb"
+    selection_ml_weight: float = 1.0
     rebalance_weekday: Optional[int] = 4     # align rebalances to Fridays (0=Mon..4=Fri)
     regime_benchmark_symbols: Optional[Tuple[str, ...]] = None  # subset for regime
     hold_persistent: bool = True             # keep a name while still top-2K or trend intact
@@ -156,7 +161,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma)
 
 
-def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams) -> List[Tuple[str, float, float]]:
+def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None) -> List[Tuple[str, float, float]]:
     """Cross-sectional momentum ranking with trend and volatility filters.
 
     Each momentum window's return is z-scored across the whole universe before
@@ -220,6 +225,10 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
                 score += params.reversal_1d_weight * float(zr[symbol])
         if ok:
             ranked.append((symbol, score, float(vol_row[symbol])))
+    if win_probs and params.selection_ml_weight:
+        probs = pd.Series({s: win_probs.get(s, np.nan) for s, _, _ in ranked})
+        pz = _zscore(probs)
+        ranked = [(s, score + params.selection_ml_weight * float(pz.get(s, 0.0)), vol) for s, score, vol in ranked]
     ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked
 
@@ -299,6 +308,7 @@ def build_target_weights(
 
 def weekly_rotation_backtest(
     frames: Dict[str, pd.DataFrame], params: RotationParams | None = None, us_benchmark: Optional[pd.Series] = None,
+    regime_detector_kwargs: Optional[dict] = None,
 ) -> dict:
     params = params or RotationParams()
     symbols = sorted(frames)
@@ -323,6 +333,14 @@ def weekly_rotation_backtest(
     prev_close_matrix = close_matrix.shift(1)
     returns_matrix = open_matrix.shift(-1) / open_matrix - 1.0
     panel = precompute_panels(frames, params)
+    regime_detector = None
+    if params.regime_model:
+        from Main.ml_regime import build_detector
+        regime_detector = build_detector(params.regime_model, **(regime_detector_kwargs or {}))
+    selection_predictor = None
+    if params.selection_model:
+        from Main.ml_selection import WeeklyWinPredictor
+        selection_predictor = WeeklyWinPredictor()
     us_trend = None
     if params.us_trend_filter and us_benchmark is not None and len(us_benchmark):
         us_reindexed = us_benchmark.reindex(common).ffill()
@@ -470,10 +488,36 @@ def weekly_rotation_backtest(
                         pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
 
         if is_rebalance_day:
-            regime = detect_regime(panel, date, params)
+            if selection_predictor is not None:
+                epoch = idx // params.rebalance_days
+                selection_predictor.fit_if_due(epoch, panel.close, panel.volume, panel.amount, panel.common, date)
+                win_probs = selection_predictor.predict(panel, date, symbols)
+            else:
+                win_probs = None
+            if regime_detector is not None:
+                ml_res = regime_detector.detect(panel.bench_close, date)
+                if params.ml_bear_override:
+                    # Hybrid: MA rule for normal allocation; ML veto forces cash.
+                    regime = detect_regime(panel, date, params)
+                    if ml_res.regime == "BEAR":
+                        regime.exposure = 0.0
+                        regime.regime = "BEAR"
+                        regime.advice_zh = "ML 空头否决:强制空仓。"
+                        regime.advice_en = "ML bear veto: forced cash."
+                elif ml_res.regime == "BEAR":
+                    regime = RegimeState(date=date, regime="BEAR", benchmark_close=float(panel.bench_close.loc[date]) if pd.notna(panel.bench_close.loc[date]) else 0.0, benchmark_ma_fast=0.0, benchmark_ma_slow=0.0, exposure=0.0 if params.bear_no_loss else params.bear_exposure, advice_zh="ML 判定空头市场:强制空仓规避回撤。", advice_en="ML regime BEAR: forced cash.")
+                elif ml_res.regime == "BULL":
+                    base_expo = min(params.bull_exposure * params.bull_leverage, params.max_gross_exposure)
+                    regime = RegimeState(date=date, regime="BULL", benchmark_close=float(panel.bench_close.loc[date]) if pd.notna(panel.bench_close.loc[date]) else 0.0, benchmark_ma_fast=0.0, benchmark_ma_slow=0.0, exposure=base_expo * max(0.5, ml_res.confidence), advice_zh="ML 判定多头市场:可参与强势轮动。", advice_en="ML regime BULL: participate.")
+                else:
+                    regime = RegimeState(date=date, regime="NEUTRAL", benchmark_close=float(panel.bench_close.loc[date]) if pd.notna(panel.bench_close.loc[date]) else 0.0, benchmark_ma_fast=0.0, benchmark_ma_slow=0.0, exposure=(params.bull_exposure + params.bear_exposure) / 2, advice_zh="ML 判定震荡市:半仓灵活参与。", advice_en="ML regime NEUTRAL: moderate exposure.")
+            else:
+                regime = detect_regime(panel, date, params)
+                if params.bear_no_loss and regime.regime == "BEAR":
+                    regime.exposure = 0.0
             current_regime = regime.regime
             regime_rows.append({"date": date, **vars(regime)})
-            ranked = rank_candidates(panel, date, params)
+            ranked = rank_candidates(panel, date, params, win_probs)
             ranked_symbols = [s for s, _, _ in ranked]
             # High-probability setup gate: in NEUTRAL/BEAR regimes skip opening
             # new positions (bull-regime momentum/reversal setups win more often).
