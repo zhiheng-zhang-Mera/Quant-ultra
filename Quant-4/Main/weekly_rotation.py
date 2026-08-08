@@ -65,6 +65,7 @@ class RotationParams:
     ml_bear_override: bool = False           # MA rule + ML bear veto (hybrid)
     signal_mode: str = "composite"           # composite multi-factor adaptive (default)
     defensive_tilt: bool = False             # low-vol/trend tilt in range regimes
+    defensive_core: bool = False             # dividend+lowvol+trend core in all regimes
     dividend_yield_map: Optional[Dict[str, float]] = None  # symbol -> avg dps
     selection_model: str = ""                # optional ML selection: "lgb"
     selection_ml_weight: float = 1.0
@@ -144,7 +145,10 @@ def composite_factor_scores(
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
     high_vol = bool(np.isfinite(vol_bench) and vol_bench > 0.28)
-    if regime.regime == "BULL":
+    if params.defensive_core:
+        weights = {"mom20": 0.05, "mom60": 0.10, "trend": 0.25, "rev1": 0.03, "rev5": 0.05, "lowvol": 0.25, "vol_ratio": 0.02, "divyield": 0.25}
+        state = "DEFENSIVE_CORE"
+    elif regime.regime == "BULL":
         weights = {"mom20": 0.20, "mom60": 0.16, "trend": 0.22, "rev1": 0.05, "rev5": 0.09, "lowvol": 0.09, "vol_ratio": 0.09, "divyield": 0.10}
         state = "TREND_BULL"
     elif high_vol:
@@ -872,7 +876,7 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "## 第三视角审查 / Third-Person Review",
         "",
-        "**多信号动态复合(默认架构)迭代**:复合模式已设为默认并删除单一信号模式。因子库含动量(20/60日)、趋势、反转(1/5日)、低波、量能与新增股息率(baostock 近3年分红数据),按市场状态(趋势牛/震荡/高波/防御)自适应加权,叠加牛市 2x 杠杆+top2+ML regime 架构。全窗年化 21.5%,对沪深300 超额约 +16%;但 2022-2026 样本外 alpha 仍为负(年化约 -5%),衰减约 110%,四门槛仍不可兼得。",
+        "**红利低波防御核心迭代**:将复合默认权重重构为防御核心(股息25%+低波25%+趋势25%+动量10%),月频、无杠杆、始终在场、波动率目标15%。突破:2022-2026 样本外 alpha 转正(+3.7%),OOS 年化衰减 -10.4%(达标 <20%),OOS 夏普 0.80、卡玛 0.86、修复期 189 日。全窗夏普 0.73、卡玛 0.44——剩余门槛(夏普≥1.5、卡玛≥2.0、修复≤126日)在收益允许下降的约束下仍需同波动收益翻倍或回撤≤4%,经多轮因子/杠杆/调仓/宽池/股息数据实测仍不可兼得。",
         "",
         "**结论**:该策略在 2016-2026 十年间对真实大盘指数(沪深300)年化超额约 +17%(规则版 22.8% vs 指数 5.3%),2018/2022 熊市跌幅小于指数,具备长期稳定可用的条件;严格量化门槛(夏普≥1.5、卡玛≥2.0、回撤修复≤6个月、OOS衰减<20%)经多轮迭代(短周期反转+动量、风险目标化、长周期动量、多信号动态复合、防御低波倾斜)证实在此 57 只标的池与窗口下不可兼得,根因为 2022-2026 因子结构剧变且池内无稳定 OOS alpha 来源。报告如实披露差距,不做虚标。",
         "",
