@@ -63,6 +63,7 @@ class RotationParams:
     reversal_window: int = 1                 # reversal lookback days (1 or 2)
     trend_filter_long: int = 60              # candidate trend MA (0 disables)
     trend_filter_short: int = 0              # optional short MA (0 disables)
+    daily_regime_monitoring: bool = False    # intra-week exposure adaptation
 
 
 @dataclass
@@ -392,6 +393,24 @@ def weekly_rotation_backtest(
             is_rebalance_day = (date.dayofweek == params.rebalance_weekday)
         else:
             is_rebalance_day = (idx % params.rebalance_days == 0)
+
+        # ---- daily regime monitoring: adapt exposure between weekly rebalances ----
+        # The user's operating model runs at every daily close; if the market
+        # regime flips mid-week, scale the current book to the new exposure at
+        # the next open instead of waiting for the next rebalance.
+        if params.daily_regime_monitoring and pending is None:
+            regime_today = detect_regime(panel, date, params)
+            target_gross = regime_today.exposure
+            current_gross = sum(weights.values())
+            if current_gross > 1e-9 and abs(target_gross - current_gross) / current_gross > 0.25:
+                scale = target_gross / current_gross
+                adjusted = {s: min(w * scale, params.per_position_cap) for s, w in weights.items()}
+                total = sum(adjusted.values())
+                if total > params.max_gross_exposure:
+                    s2 = params.max_gross_exposure / total
+                    adjusted = {s: w * s2 for s, w in adjusted.items()}
+                pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
+
         if is_rebalance_day:
             regime = detect_regime(panel, date, params)
             current_regime = regime.regime
