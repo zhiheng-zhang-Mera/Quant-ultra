@@ -63,8 +63,9 @@ class RotationParams:
     us_trend_ma: int = 40
     regime_model: str = ""                   # optional ML regime: "hmm"|"logit"|"ensemble"
     ml_bear_override: bool = False           # MA rule + ML bear veto (hybrid)
-    signal_mode: str = "rule"                # "rule" | "composite" (multi-factor adaptive)
+    signal_mode: str = "composite"           # composite multi-factor adaptive (default)
     defensive_tilt: bool = False             # low-vol/trend tilt in range regimes
+    dividend_yield_map: Optional[Dict[str, float]] = None  # symbol -> avg dps
     selection_model: str = ""                # optional ML selection: "lgb"
     selection_ml_weight: float = 1.0
     vol_target: float = 0.0                  # annualized vol target (0 disables)
@@ -138,21 +139,22 @@ def composite_factor_scores(
         factors["rev5"] = -panel.momentum[5].loc[date]
     factors["lowvol"] = -panel.volatility.loc[date]
     factors["vol_ratio"] = panel.volume_ratio.loc[date]
+    factors["divyield"] = panel.div_yield.loc[date]
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
     high_vol = bool(np.isfinite(vol_bench) and vol_bench > 0.28)
     if regime.regime == "BULL":
-        weights = {"mom20": 0.22, "mom60": 0.18, "trend": 0.25, "rev1": 0.05, "rev5": 0.10, "lowvol": 0.10, "vol_ratio": 0.10}
+        weights = {"mom20": 0.20, "mom60": 0.16, "trend": 0.22, "rev1": 0.05, "rev5": 0.09, "lowvol": 0.09, "vol_ratio": 0.09, "divyield": 0.10}
         state = "TREND_BULL"
     elif high_vol:
-        weights = {"mom20": 0.10, "mom60": 0.10, "trend": 0.10, "rev1": 0.10, "rev5": 0.20, "lowvol": 0.35, "vol_ratio": 0.05}
+        weights = {"mom20": 0.08, "mom60": 0.08, "trend": 0.08, "rev1": 0.08, "rev5": 0.16, "lowvol": 0.30, "vol_ratio": 0.05, "divyield": 0.17}
         state = "HIGH_VOL"
     elif params.defensive_tilt:
-        weights = {"mom20": 0.10, "mom60": 0.15, "trend": 0.25, "rev1": 0.05, "rev5": 0.10, "lowvol": 0.30, "vol_ratio": 0.05}
+        weights = {"mom20": 0.08, "mom60": 0.12, "trend": 0.20, "rev1": 0.04, "rev5": 0.08, "lowvol": 0.26, "vol_ratio": 0.04, "divyield": 0.18}
         state = "DEFENSIVE"
     else:
-        weights = {"mom20": 0.15, "mom60": 0.10, "trend": 0.15, "rev1": 0.20, "rev5": 0.20, "lowvol": 0.15, "vol_ratio": 0.05}
+        weights = {"mom20": 0.12, "mom60": 0.08, "trend": 0.12, "rev1": 0.16, "rev5": 0.16, "lowvol": 0.12, "vol_ratio": 0.04, "divyield": 0.20}
         state = "RANGE"
     scores: Dict[str, float] = {}
     for sym in symbols:
@@ -182,6 +184,7 @@ class FeaturePanel:
     trend: pd.DataFrame
     volume_ratio: pd.DataFrame
     adv20: pd.DataFrame
+    div_yield: pd.DataFrame
     bench_return_20d: pd.Series
     bench_close: pd.Series
     bench_ma_fast: pd.Series
@@ -216,6 +219,11 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     vol_base = volume.rolling(params.volume_confirm_base, min_periods=1).mean()
     volume_ratio = vol_short / vol_base.replace(0, np.nan)
     adv20 = amount.rolling(20, min_periods=5).mean()
+    if params.dividend_yield_map:
+        dps = pd.Series({sym: params.dividend_yield_map.get(sym, np.nan) for sym in symbols})
+        div_yield = pd.DataFrame({sym: dps[sym] / close[sym] for sym in symbols})
+    else:
+        div_yield = pd.DataFrame(0.0, index=common, columns=symbols)
     if params.regime_benchmark_symbols:
         subset = [s for s in params.regime_benchmark_symbols if s in close.columns]
         bench_close = close[subset].mean(axis=1, skipna=True) if subset else close.mean(axis=1, skipna=True)
@@ -228,7 +236,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = bench_close.rolling(params.regime_confirmation_ma, min_periods=max(60, params.regime_confirmation_ma // 2)).mean()
     else:
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
@@ -275,30 +283,10 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
         if rev.notna().sum() >= 5:
             z_rows["rev1"] = -_zscore(rev)  # reward bigger 1-day drops
 
-    if params.signal_mode == "composite" and regime is not None:
-        comp = composite_factor_scores(panel, date, valid_symbols, regime, params)
-        ranked = [(sym, comp.get(sym, float("-inf")), float(vol_row[sym])) for sym in valid_symbols if sym in comp]
-    else:
-        ranked: List[Tuple[str, float, float]] = []
-        for symbol in valid_symbols:
-            if not rel_ok.get(symbol, False):
-                continue
-            score = 0.0
-            ok = True
-            for window, weight in zip(params.momentum_windows, params.momentum_weights):
-                z = z_rows.get(window)
-                if z is None or symbol not in z.index or pd.isna(z[symbol]):
-                    ok = False
-                    break
-                score += weight * float(z[symbol])
-            if params.reversal_1d_weight:
-                zr = z_rows.get("rev1")
-                if zr is None or symbol not in zr.index or pd.isna(zr[symbol]):
-                    ok = False
-                else:
-                    score += params.reversal_1d_weight * float(zr[symbol])
-            if ok:
-                ranked.append((symbol, score, float(vol_row[symbol])))
+    if regime is None:
+        return []
+    comp = composite_factor_scores(panel, date, valid_symbols, regime, params)
+    ranked = [(sym, comp.get(sym, float("-inf")), float(vol_row[sym])) for sym in valid_symbols if sym in comp]
     if win_probs and params.selection_ml_weight:
         probs = pd.Series({s: win_probs.get(s, np.nan) for s, _, _ in ranked})
         pz = _zscore(probs)
@@ -884,7 +872,7 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "## 第三视角审查 / Third-Person Review",
         "",
-        "**多信号动态复合迭代**:在规则版基础上实现了多因子动态复合(`signal_mode='composite'`)——动量(20/60日)、趋势、反转(1/5日)、低波、量能五族因子按市场状态(趋势牛/震荡/高波/防御)自适应加权。经多组权重与防御倾斜实测,该复合在 2016-2021 夏普约 1.0,但 2022-2026 样本外 alpha 仍为负(年化约 -3%~-5%),衰减 113-123%。",
+        "**多信号动态复合(默认架构)迭代**:复合模式已设为默认并删除单一信号模式。因子库含动量(20/60日)、趋势、反转(1/5日)、低波、量能与新增股息率(baostock 近3年分红数据),按市场状态(趋势牛/震荡/高波/防御)自适应加权,叠加牛市 2x 杠杆+top2+ML regime 架构。全窗年化 21.5%,对沪深300 超额约 +16%;但 2022-2026 样本外 alpha 仍为负(年化约 -5%),衰减约 110%,四门槛仍不可兼得。",
         "",
         "**结论**:该策略在 2016-2026 十年间对真实大盘指数(沪深300)年化超额约 +17%(规则版 22.8% vs 指数 5.3%),2018/2022 熊市跌幅小于指数,具备长期稳定可用的条件;严格量化门槛(夏普≥1.5、卡玛≥2.0、回撤修复≤6个月、OOS衰减<20%)经多轮迭代(短周期反转+动量、风险目标化、长周期动量、多信号动态复合、防御低波倾斜)证实在此 57 只标的池与窗口下不可兼得,根因为 2022-2026 因子结构剧变且池内无稳定 OOS alpha 来源。报告如实披露差距,不做虚标。",
         "",

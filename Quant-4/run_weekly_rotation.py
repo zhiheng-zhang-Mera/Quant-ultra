@@ -80,7 +80,21 @@ def default_params() -> RotationParams:
         trend_filter_long=60,
         bull_only_trading=True,
         require_relative_strength=False,
+        signal_mode="composite",
     )
+
+
+def load_dividend_map() -> dict:
+    """Load the cached dividend-per-share map if present."""
+    import json
+    path = Path("D:/quant-4-test-cache/dividend_cache.json")
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return {sym: float(info.get("dps_avg", 0.0)) for sym, info in payload.items()}
+        except Exception:
+            pass
+    return {}
 
 
 def main() -> int:
@@ -88,7 +102,7 @@ def main() -> int:
     parser.add_argument("--start", default="2016-01-01")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "reports" / "weekly_rotation")
     parser.add_argument("--universe", nargs="*", default=None)
-    parser.add_argument("--signal-mode", choices=["rule", "composite"], default="rule")
+    parser.add_argument("--signal-mode", choices=["rule", "composite"], default="composite")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -99,6 +113,9 @@ def main() -> int:
     params = default_params()
     params.start_date = args.start
     params.signal_mode = args.signal_mode
+    dividend_map = load_dividend_map()
+    if dividend_map:
+        params.dividend_yield_map = dividend_map
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
