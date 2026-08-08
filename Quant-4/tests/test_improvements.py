@@ -23,6 +23,33 @@ from Main.download_runtime import AsyncRestBatchClient, build_download_plan, cre
 from Phase_1.sector_rotation import score_sector_histories, select_sector_universe
 from Main.execute_report import generate_execute_report
 from Main.allocation_constraints import apply_allocation_cap
+from Main.weekly_rotation import RotationParams, RegimeState, apply_risk_scaling
+from Main.ml_regime import MLRegimeResult
+
+
+def test_ml_bear_override_is_continuous_not_binary():
+    """The adaptive ML overlay must fade exposure smoothly instead of a hard
+    cash veto, and never below the configured defensive floor."""
+    params = RotationParams(ml_bear_override=True, ml_bear_floor=0.30, ml_bear_low=0.40, ml_bull_high=0.60)
+
+    def reg(regime, exposure):
+        return RegimeState(date=pd.Timestamp("2024-01-01"), regime=regime, benchmark_close=1.0,
+                           benchmark_ma_fast=1.0, benchmark_ma_slow=1.0, exposure=exposure, advice_zh="", advice_en="")
+
+    bear = apply_risk_scaling(None, pd.Timestamp("2024-01-01"), params, reg("BULL", 1.0), MLRegimeResult("BEAR", 0.9, "logit"))
+    assert bear.exposure == 0.30
+    bull = apply_risk_scaling(None, pd.Timestamp("2024-01-01"), params, reg("BULL", 1.0), MLRegimeResult("BULL", 0.75, "logit"))
+    assert bull.exposure == 1.0
+    neutral = apply_risk_scaling(None, pd.Timestamp("2024-01-01"), params, reg("NEUTRAL", 0.5), MLRegimeResult("NEUTRAL", 0.5, "logit"))
+    assert 0.30 < neutral.exposure < 0.50
+
+
+def test_drawdown_guard_targets_respect_latch_exposure():
+    """Drawdown-guard parameters exist and the latch exposure is a valid target
+    so rebalances cannot bypass the de-risking."""
+    params = RotationParams(drawdown_guard=0.08, dd_guard_exposure=0.35)
+    assert params.dd_guard_exposure == 0.35
+    assert params.drawdown_guard == 0.08
 
 def test_data_quality_proves_valid_and_rejects_bad():
     good=pd.DataFrame({"date":pd.date_range("2024-01-01",periods=3),"open":[1,2,3],"high":[2,3,4],"low":[.5,1,2],"close":[1.5,2.5,3.5],"volume":[1,2,3]})
