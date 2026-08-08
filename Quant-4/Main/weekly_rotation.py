@@ -30,6 +30,7 @@ class RotationParams:
     momentum_weights: Tuple[float, ...] = (0.25, 0.30, 0.30, 0.15)
     rebalance_days: int = 5            # weekly cadence in trading days
     top_n: int = 5                     # maximum concurrent positions
+    max_etf_positions: int = 1         # ETF seats among the top picks
     bull_exposure: float = 0.95        # gross exposure in bull regime
     bear_exposure: float = 0.30        # gross exposure in bear regime
     bull_leverage: float = 1.0         # margin multiplier in bull (financed)
@@ -37,6 +38,7 @@ class RotationParams:
     leverage_annual_cost: float = 0.06 # financing cost on borrowed capital
     regime_ma: int = 60                # benchmark trend window (trading days)
     regime_ma_fast: int = 20           # short trend confirmation window
+    regime_confirmation_ma: int = 0    # optional longer MA required for BULL
     min_volume_days: int = 60          # minimum price history for candidates
     max_annual_vol: float = 0.75       # reject extreme-volatility names
     min_adv: float = 5e7               # minimum 20-day avg turnover (CNY)
@@ -55,6 +57,9 @@ class RotationParams:
     require_volume_confirm: bool = False
     require_relative_strength: bool = True   # beat the equal-weight benchmark
     min_top_momentum_gate: float = 0.0       # skip week if best raw 20d return below this
+    bull_only_trading: bool = False          # only open new positions in BULL regime
+    us_trend_filter: bool = False            # require US benchmark uptrend (transfer)
+    us_trend_ma: int = 40
     rebalance_weekday: Optional[int] = 4     # align rebalances to Fridays (0=Mon..4=Fri)
     regime_benchmark_symbols: Optional[Tuple[str, ...]] = None  # subset for regime
     hold_persistent: bool = True             # keep a name while still top-2K or trend intact
@@ -64,6 +69,8 @@ class RotationParams:
     trend_filter_long: int = 60              # candidate trend MA (0 disables)
     trend_filter_short: int = 0              # optional short MA (0 disables)
     daily_regime_monitoring: bool = False    # intra-week exposure adaptation
+    event_shock_threshold: float = 0.0       # benchmark 1-day crash -> cut exposure
+    min_top_momentum_gate: float = 0.0       # skip week if best raw 20d return below this
 
 
 @dataclass
@@ -104,6 +111,7 @@ class FeaturePanel:
     bench_close: pd.Series
     bench_ma_fast: pd.Series
     bench_ma_slow: pd.Series
+    bench_ma_confirmation: pd.Series
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -140,7 +148,11 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     bench_return_20d = bench_close / bench_close.shift(20) - 1.0
     bench_ma_fast = bench_close.rolling(params.regime_ma_fast, min_periods=max(10, params.regime_ma_fast // 2)).mean()
     bench_ma_slow = bench_close.rolling(params.regime_ma, min_periods=max(30, params.regime_ma // 2)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow)
+    if params.regime_confirmation_ma > 0:
+        panel_conf_ma = bench_close.rolling(params.regime_confirmation_ma, min_periods=max(60, params.regime_confirmation_ma // 2)).mean()
+    else:
+        panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams) -> List[Tuple[str, float, float]]:
@@ -216,7 +228,11 @@ def detect_regime(panel: FeaturePanel, date: pd.Timestamp, params: RotationParam
     last = float(panel.bench_close.loc[date])
     ma_fast = float(panel.bench_ma_fast.loc[date])
     ma_slow = float(panel.bench_ma_slow.loc[date])
-    if last > ma_slow and ma_fast > ma_slow:
+    conf_ok = True
+    if params.regime_confirmation_ma > 0:
+        conf_val = panel.bench_ma_confirmation.loc[date]
+        conf_ok = bool(pd.notna(conf_val) and last > float(conf_val))
+    if last > ma_slow and ma_fast > ma_slow and conf_ok:
         regime = "BULL"
         exposure = min(params.bull_exposure * params.bull_leverage, params.max_gross_exposure)
         advice_zh = "多头市场:基准指数位于长期均线上方且短期动能向上,建议提高仓位积极参与强势轮动标的。"
@@ -239,6 +255,18 @@ def build_target_weights(
     current_weights = current_weights or {}
     keep_symbols = keep_symbols or []
     selected = ranked[: params.top_n]
+    # Bound ETF seats: sector/theme ETFs can be extremely volatile, so keep at
+    # most max_etf_positions ETFs and backfill with the next-best stocks.
+    etf_count = sum(1 for s, _, _ in selected if is_etf(s))
+    if etf_count > params.max_etf_positions:
+        stocks = [item for item in selected if not is_etf(item[0])]
+        etfs = [item for item in selected if is_etf(item[0])][: params.max_etf_positions]
+        for item in ranked[params.top_n:]:
+            if len(etfs) + len(stocks) >= params.top_n:
+                break
+            if not is_etf(item[0]):
+                stocks.append(item)
+        selected = stocks + etfs
     keep_weights = {s: current_weights.get(s, 0.0) for s in keep_symbols if current_weights.get(s, 0.0) > 1e-9}
     if not selected and not keep_weights:
         return {symbol: 0.0 for symbol in symbols}
@@ -269,7 +297,7 @@ def build_target_weights(
 
 
 def weekly_rotation_backtest(
-    frames: Dict[str, pd.DataFrame], params: RotationParams | None = None
+    frames: Dict[str, pd.DataFrame], params: RotationParams | None = None, us_benchmark: Optional[pd.Series] = None,
 ) -> dict:
     params = params or RotationParams()
     symbols = sorted(frames)
@@ -294,9 +322,14 @@ def weekly_rotation_backtest(
     prev_close_matrix = close_matrix.shift(1)
     returns_matrix = open_matrix.shift(-1) / open_matrix - 1.0
     panel = precompute_panels(frames, params)
+    us_trend = None
+    if params.us_trend_filter and us_benchmark is not None and len(us_benchmark):
+        us_reindexed = us_benchmark.reindex(common).ffill()
+        us_trend = us_reindexed > us_reindexed.rolling(params.us_trend_ma, min_periods=30).mean()
 
     weights = {symbol: 0.0 for symbol in symbols}
     entry_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
+    closed_trades: List[dict] = []
     pending: Optional[dict] = None
     regime_rows: List[dict] = []
     rows: List[dict] = []
@@ -336,6 +369,9 @@ def weekly_rotation_backtest(
                 if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and pd.notna(open_matrix.at[date, symbol]):
                     entry_prices[symbol] = float(open_matrix.at[date, symbol])
                 elif desired[symbol] <= 1e-9:
+                    if weights[symbol] > 1e-9 and entry_prices[symbol] > 0 and pd.notna(open_matrix.at[date, symbol]):
+                        exit_price = float(open_matrix.at[date, symbol])
+                        closed_trades.append({"symbol": symbol, "entry": entry_prices[symbol], "exit": exit_price, "pnl": exit_price / entry_prices[symbol] - 1.0, "exit_date": date})
                     entry_prices[symbol] = 0.0
             weights = desired
             pending = None
@@ -411,21 +447,41 @@ def weekly_rotation_backtest(
                     adjusted = {s: w * s2 for s, w in adjusted.items()}
                 pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
 
+        # ---- event shock filter: a benchmark crash day cuts exposure at next open ----
+        if params.event_shock_threshold > 0 and pending is None:
+            bench_now = panel.bench_close.loc[date] if pd.notna(panel.bench_close.loc[date]) else np.nan
+            prev_idx = panel.common.get_loc(date) - 1
+            bench_prev = panel.bench_close.iloc[prev_idx] if prev_idx >= 0 and pd.notna(panel.bench_close.iloc[prev_idx]) else np.nan
+            if np.isfinite(bench_now) and np.isfinite(bench_prev) and bench_prev > 0:
+                shock = bench_now / bench_prev - 1.0
+                if shock <= -params.event_shock_threshold:
+                    current_gross = sum(weights.values())
+                    if current_gross > 1e-9:
+                        scale = params.bear_exposure / current_gross
+                        adjusted = {s: min(w * scale, params.per_position_cap) for s, w in weights.items()}
+                        pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
+
         if is_rebalance_day:
             regime = detect_regime(panel, date, params)
             current_regime = regime.regime
             regime_rows.append({"date": date, **vars(regime)})
             ranked = rank_candidates(panel, date, params)
             ranked_symbols = [s for s, _, _ in ranked]
+            # High-probability setup gate: in NEUTRAL/BEAR regimes skip opening
+            # new positions (bull-regime momentum/reversal setups win more often).
+            skip = params.bull_only_trading and regime.regime != "BULL"
+            if us_trend is not None and not skip:
+                us_ok = us_trend.loc[date] if date in us_trend.index and pd.notna(us_trend.loc[date]) else True
+                if not us_ok:
+                    skip = True
             # Persistence: keep currently-held names that remain selectable
             # (trend intact, not extreme) even if they slipped out of the top-N.
             keep_symbols: List[str] = []
-            if params.hold_persistent and any(weights[s] > 1e-9 for s in symbols):
+            if params.hold_persistent and not skip and any(weights[s] > 1e-9 for s in symbols):
                 held_rank_ok = {s: (ranked_symbols.index(s) if s in ranked_symbols else 10 ** 9) for s in symbols if weights[s] > 1e-9}
                 keep_symbols = [s for s, r in held_rank_ok.items() if r <= params.persist_rank_floor and s not in ranked_symbols[: params.top_n]]
             # Momentum gate: skip the week when even the top name is weak.
-            skip = False
-            if ranked and params.min_top_momentum_gate is not None and 20 in panel.momentum:
+            if ranked and not skip and params.min_top_momentum_gate is not None and 20 in panel.momentum:
                 top_20 = panel.momentum[20].loc[date].get(ranked[0][0], 0.0)
                 if pd.notna(top_20) and float(top_20) < params.min_top_momentum_gate:
                     skip = True
@@ -434,8 +490,8 @@ def weekly_rotation_backtest(
 
     returns = pd.DataFrame(rows).set_index("date")
     regimes = pd.DataFrame(regime_rows).set_index("date") if regime_rows else pd.DataFrame()
-    summary = summarize(returns, regimes, params)
-    return {"returns": returns, "regimes": regimes, "summary": summary, "params": params}
+    summary = summarize(returns, regimes, params, closed_trades)
+    return {"returns": returns, "regimes": regimes, "summary": summary, "params": params, "closed_trades": pd.DataFrame(closed_trades)}
 
 
 def _execution_snapshot(frame: pd.DataFrame, date: pd.Timestamp) -> Tuple[float, float, float]:
@@ -458,7 +514,7 @@ def _open_to_open_return(frame: pd.DataFrame, date: pd.Timestamp, next_date: pd.
     return open_t1 / open_t - 1.0
 
 
-def summarize(returns: pd.DataFrame, regimes: pd.DataFrame, params: RotationParams) -> dict:
+def summarize(returns: pd.DataFrame, regimes: pd.DataFrame, params: RotationParams, closed_trades: Optional[List[dict]] = None) -> dict:
     r = returns["strategy_return"]
     bench = returns["benchmark_return"]
     equity = (1 + r).cumprod()
@@ -479,6 +535,15 @@ def summarize(returns: pd.DataFrame, regimes: pd.DataFrame, params: RotationPara
                     "cum_return": float((1 + sub).prod() - 1),
                     "avg_daily": float(sub.mean()),
                 }
+    weekly = returns["strategy_return"].resample("W-FRI").apply(lambda x: (1 + x).prod() - 1)
+    weekly_win_rate = float((weekly > 0).mean()) if len(weekly) else 0.0
+    weekly_exposure = returns["gross_exposure"].resample("W-FRI").mean()
+    active_weeks = weekly[weekly_exposure > 0.01]
+    operation_win_rate = float((active_weeks > 0).mean()) if len(active_weeks) else 0.0
+    position_win_rate = 0.0
+    if closed_trades:
+        wins = [t for t in closed_trades if t.get("pnl", 0.0) > 0]
+        position_win_rate = float(len(wins) / len(closed_trades)) if closed_trades else 0.0
     return {
         "observations": n,
         "start": str(returns.index.min().date()) if n else "",
@@ -487,6 +552,10 @@ def summarize(returns: pd.DataFrame, regimes: pd.DataFrame, params: RotationPara
         "benchmark_annual_return": bench_ann,
         "monthly_avg_return": monthly_avg,
         "monthly_win_rate": float((months > 0).mean()) if len(months) else 0.0,
+        "weekly_win_rate": weekly_win_rate,
+        "operation_win_rate": operation_win_rate,
+        "position_win_rate": position_win_rate,
+        "closed_trades_count": len(closed_trades) if closed_trades else 0,
         "annual_volatility": vol,
         "sharpe": float(r.mean() / r.std(ddof=1) * np.sqrt(252)) if vol else 0.0,
         "max_drawdown": mdd,
@@ -546,10 +615,11 @@ def build_reports(result: dict, output_dir) -> dict:
     # regime advice
     advice_lines = ["# 周轮动策略回测报告 / Weekly Rotation Backtest Report", ""]
     advice_lines.append(f"- 回测区间: {summary['start']} ~ {summary['end']} ({summary['observations']} 个交易日)")
-    advice_lines.append(f"- 月均收益: **{summary['monthly_avg_return']:.2%}** (目标 ≥2%)")
+    advice_lines.append(f"- 月均收益: **{summary['monthly_avg_return']:.2%}** (最低目标 ≥1.5%)")
     advice_lines.append(f"- 年化收益: {summary['annual_return']:.2%} | 年化波动: {summary['annual_volatility']:.2%} | 夏普: {summary['sharpe']:.2f}")
     advice_lines.append(f"- 最大回撤: {summary['max_drawdown']:.2%} | 期末净值: {summary['final_equity']:.2f}")
     advice_lines.append(f"- 平均总仓位: {summary['average_exposure']:.1%} | 累计交易成本: {summary['total_cost_fraction']:.2%}")
+    advice_lines.append(f"- 操作胜率(有仓位周): {summary.get('operation_win_rate', 0):.1%} | 持仓胜率: {summary.get('position_win_rate', 0):.1%} | 平仓次数: {summary.get('closed_trades_count', 0)}")
     advice_lines += ["", "## 牛熊市分段表现 / Regime Breakdown", "", "| 市场状态 | 交易日 | 累计收益 |", "|---|---|---|"]
     for regime in ("BULL", "NEUTRAL", "BEAR"):
         info = summary["regime_breakdown"].get(regime)

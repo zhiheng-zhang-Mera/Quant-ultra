@@ -34,6 +34,11 @@ PRODUCTION_UNIVERSE = [
     "300760.SZ", "002475.SZ", "000002.SZ", "000568.SZ", "002304.SZ",
     "300124.SZ", "688981.SH", "688111.SH", "510300.SH", "510500.SH",
     "159915.SZ", "512880.SH",
+    # curated liquid ETFs (broad, cross-border, and top sector themes)
+    "510050.SH", "510300.SH", "510500.SH", "510880.SH", "159919.SZ",
+    "159941.SZ", "513100.SH", "513500.SH", "513050.SH", "512000.SH",
+    "512480.SH", "512660.SH", "512690.SH", "515030.SH", "515880.SH",
+    "588000.SH", "159949.SZ",
 ]
 
 
@@ -58,6 +63,7 @@ def default_params() -> RotationParams:
         reversal_1d_weight=3.0,
         reversal_window=1,
         top_n=2,
+        max_etf_positions=1,
         regime_ma=40,
         regime_ma_fast=10,
         bull_exposure=1.0,
@@ -68,6 +74,7 @@ def default_params() -> RotationParams:
         leverage_annual_cost=0.06,
         hold_persistent=True,
         trend_filter_long=60,
+        bull_only_trading=True,
     )
 
 
@@ -88,12 +95,30 @@ def main() -> int:
     result = weekly_rotation_backtest(frames, params)
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
-    print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "monthly_win_rate", "annual_volatility", "sharpe", "max_drawdown", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))
+    print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "monthly_win_rate", "operation_win_rate", "position_win_rate", "closed_trades_count", "annual_volatility", "sharpe", "max_drawdown", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))
     print("\n牛熊市建议:")
     for regime in ("BULL", "NEUTRAL", "BEAR"):
         info = summary["regime_breakdown"].get(regime)
         if info:
             print(f"  {regime}: {info['days']} 天,累计 {info['cum_return']:.2%}")
+    # ML addition gate: federated transfer learning + RL, evidence-based decision
+    try:
+        from Main.ml_gate import run_ml_gate
+        close_panel = pd.DataFrame({s: frames[s]["close"] for s in frames}).sort_index()
+        us_path = DATA_CACHE / "us_^GSPC_history.parquet"
+        us_close = None
+        if us_path.exists():
+            us = pd.read_parquet(us_path)
+            us["date"] = pd.to_datetime(us["date"], errors="coerce").dt.tz_localize(None)
+            us = us.dropna(subset=["date"]).sort_values("date").set_index("date")
+            us_close = us["close"].astype(float)
+        gate = run_ml_gate(close_panel, us_close, len(frames), int(summary["observations"]), PROJECT_ROOT / "reports" / "ml_gate")
+        print("\nML 新增模块门控评估:")
+        print(f"  联邦迁移学习(美股): {gate['federated_transfer_decision']} — {gate['federated_transfer_rationale'][:80]}...")
+        print(f"  强化学习: {gate['reinforcement_learning_decision']} — {gate['reinforcement_learning']['decision_rationale'][:80]}...")
+        print(f"  硬件加速自检: {gate['hardware_acceleration']['self_check']}")
+    except Exception as exc:
+        print(f"\nML gate skipped: {exc}")
     print(f"\n报告: {paths['report']}")
     print(f"收益明细: {paths['returns']}")
     print(f"月度明细: {paths['monthly']}")
