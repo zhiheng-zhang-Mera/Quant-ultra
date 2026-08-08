@@ -85,6 +85,10 @@ def default_params() -> RotationParams:
         rebalance_days=21,
         bear_no_loss=False,
         vol_target=0.15,
+        vol_scale_floor=0.6,
+        event_shock_threshold=0.025,
+        event_shock_latch=True,
+        event_shock_exposure=0.10,
     )
 
 
@@ -123,7 +127,7 @@ def main() -> int:
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
-    print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "monthly_win_rate", "operation_win_rate", "position_win_rate", "closed_trades_count", "annual_volatility", "sharpe", "max_drawdown", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))
+    print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "annual_volatility", "sharpe", "calmar", "max_drawdown", "max_drawdown_recovery_days", "monthly_win_vs_index", "quarterly_win_vs_index", "monthly_win_vs_benchmark", "quarterly_win_vs_benchmark", "avg_rebalance_turnover", "operation_win_rate", "position_win_rate", "closed_trades_count", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))
     print("\n牛熊市建议:")
     for regime in ("BULL", "NEUTRAL", "BEAR"):
         info = summary["regime_breakdown"].get(regime)
@@ -140,7 +144,7 @@ def main() -> int:
             us["date"] = pd.to_datetime(us["date"], errors="coerce").dt.tz_localize(None)
             us = us.dropna(subset=["date"]).sort_values("date").set_index("date")
             us_close = us["close"].astype(float)
-        gate = run_ml_gate(close_panel, us_close, len(frames), int(summary["observations"]), PROJECT_ROOT / "reports" / "ml_gate")
+        gate = run_ml_gate(close_panel, us_close, len(frames), int(summary["observations"]), PROJECT_ROOT / "reports" / "ml_gate", params.rebalance_days)
         print("\nML 新增模块门控评估:")
         print(f"  联邦迁移学习(美股): {gate['federated_transfer_decision']} — {gate['federated_transfer_rationale'][:80]}...")
         print(f"  强化学习: {gate['reinforcement_learning_decision']} — {gate['reinforcement_learning']['decision_rationale'][:80]}...")

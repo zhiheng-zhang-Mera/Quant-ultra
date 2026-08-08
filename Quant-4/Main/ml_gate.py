@@ -65,7 +65,7 @@ def assess_reinforcement_learning(assets: int, rebalance_days: int, observations
         "validation_concern": "No clean offline validator exists for a learned policy; walk-forward RL evaluation is statistically fragile.",
         "reward_sparsity": "Weekly rewards are sparse and noisy; credit assignment across holding periods is hard.",
         "transparency_concern": "A policy network would hide the auditable rule book (regime, momentum, reversal gates) behind a black box.",
-        "existing_rule_edge": "The transparent rule set already meets the return floor (1.5%/month) with a 1.0+ Sharpe; RL must beat this out-of-sample to be worth mounting.",
+        "existing_rule_edge": "The transparent rule set already delivers positive long-run alpha with a 0.8+ Sharpe and no leverage; RL must beat this out-of-sample to be worth mounting.",
         "decision": "SKIP",
         "decision_rationale": "Benefit does not outweigh cost: sparse weekly data, high-dimensional state, no reliable offline validation, and a black-box opacity cost against the auditable rules. Revisit only if a large labeled multi-market dataset and a validated offline evaluator become available.",
     }
@@ -78,6 +78,7 @@ def run_ml_gate(
     assets: int,
     observations: int,
     output_dir: Path,
+    rebalance_days: int = 5,
 ) -> dict:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -103,14 +104,15 @@ def run_ml_gate(
             "MOUNT_AS_OPTIONAL_GATE" if transfer == "MATERIAL" else "SKIP"
         )
         report["federated_transfer_rationale"] = (
-            "US trend filter empirical test lowered monthly return (1.71%->1.39%) and Sharpe (1.01->0.91) on 2016+; "
-            "cross-market correlations are near zero, so transfer learning does not add value here."
+            "Cross-market Spearman correlations (US 20d/5d return and MA40 state vs A-share forward week) are 0.01-0.04 "
+            "on 2016+ data, so the transfer value is NONE; mounting a federated transfer layer would add complexity "
+            "without measurable predictive benefit."
         )
     else:
         report["federated_transfer_us"] = {"testable": False, "note": "US benchmark data unavailable"}
         report["federated_transfer_decision"] = "SKIP"
         report["federated_transfer_rationale"] = "No US data to evaluate; skip rather than assume."
-    report["reinforcement_learning"] = assess_reinforcement_learning(assets, 5, observations)
+    report["reinforcement_learning"] = assess_reinforcement_learning(assets, int(rebalance_days or 5), observations)
     report["reinforcement_learning_decision"] = report["reinforcement_learning"]["decision"]
     path = output_dir / "ml_gate_report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
