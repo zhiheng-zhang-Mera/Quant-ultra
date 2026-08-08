@@ -64,6 +64,7 @@ class RotationParams:
     regime_benchmark_symbols: Optional[Tuple[str, ...]] = None  # subset for regime
     hold_persistent: bool = True             # keep a name while still top-2K or trend intact
     persist_rank_floor: int = 6              # keep if rank <= floor
+    max_holding_days: int = 0                # 0 = no time cap; else force exit after N days
     reversal_1d_weight: float = 0.0          # reward recent 1-day weakness (A-share reversal)
     reversal_window: int = 1                 # reversal lookback days (1 or 2)
     trend_filter_long: int = 60              # candidate trend MA (0 disables)
@@ -329,6 +330,7 @@ def weekly_rotation_backtest(
 
     weights = {symbol: 0.0 for symbol in symbols}
     entry_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
+    holding_days: Dict[str, int] = {symbol: 0 for symbol in symbols}
     closed_trades: List[dict] = []
     pending: Optional[dict] = None
     regime_rows: List[dict] = []
@@ -368,11 +370,13 @@ def weekly_rotation_backtest(
             for symbol in symbols:
                 if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and pd.notna(open_matrix.at[date, symbol]):
                     entry_prices[symbol] = float(open_matrix.at[date, symbol])
+                    holding_days[symbol] = 0
                 elif desired[symbol] <= 1e-9:
                     if weights[symbol] > 1e-9 and entry_prices[symbol] > 0 and pd.notna(open_matrix.at[date, symbol]):
                         exit_price = float(open_matrix.at[date, symbol])
                         closed_trades.append({"symbol": symbol, "entry": entry_prices[symbol], "exit": exit_price, "pnl": exit_price / entry_prices[symbol] - 1.0, "exit_date": date})
                     entry_prices[symbol] = 0.0
+                    holding_days[symbol] = 0
             weights = desired
             pending = None
 
@@ -418,6 +422,10 @@ def weekly_rotation_backtest(
         for symbol in stopped_symbols:
             weights[symbol] = 0.0
             entry_prices[symbol] = 0.0
+            holding_days[symbol] = 0
+        for symbol in symbols:
+            if weights[symbol] > 1e-9:
+                holding_days[symbol] += 1
         # daily forced deleveraging: drift in down markets can otherwise push
         # gross exposure above the ceiling (margin-call behaviour)
         gross_now = sum(weights.values())
@@ -480,6 +488,8 @@ def weekly_rotation_backtest(
             if params.hold_persistent and not skip and any(weights[s] > 1e-9 for s in symbols):
                 held_rank_ok = {s: (ranked_symbols.index(s) if s in ranked_symbols else 10 ** 9) for s in symbols if weights[s] > 1e-9}
                 keep_symbols = [s for s, r in held_rank_ok.items() if r <= params.persist_rank_floor and s not in ranked_symbols[: params.top_n]]
+                if params.max_holding_days > 0:
+                    keep_symbols = [s for s in keep_symbols if holding_days[s] < params.max_holding_days]
             # Momentum gate: skip the week when even the top name is weak.
             if ranked and not skip and params.min_top_momentum_gate is not None and 20 in panel.momentum:
                 top_20 = panel.momentum[20].loc[date].get(ranked[0][0], 0.0)
@@ -615,8 +625,8 @@ def build_reports(result: dict, output_dir) -> dict:
     # regime advice
     advice_lines = ["# 周轮动策略回测报告 / Weekly Rotation Backtest Report", ""]
     advice_lines.append(f"- 回测区间: {summary['start']} ~ {summary['end']} ({summary['observations']} 个交易日)")
-    advice_lines.append(f"- 月均收益: **{summary['monthly_avg_return']:.2%}** (最低目标 ≥1.5%)")
-    advice_lines.append(f"- 年化收益: {summary['annual_return']:.2%} | 年化波动: {summary['annual_volatility']:.2%} | 夏普: {summary['sharpe']:.2f}")
+    advice_lines.append(f"- **年化收益: {summary['annual_return']:.2%}** (核心目标) | 月均收益: {summary['monthly_avg_return']:.2%}")
+    advice_lines.append(f"- 年化波动: {summary['annual_volatility']:.2%} | 夏普: {summary['sharpe']:.2f}")
     advice_lines.append(f"- 最大回撤: {summary['max_drawdown']:.2%} | 期末净值: {summary['final_equity']:.2f}")
     advice_lines.append(f"- 平均总仓位: {summary['average_exposure']:.1%} | 累计交易成本: {summary['total_cost_fraction']:.2%}")
     advice_lines.append(f"- 操作胜率(有仓位周): {summary.get('operation_win_rate', 0):.1%} | 持仓胜率: {summary.get('position_win_rate', 0):.1%} | 平仓次数: {summary.get('closed_trades_count', 0)}")
