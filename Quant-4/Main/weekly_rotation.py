@@ -516,6 +516,26 @@ def build_reports(result: dict, output_dir) -> dict:
     curve_path = output_dir / "weekly_rotation_returns.csv"
     curve.to_csv(curve_path, encoding="utf-8-sig")
 
+    # equity curve chart (best-effort; matplotlib may be absent in slim envs)
+    chart_path = output_dir / "weekly_rotation_equity.png"
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(11, 5))
+        ax.plot(curve.index, equity.values, label="Strategy", color="#2458d3", linewidth=1.4)
+        bench_equity = (1 + returns["benchmark_return"]).cumprod()
+        ax.plot(curve.index, bench_equity.values, label="Equal-weight benchmark", color="#9aa5b1", linewidth=1.1)
+        ax.set_title("Weekly Rotation Equity Curve (close signal -> next-open execution)")
+        ax.set_ylabel("Equity (start=1)")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(chart_path, dpi=110)
+        plt.close(fig)
+    except Exception:
+        chart_path = None
+
     # monthly table
     monthly = returns["strategy_return"].resample("ME").apply(lambda x: (1 + x).prod() - 1)
     bench_monthly = returns["benchmark_return"].resample("ME").apply(lambda x: (1 + x).prod() - 1)
@@ -550,4 +570,4 @@ def build_reports(result: dict, output_dir) -> dict:
 
     summary_path = output_dir / "weekly_rotation_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return {"returns": curve_path, "monthly": monthly_path, "report": advice_path, "summary": summary_path}
+    return {"returns": curve_path, "monthly": monthly_path, "report": advice_path, "summary": summary_path, "chart": chart_path}
