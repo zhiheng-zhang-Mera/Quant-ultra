@@ -71,6 +71,8 @@ class RotationParams:
     selection_ml_weight: float = 1.0
     vol_target: float = 0.0                  # annualized vol target (0 disables)
     vol_lookback: int = 60
+    hedge_etf: str = ""                      # short this symbol as market hedge (market-neutral)
+    borrow_cost: float = 0.04                # annual financing cost on the short leg
     drawdown_guard: float = 0.0              # force cash when equity DD exceeds this
     drawdown_recovery_ma: int = 20           # benchmark MA for re-entry after guard
     neutral_benchmark_hold: bool = False     # hold broad ETF instead of cash in NEUTRAL
@@ -349,6 +351,7 @@ def build_target_weights(
     raw = {symbol: max(score, 0.001) / max(vol, 0.05) for symbol, score, vol in selected}
     raw_total = sum(raw.values())
     weights = {symbol: 0.0 for symbol in symbols}
+    short_weights: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     residual_exposure = max(0.0, regime.exposure - sum(keep_weights.values()))
     for symbol, value in raw.items():
         w = residual_exposure * value / raw_total if raw_total else 0.0
@@ -413,6 +416,7 @@ def weekly_rotation_backtest(
         us_trend = us_reindexed > us_reindexed.rolling(params.us_trend_ma, min_periods=30).mean()
 
     weights = {symbol: 0.0 for symbol in symbols}
+    short_weights: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     entry_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     holding_days: Dict[str, int] = {symbol: 0 for symbol in symbols}
     closed_trades: List[dict] = []
@@ -451,6 +455,11 @@ def weekly_rotation_backtest(
             for symbol in symbols:
                 delta = desired[symbol] - weights[symbol]
                 turnover += abs(delta)
+            if params.hedge_etf and params.hedge_etf in symbols:
+                target_short = -sum(desired.values())
+                short_turnover = abs(target_short - short_weights.get(params.hedge_etf, 0.0))
+                turnover += short_turnover
+                short_weights[params.hedge_etf] = target_short
             cost = turnover * params.fee_rate
             # track entry prices for newly opened positions
             for symbol in symbols:
@@ -490,6 +499,10 @@ def weekly_rotation_backtest(
             else:
                 asset_returns[symbol] = float(ret_row[symbol]) if pd.notna(ret_row[symbol]) else 0.0
         gross = sum(weights[symbol] * asset_returns[symbol] for symbol in symbols)
+        if params.hedge_etf and params.hedge_etf in symbols:
+            hedge_ret = asset_returns.get(params.hedge_etf, 0.0)
+            short_notional = short_weights.get(params.hedge_etf, 0.0)
+            gross += (-short_notional) * hedge_ret - abs(short_notional) * params.borrow_cost / 252.0
         strategy_return = gross - cost
         # ---- risk controls ----
         if params.drawdown_guard > 0:
@@ -521,6 +534,8 @@ def weekly_rotation_backtest(
         if equity <= 0:
             raise ValueError("equity non-positive")
         weights = {symbol: weights[symbol] * (1.0 + asset_returns[symbol]) / (1.0 + strategy_return) for symbol in symbols}
+        if params.hedge_etf and params.hedge_etf in symbols:
+            short_weights[params.hedge_etf] = short_weights.get(params.hedge_etf, 0.0) * (1.0 + asset_returns.get(params.hedge_etf, 0.0)) / (1.0 + strategy_return)
         for symbol in stopped_symbols:
             weights[symbol] = 0.0
             entry_prices[symbol] = 0.0
