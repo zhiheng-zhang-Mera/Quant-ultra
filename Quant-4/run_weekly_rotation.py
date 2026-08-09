@@ -109,13 +109,13 @@ def default_params() -> RotationParams:
         event_shock_latch=True,
         event_shock_recovery_ma=5,
         event_shock_exposure=0.70,
-        defensive_hold_assets=("511010.SH", "511260.SH", "518880.SH", "511880.SH", "511220.SH", "511060.SH", "159934.SZ", "511990.SH"),
+        defensive_hold_assets=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),
         defensive_hold_exposure=1.0,
         defensive_hold_safe_frac=0.65,
         defensive_hold_basket=(),
         safe_trend_gate=20,
         euphoria_threshold=0.10,
-        benchmark_exclude=("511010.SH", "511260.SH", "518880.SH", "511880.SH", "511220.SH", "511060.SH", "159934.SZ", "511990.SH"),
+        benchmark_exclude=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),
     )
 
 
