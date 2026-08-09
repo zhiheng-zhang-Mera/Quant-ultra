@@ -24,8 +24,8 @@ LOOKBACK_WINDOW_PSI = 60          # PSI 基准分布历史回溯窗口
 VOLATILITY_WINDOW = 20            # 净值滚动残差波动率计算窗口
 
 # 严格响应 README 规范的会话缓存双格式本地存储路径
-CACHE_PARQUET_DIR = PROJECT_ROOT / "Phase Result" / "parquet" / "Phase 9"
-CACHE_FEATHER_DIR = PROJECT_ROOT / "Phase Result" / "feather" / "Phase 9"
+CACHE_PARQUET_DIR = PROJECT_ROOT / "Phase_Result" / "parquet" / "Phase_9"
+CACHE_FEATHER_DIR = PROJECT_ROOT / "Phase_Result" / "feather" / "Phase_9"
 
 os.makedirs(CACHE_PARQUET_DIR, exist_ok=True)
 os.makedirs(CACHE_FEATHER_DIR, exist_ok=True)
