@@ -1,154 +1,267 @@
-# Quant-Ultra
+# Quant-Ultra — Auditable Quantitative Research & Adaptive Rotation System
+
+**可审计量化研究流水线 · 自适应多因子轮动引擎**
+
+> Research & engineering validation system. **This is not investment advice.** Backtests, sentiment scores and deterministic tests cannot guarantee future returns. / 研究与工程验证系统，**不构成投资建议**。回测、情绪评分与确定性测试均不能保证未来收益。
 
 [中文](#中文) · [English](#english)
 
-> 研究与工程验证系统，不构成投资建议。回测、情绪评分和确定性测试均不能保证未来收益。
+---
 
 ## 中文
 
-Quant-Ultra 是面向 A 股、ETF 与美股研究的可审计量化流水线，覆盖数据质量、时点特征、另类数据、机器学习、运筹优化、交易成本、回测、压力测试、MLOps、CIO 治理与观察型投顾。每个阶段输出中英双语 Markdown/JSON 证据报告。
+Quant-Ultra 是一套面向 A 股、ETF 与美股研究的**可审计端到端量化流水线**，覆盖数据质量、时点（Point-in-Time）特征、另类数据、机器学习、运筹优化、交易成本、回测、压力测试、MLOps、CIO 治理与观察型投顾，并内置一套**自适应多因子周轮动引擎**（`weekly_rotation`）。每个阶段均输出中英双语 Markdown/JSON 证据报告，含 Git 哈希、运行时间与 SHA-256，可完全复现。
 
-### 核心原则
+本项目可作为**研究型工程作品**用于申请材料：其方法论强调无未来函数（PIT）、防数据泄露（walk-forward + embargo）、多重检验校正（DSR）、失败关闭治理（fail-closed），以及对样本外表现与口径变更的诚实披露。
 
-- Point-in-Time：新闻、论坛、价格和标签只使用当时已经发布的信息。
-- 风险优先：仓位受现金缓冲、单标的/行业上限、换手和流动性约束。
-- 成本后收益：佣金最低收费、经手费、证管费、卖出印花税、滑点及 ETF 管理费均进入计算。
-- 失败关闭：审计或对账不通过时返回 `HOLD_FOR_REVIEW`，Phase 11 降级为 `OBSERVATION_ONLY`。
-- 可复核：每阶段报告包含 Git 哈希、运行时间、结构摘要和 SHA-256。
+### ✦ 核心原则
 
-### 十一阶段完整功能
+| 原则 | 说明 |
+|---|---|
+| Point-in-Time | 新闻、论坛、价格与标签只使用当时已发布的信息，杜绝未来函数 |
+| 风险优先 | 现金缓冲、单标的/行业上限、换手与流动性约束贯穿仓位构建 |
+| 成本后收益 | 佣金、经手费、证管费、印花税、滑点与 ETF 管理费全部进入计算 |
+| 失败关闭 | 审计或对账不通过返回 `HOLD_FOR_REVIEW`，Phase 11 降级 `OBSERVATION_ONLY` |
+| 可复核 | 每阶段报告包含 Git 哈希、运行时间、结构摘要与 SHA-256 |
 
-| 阶段 | 功能 | 主要输出与结论含义 |
+### ✦ 十一阶段完整流水线
+
+| 阶段 | 功能 | 主要输出 |
 |---|---|---|
-| Phase 1 | 标的池、退市残值、交易状态、流动性和容量筛选 | `assets`、`adv_data`、存续矩阵、AUM 上限；判断数据底座能否进入研究流程 |
-| Phase 2 | 训练/验证/测试切片、跨市场日历对齐、embargo | 时间隔离证据；防止训练与测试窗口重叠 |
-| Phase 3 | PIT 特征、市场状态、新闻/论坛情绪、资金池变化 | `feature_panel_*`、`alternative_signals`、来源哈希；缺源时明确标记而不伪造情绪 |
-| Phase 4 | 方向/收益标签、事件去重、样本权重 | `y_clf_all`、`y_reg_all`、`sample_weights`；限制重复事件过度计权 |
-| Phase 5 | 方向分类、分位数模型、特征选择与校准 | 模型、特征、预测区间和误差证据；不直接等同交易信号 |
-| Phase 6 | Black–Litterman、稳健协方差、风险预算、凸优化 | 每日目标权重、区间、ADV20；包含现金、集中度、换手和成本约束 |
-| Phase 7 | FSM 回测、停牌/涨跌停、整手成交、冲击和费用 | 净值、收益、违规、费用分类账；体现可执行结果而非理想权重 |
-| Phase 8 | DSR/覆盖率、容量、冲击和历史压力测试 | `audit_summary`、`audit_passed`；关键红线失败即阻止执行 |
-| Phase 9 | 目标/执行仓位对账、PSI 漂移、拥挤度治理 | MAE、漂移和拥挤门禁；异常时保持人工复核 |
-| Phase 10 | CIO 双语治理汇总和参数提案 | `cio_decision`、证据清单；不自动接受未经验证的参数 |
-| Phase 11 | 候选、买点、仓位、止盈止损和持仓问答 | 双语报告与 CSV；治理未通过时仅观察、不可执行 |
+| Phase 1 | 标的池、退市残值、交易状态、流动性与容量筛选 | `assets`、`adv_data`、存续矩阵、AUM 上限 |
+| Phase 2 | 训练/验证/测试切片、跨市场日历对齐、embargo | 时间隔离证据，防窗口重叠 |
+| Phase 3 | PIT 特征、市场状态、新闻/论坛情绪、资金池变化 | `feature_panel_*`、`alternative_signals`、来源哈希 |
+| Phase 4 | 方向/收益标签、事件去重、样本权重 | `y_clf_all`、`y_reg_all`、`sample_weights` |
+| Phase 5 | 方向分类、分位数模型、特征选择与校准 | 模型、特征、预测区间与误差证据 |
+| Phase 6 | Black–Litterman、稳健协方差、风险预算、凸优化 | 每日目标权重、区间、ADV20 |
+| Phase 7 | FSM 回测、停牌/涨跌停、整手成交、冲击与费用 | 净值、收益、违规、费用分类账 |
+| Phase 8 | DSR/覆盖率、容量、冲击与历史压力测试 | `audit_summary`、`audit_passed` |
+| Phase 9 | 目标/执行仓位对账、PSI 漂移、拥挤度治理 | MAE、漂移与拥挤门禁 |
+| Phase 10 | CIO 双语治理汇总与参数提案 | `cio_decision`、证据清单 |
+| Phase 11 | 候选、买点、仓位、止盈止损与持仓问答 | 双语报告与 CSV；治理未通过仅观察 |
 
-### 另类数据输入
+### ✦ 系统架构
 
-Phase 3 支持 `news_input_path` 和 `forum_input_path`，文件为 CSV 或 JSONL，至少包含：
+```mermaid
+flowchart LR
+    A[Phase 1-2<br/>数据底座与切片] --> B[Phase 3-4<br/>PIT特征与标签]
+    B --> C[Phase 5<br/>ML模型与校准]
+    C --> D[Phase 6<br/>凸优化仓位]
+    D --> E[Phase 7<br/>FSM物理回测]
+    E --> F[Phase 8-9<br/>审计/压力/对账]
+    F --> G[Phase 10-11<br/>CIO治理与投顾]
+    G -->|HOLD_FOR_REVIEW / OBSERVATION_ONLY| A
+```
+
+### ✦ 自适应多因子轮动引擎
+
+`Quant-4/Main/weekly_rotation.py` 实现收盘信号 → 次日开盘执行的无未来函数周轮动，并在传统多因子打分层之上叠加**自适应风险调整**：
+
+```mermaid
+flowchart TD
+    S[复合因子打分<br/>动量/趋势/反转/低波/股息] --> R[市场状态检测<br/>MA40/MA10 + ML logit]
+    R --> E{防御状态?}
+    E -->|熊市/风险关闭/亢奋| H[避险资产轮动<br/>国债/黄金/货币 4选1]
+    E -->|牛市| B[满仓强势标的<br/>确认牛市1.15x小杠杆]
+    H --> X[周内6%止盈/8%止损<br/>3个月持有上限]
+    B --> X
+    X --> P[收盘信号 → 次日开盘执行]
+```
+
+关键机制：
+
+| 机制 | 说明 |
+|---|---|
+| ML 连续概率敞口 | logit `P(下月上涨)` 平滑映射敞口，替代二元空仓否决，避免长期空仓 |
+| 避险资产轮动 | 防御状态下持有 120 日动量最强且 20 日趋势为正的国债/黄金/货币 ETF |
+| 事件冲击 + 亢奋过滤 | 单日暴跌与 20 日暴涨极端区自动转入安全资产 |
+| 小额收割 | 6% 止盈 / 8% 止损多次收割小利润，控制回撤深度 |
+| 3 个月持有上限 | 强制轮出，不设最短持有 |
+| 确认牛市小杠杆 | 仅 MA BULL + ML≥0.65 + 动量为正 + 净值贴近峰值时启用 1.15x |
+
+### ✦ 回测表现（2016-01 ~ 2026-08，2573 交易日）
+
+| 指标 | 修正前基线 | 最终生产配置 | 目标 |
+|---|---|---|---|
+| 年化收益 | 8.6% | **12.9%**（OOS 2022+：13.4%） | — |
+| 夏普比率 | 0.86 | **1.34**（OOS 1.43） | ≥0.9 ✅ |
+| 卡玛比率 | 0.61 | **1.26**（OOS 1.60） | ≥1.2 ✅ |
+| 最大回撤 | -14.2% | **-10.2%** | — |
+| 回撤修复期（近3年窗口） | — | **111 交易日** | ≤126 ✅ |
+| 回撤修复期（全窗口，披露） | 374 日 | 369 日 | 披露 |
+| 季度超等权基准胜率 | 48.8% | **55.8%**（OOS 63.2%） | ≥50% ✅ |
+| 季度超沪深300胜率 | 62.8% | **62.8%**（OOS 68.4%） | ≥60% ✅ |
+| 平均敞口 | 39.9% | 76.1% | — |
+
+![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
+
+![月度收益热力图](docs/images/weekly_rotation_monthly_heatmap.png)
+
+> 口径说明：回撤修复期采用“最近 3 年窗口内峰值→新高最大回撤天数”（滚动监测口径，用户授权定义）；全窗口口径同时披露。OOS 定义为 2022-01 之后的样本。
+
+### ✦ 快速开始
+
+```powershell
+# 1) 创建或复用虚拟环境并安装依赖（含导入、pip check、编译与单元测试验收）
+.\setup.ps1
+
+# 2) 运行完整十一阶段流水线
+.\Quant-4\.venv-full\Scripts\python.exe Quant-4\Main\main.py --force-recompute --non-interactive
+
+# 3) 运行自适应周轮动回测并生成双语报告
+.\Quant-4\.venv-full\Scripts\python.exe Quant-4\run_weekly_rotation.py
+
+# 4) 运行防泄露的按标的自适应回测
+.\Quant-4\.venv-full\Scripts\python.exe Quant-4\run_adaptive_backtest.py 600519 --kind stock --years 8
+
+# 5) 验证
+.\Quant-4\.venv-full\Scripts\python.exe -m pytest Quant-4\tests -q
+```
+
+完整命令、参数与配置说明见 **[UserGuide.md](UserGuide.md)**。
+
+### ✦ 命令行速查
+
+| 命令 | 用途 |
+|---|---|
+| `main.py --only-phase 6` | 仅执行 Phase 6 及其依赖 |
+| `main.py --resume-from 6` | 从 Phase 6 断点恢复 |
+| `main.py --offline` | 全离线调试（仅缓存） |
+| `main.py --symbols 600519.SH,510300.SH` | 受限真实数据运行 |
+| `run_weekly_rotation.py --start 2020-01-01` | 自定义回测起点 |
+| `run_adaptive_backtest.py <code> --kind etf --disable-self-optimize` | 禁用跨运行参数迭代的诊断模式 |
+
+### ✦ 项目结构
 
 ```text
-published_at,symbol,text
-2026-08-03T08:00:00+08:00,600519.SH,公司披露增长与回购计划
+Quant-Ultra/
+├── Quant-4/
+│   ├── Main/                  # 主引擎：流水线、数据总线、周轮动、ML 门控
+│   ├── Phase_1 … Phase_11/    # 十一阶段模块
+│   ├── run_weekly_rotation.py # 自适应周轮动回测入口
+│   ├── run_adaptive_backtest.py
+│   ├── tests/                 # 单元与验收测试
+│   └── reports/               # 运行报告、CIO 决策、周轮动报告（gitignore）
+├── docs/images/               # 文档配图（受版本控制）
+├── README.md                  # 本文档
+└── UserGuide.md               # 用户指南（双语）
 ```
 
-晚于运行时点的记录会被排除。系统分别计算新闻和论坛词典情绪，并用 `close × volume` 构造 5 日相对 20 日资金池变化；综合权重为新闻 35%、论坛 25%、资金池 40%。词典模型不能可靠理解反讽、否定、传闻或操纵性发帖，正式使用应接入授权来源和经过验证的中文模型。
-
-Phase 3 还会动态探测本地 Ollama 和 `local_llm_model`。模型存在时，系统仅对最新的有限文本做额外情绪分析；默认总计不超过 6 条、每个标的不超过 2 条、每条不超过 300 字，关闭推理过程并将单次批量调用硬限制为 20 秒。模型不存在、Ollama 未启动、超时或返回格式异常时，系统自动保留词典结果并继续流水线。相关开关和限额位于 `Main/default_param.yaml`。
-
-### D 盘安装与运行
+### ✦ 验证、治理与术语
 
 ```powershell
-Set-Location D:\Quant-Ultra\Quant-4
-Set-Location D:\Quant-Ultra
-.\setup.ps1
-D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\Main\main.py --force-recompute --non-interactive
-```
-
-`setup.ps1` 一键创建或复用 `D:\Quant-Ultra\.venv-full`，安装主引擎、全市场数据源、回测、优化、统计、增强模块和测试所需依赖，并运行导入、`pip check`、编译与单元测试验收。结果写入 `Quant-4/reports/setup/setup_report.json`。可使用 `-Mirror <URL>` 指定 PyPI 镜像、`-SkipTests` 跳过测试、`-NoPipUpgrade` 跳过 pip/setuptools/wheel 升级。
-
-Ollama、Ollama 服务和 `local_llm_model` 只进行只读检查：安装脚本不会安装或启动 Ollama，不会拉取、删除或修改任何本地模型。缺少 Ollama 不会阻止核心分析引擎安装成功。
-
-常用参数：`--only-phase 6` 运行目标及依赖；`--resume-from 6` 从指定阶段继续；`--offline` 只用缓存；`--download-workers 1` 限制并发。报告位于 `Quant-4/reports/runs/<run-id>/`，含双语标题、结论解读、输出摘要、术语表和证据哈希。全部请求阶段结束后，同一目录会自动生成自包含的 `execute_report.html` 和结构化底稿 `execute_report_data.json`，汇总执行结论、资源分配、阶段证据与耗时、治理门禁、成本、净值以及 Phase 11 四阶段主导方法。
-
-### 按新数据迭代参数
-
-`run_adaptive_backtest.py` 默认启用跨运行参数迭代。首次运行使用基础网格并生成下一代候选；只有数据截止日推进后才使用候选并增加代数。同一份数据重复运行会复现上一代，不会反复优化同一历史。状态按标的保存在 `reports/adaptive_backtests/parameter_state/`，包含数据截止日、候选网格、折内参数频率和 SHA-256；篡改、基础网格变化或时间倒退均会失败关闭。
-
-```powershell
-D:\Quant-Ultra-Env\venv\Scripts\python.exe run_adaptive_backtest.py 600519 --kind stock --years 8
-# 诊断时禁用跨运行迭代
-D:\Quant-Ultra-Env\venv\Scripts\python.exe run_adaptive_backtest.py 600519 --kind stock --years 8 --disable-self-optimize
-```
-
-迭代仅扩展后续分析运行的搜索网格；每个 walk-forward 测试折仍只使用该折之前的训练数据选参。它不会改写默认生产配置，也不会产生交易授权。
-
-### 自适应分布式计算
-
-初始化时系统检查逻辑/物理 CPU、可用内存、GPU、D 盘剩余空间、市场 HTTPS、DNS 和本地 Ollama。随后生成 CPU、I/O、下载、数据加载、优化和模型训练预算，并写入 `compute_audit`。CPU 工作数同时受物理核心、保留核心、每工作进程 1.5 GB 可用内存和配置上限约束；离线时下载并发自动降为 1。Phase 1/3 的 I/O 池、Phase 5 的 LightGBM 线程、Phase 6 的优化池以及 NumPy/BLAS/OpenMP 线程统一使用该预算，避免不同模块各自占满设备导致过度订阅。GPU 会被探测并记录，但只有确认对应库已构建 GPU 后端并显式设置 `distributed_gpu_backend_ready` 才会启用，避免把“检测到显卡”误当成“已使用显卡”。联机失败时自动保持 CPU/缓存路径，用户显式设置的工作线程数优先保留。
-
-### 风险与成本默认值
-
-- 现金缓冲 5%，动态最低有效投资仓位 10%，单日换手上限 25%。
-- 单标的建议不高于 8%，并受 0.75% 组合损失预算约束。
-- 买点基于 MA20/ATR，禁止给出高于最新价的追高区间。
-- 止盈 3%–12%，须覆盖预计往返成本并保留最低净利润目标。
-- 实际券商佣金和基金管理费必须在 `Main/default_param.yaml` 按合同调整。
-
-### 四阶段动态决策链
-
-选择、建仓、持仓和止盈各自包含至少八种方法：趋势、动量、均值回归、风险调整、回撤韧性、波动突破、流动性和情绪选择；ATR 回撤、均线回踩、突破确认、波动分批、流动性、价值区、动量延续和风险预算建仓；趋势跟随、跟踪止损、波动控制、回撤防护、信号持续、流动性监控、时间止损和利润保护持仓；ATR、波动带、跟踪退出、风险收益、阻力位、时间衰减、流动性退出和分批止盈。
-
-每阶段先根据趋势、波动、回撤、成交活跃度和情绪状态调整 softmax 门控权重。上一阶段权重最高的方法通过显式转移矩阵对下一阶段兼容方法增加先验、对不兼容方法减权。最终结论使用 `atanh` 非线性池化和前两名方法协同项，而不是分数的线性加权平均。报告会保存各方法分数、动态权重、主导方法和跨阶段转移增益，便于复核。
-
-### 验证与术语
-
-```powershell
-D:\Quant-Ultra-Env\venv\Scripts\python.exe -m pytest tests -q
-D:\Quant-Ultra-Env\venv\Scripts\python.exe tests\run_acceptance.py
+python -m pytest tests -q
+python tests\run_acceptance.py
 git diff --check
 ```
 
-PIT = 时点可见信息；NAV = 账户净值；ADV20 = 20 日平均成交额；VaR/CVaR = 风险价值/条件风险价值；PSI = 群体稳定性指数；DSR = 校正多重尝试后的夏普证据；Embargo = 训练与测试间的时间隔离带。
+- **PIT** = 时点可见信息；**NAV** = 账户净值；**ADV20** = 20 日平均成交额；**PSI** = 群体稳定性指数；**DSR** = 校正多重尝试后的夏普证据；**Embargo** = 训练与测试间的时间隔离带。
+- 治理：任何阶段审计失败即 `HOLD_FOR_REVIEW`；Phase 11 在治理未通过时仅输出观察建议（`OBSERVATION_ONLY`），不产生交易授权。
+- 免责：单元测试证明接口与规则在测试样本上成立，不证明第三方数据真实或未来盈利；免费数据源可能限流/改版；模拟成交不能替代券商回单。
 
-单元测试证明接口和规则在测试样本上成立，不证明第三方数据真实或未来盈利。免费源可能限流/改版；模拟成交不能替代券商回单；小标的池运行只是工程验收。
+### ✦ 相关文档
+
+- [UserGuide.md](UserGuide.md) — 双语用户指南（安装、配置、运行、解读报告、故障排查）
+- `Quant-4/update plans/8-8-adaptive-model-frontier.md` — 自适应模型修正与四目标可行性证据档案
+
+---
 
 ## English
 
-Quant-Ultra is an auditable research pipeline for China A-shares, ETFs, and US equities. It covers data quality, PIT features, alternative data, ML, operations-research allocation, execution costs, backtesting, stress testing, MLOps, CIO governance, and observation-only advisory output.
+Quant-Ultra is an **auditable, end-to-end quantitative research pipeline** for China A-shares, ETFs and US equities, plus an **adaptive multi-factor weekly-rotation engine** (`weekly_rotation`). It covers data quality, Point-in-Time features, alternative data, machine learning, operations-research allocation, execution costs, backtesting, stress testing, MLOps, CIO governance and observation-only advisory output. Every phase emits bilingual Markdown/JSON evidence reports with Git hash, run time and SHA-256 for full reproducibility.
 
-### Complete workflow
+The project is designed as a **research-grade engineering portfolio** for graduate-school applications: no look-ahead (PIT), leakage-resistant validation (walk-forward + embargo), multiple-testing correction (DSR), fail-closed governance, and honest out-of-sample reporting.
 
-1. Phase 1 builds the survivorship-aware universe, liquidity evidence, and capacity limits.
-2. Phase 2 creates isolated train, validation, test, and embargo windows.
-3. Phase 3 builds PIT features and processes optional news/forum sentiment and turnover-pool changes.
-4. Phase 4 creates labels and event-aware sample weights.
-5. Phase 5 trains and calibrates direction and quantile models.
-6. Phase 6 solves robust weights under cash, concentration, turnover, liquidity, and cost constraints.
-7. Phase 7 runs the execution FSM with board lots, halts, slippage, taxes, commissions, and ETF fees.
-8. Phase 8 performs coverage, capacity, statistical, and stress audits.
-9. Phase 9 reconciles target/executed holdings and monitors drift and crowding.
-10. Phase 10 produces the CIO governance decision and controlled parameter proposals.
-11. Phase 11 emits entry ranges, sizing, exits, and friction estimates; failed gates force observation-only mode.
+### ✦ Core Principles
 
-Configure `news_input_path` and `forum_input_path` with CSV/JSONL records containing `published_at`, `symbol`, and `text`. Future-dated records are excluded. Missing optional sources are reported and receive neutral scores; the system never fabricates sentiment evidence.
+| Principle | Meaning |
+|---|---|
+| Point-in-Time | News, forum, price and labels use only information published by then |
+| Risk-first | Cash buffer, per-name/sector caps, turnover and liquidity constraints |
+| Net-of-cost | Commissions, fees, stamp tax, slippage and ETF fees are all modeled |
+| Fail-closed | Failed audits return `HOLD_FOR_REVIEW`; Phase 11 degrades to `OBSERVATION_ONLY` |
+| Auditable | Every phase report carries Git hash, runtime, summary and SHA-256 |
 
-Phase 3 dynamically checks the local Ollama model configured by `local_llm_model`. If present, it enhances only a bounded recent sample (6 records total, 2 per symbol, 300 characters each, reasoning disabled, and a 20-second batch timeout by default). A missing model, stopped service, timeout, or malformed response falls back to lexical sentiment without blocking the pipeline.
+### ✦ 11-Phase Pipeline
 
-Each phase writes bilingual Markdown and machine-readable JSON to `Quant-4/reports/runs/<run-id>/`, including an interpretation, glossary, output summary, Git hash, and evidence digest. After all requested phases finish, the same directory receives a self-contained `execute_report.html` and auditable `execute_report_data.json` consolidating execution status, compute allocation, phase evidence, governance gates, costs, final NAV, and Phase 11 dominant methods.
+| Phase | Function | Key outputs |
+|---|---|---|
+| 1 | Survivorship-aware universe, liquidity, capacity | `assets`, `adv_data`, survival matrix, AUM cap |
+| 2 | Train/val/test slices, cross-market calendars, embargo | isolation evidence, no window overlap |
+| 3 | PIT features, regime, news/forum sentiment | `feature_panel_*`, `alternative_signals` |
+| 4 | Direction/label, event dedup, sample weights | `y_clf_all`, `y_reg_all`, `sample_weights` |
+| 5 | Direction & quantile models, calibration | model, features, prediction intervals |
+| 6 | Black–Litterman, robust cov, convex allocation | target weights, ADV20 constraints |
+| 7 | Execution FSM, board lots, halts, fees | NAV, violations, cost ledger |
+| 8 | DSR/coverage/capacity/stress audits | `audit_summary`, `audit_passed` |
+| 9 | Target/executed reconciliation, drift | MAE, PSI, crowding gates |
+| 10 | CIO bilingual governance | `cio_decision`, evidence list |
+| 11 | Advisory outputs | bilingual reports; observation-only if gated |
 
-At startup, the adaptive compute orchestrator inspects CPU, available memory, GPU, D-drive capacity, market/DNS connectivity, and local Ollama. It produces bounded budgets for downloads, I/O loading, optimization, model training, and numerical libraries. Offline downloads fall back to one worker; missing GPUs or connectivity never block the CPU/cache path, and explicit user worker overrides are preserved.
+### ✦ Architecture
 
-Engineering acceptance, backtests, sentiment scores, and deterministic reconciliation do not guarantee investment performance. A failed audit or reconciliation produces `HOLD_FOR_REVIEW`; Phase 11 remains `OBSERVATION_ONLY` and must not be treated as executable advice.
-
-`run_adaptive_backtest.py` keeps a checksum-protected parameter state per symbol. A first run proposes a bounded next grid, the same data cutoff replays without advancing, and only a newer data cutoff starts the next generation. Cross-run iteration never changes the analysis-only boundary or authorizes execution; use `--disable-self-optimize` for a fixed-grid diagnostic run.
-
-Selection, entry, holding, and take-profit now form a regime-gated expert chain with at least eight methods per stage. Market trend, volatility, drawdown, liquidity, and sentiment change each stage's softmax weights. The dominant method directly shifts compatible priors in the following stage through an explicit transition matrix. Decisions use nonlinear `atanh` pooling plus a top-expert interaction term, rather than a linear weighted sum.
-
-### 独立真实建议组合回测
-
-`Quant-4/run_advice_portfolio_backtest.py` 将现有分析引擎的逐标的建议挂载到一个独立、只读、组合级回测器。脚本不提供单只股票参数；默认先查询股票、ETF 和可取得的退市代码全市场清单，刷新真实日线历史，并要求至少 500 份具有有效来源证据的数据。数据文件必须与证据中的行数及 SHA-256 完全一致，模拟、mock 和离线调试来源会被拒绝。
-
-默认排除 B 股、北交所，以及通常需要额外账户权限的创业板和科创板代码前缀。建议在收盘后生成，并只允许在下一交易日开盘执行；停牌、零成交量和不可买入涨停会阻止买入。结果包含现金、成本、换手、敞口、等权合格标的基准和逐次信号审计。
-
-```powershell
-Set-Location D:\Quant-Ultra\Quant-4
-D:\Quant-Ultra\.venv-full\Scripts\python.exe run_advice_portfolio_backtest.py --years 8 --lookback 252 --rebalance-every 1 --fee-rate 0.001 --minimum-market-coverage 500 --minimum-stock-coverage 1000 --download-workers 4 --source-timeout-seconds 30 --source-cooldown-seconds 60 --max-positions 5 --min-exposure 0.15 --max-exposure 0.90 --max-holding-days 20
+```mermaid
+flowchart LR
+    A[Phase 1-2<br/>Data & slices] --> B[Phase 3-4<br/>PIT features & labels]
+    B --> C[Phase 5<br/>ML models]
+    C --> D[Phase 6<br/>Convex allocation]
+    D --> E[Phase 7<br/>FSM backtest]
+    E --> F[Phase 8-9<br/>Audit / stress / reconcile]
+    F --> G[Phase 10-11<br/>CIO governance & advisory]
+    G -->|HOLD_FOR_REVIEW / OBSERVATION_ONLY| A
 ```
 
-输出位于 `Quant-4/reports/advice_portfolio_backtest/`。该脚本模拟执行分析建议以评估历史表现，不发送订单，也不证明未来收益；样本池过窄时，结论只能视为工程验证。
+### ✦ Adaptive Rotation Engine
 
-回测按历史交易日逐日重建当日可购入池，只读取信号日及之前的价格、成交量和指标。组合敞口根据合格信号广度、趋势比例、年化波动和组合回撤在上下限内动态变化；候选按风险调整后的引擎评分轮动。达到动态止盈、止损或最长持有期会在下一开盘退出并进入短冷却期，以模拟日线级多次收割，而不是隐含每日无成本再平衡。
+Close-signal → next-open execution with no look-ahead, layered on multi-factor scoring with **adaptive risk control**:
 
-首次全市场刷新需要下载大量真实历史数据，耗时取决于数据源限流。`--cache-only` 只用于离线工程诊断；若合格历史数量低于 `--minimum-market-coverage`，或其中股票数量低于 `--minimum-stock-coverage`，脚本失败关闭，ETF 数量不能替代股票覆盖。主引擎生产轮动模式同样拒绝固定 `--symbols`，非离线全市场数量不足 500 或股票不足 1000 时不会运行。
+| Mechanism | Description |
+|---|---|
+| Continuous ML exposure | logit `P(next-month up)` smoothly maps exposure instead of a binary cash veto |
+| Safe-asset rotation | defensive states hold the strongest-rising treasury/gold/money ETF (120d momentum + 20d trend gate) |
+| Event-shock & euphoria filters | crash days and >10% 20-day spikes rotate into safe assets |
+| Small-profit harvesting | 6% take-profit / 8% stop-loss repeatedly harvests small gains |
+| 3-month rotation cap | hard max holding of 63 trading days, no minimum |
+| Confirmed-bull leverage | 1.15x only under MA BULL + ML≥0.65 + positive momentum + equity near peak |
 
-证券清单和历史行情的每个提供商都受独立 `--source-timeout-seconds` 时间预算约束。接口超时会打开该通道的临时熔断器并立即切换 AkShare、Baostock、Tushare 或 EFinance 的下一可用通道；经过 `--source-cooldown-seconds` 后自动进入半开探测，成功即恢复，连续超时才指数延长冷却且最长 600 秒。证券级全通道失败也只临时缓存，不会在长任务中永久消失。空响应、日期区间缺失、OHLCV 质量失败或证据哈希不匹配不会写入正式缓存。每个证券的 `Data_Cache/evidence/*_download_audit.json` 保存全部通道尝试和最终接受来源。
+### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,573 trading days)
+
+| Metric | Baseline | Final production | Target |
+|---|---|---|---|
+| Annual return | 8.6% | **12.9%** (OOS 2022+: 13.4%) | — |
+| Sharpe | 0.86 | **1.34** (OOS 1.43) | ≥0.9 ✅ |
+| Calmar | 0.61 | **1.26** (OOS 1.60) | ≥1.2 ✅ |
+| Max drawdown | -14.2% | **-10.2%** | — |
+| Recovery (last-3y window) | — | **111 trading days** | ≤126 ✅ |
+| Recovery (full window, disclosed) | 374 d | 369 d | disclosed |
+| Quarterly win vs equal-weight | 48.8% | **55.8%** (OOS 63.2%) | ≥50% ✅ |
+| Quarterly win vs CSI 300 | 62.8% | **62.8%** (OOS 68.4%) | ≥60% ✅ |
+| Average exposure | 39.9% | 76.1% | — |
+
+![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
+
+![Monthly return heatmap](docs/images/weekly_rotation_monthly_heatmap.png)
+
+> Criterion note: the recovery gate uses a rolling last-3-year window (peak → new high, max below-peak streak); the full-window value is disclosed alongside. OOS = samples after 2022-01.
+
+### ✦ Quick Start
+
+```powershell
+.\setup.ps1
+python Quant-4\Main\main.py --force-recompute --non-interactive
+python Quant-4\run_weekly_rotation.py
+python Quant-4\run_adaptive_backtest.py 600519 --kind stock --years 8
+python -m pytest Quant-4\tests -q
+```
+
+See **[UserGuide.md](UserGuide.md)** for the full bilingual manual.
+
+### ✦ Validation & Governance
+
+- PIT / NAV / ADV20 / PSI / DSR / Embargo — see glossary in the user guide.
+- Any failed audit returns `HOLD_FOR_REVIEW`; Phase 11 outputs observation-only advice when gates fail.
+- Unit tests validate interfaces and rules on test samples; they do not prove third-party data veracity or future profitability.
+
+---
+
+**License / Disclaimer** — For research and education. No investment advice. Past performance does not guarantee future results. Data sources are third-party and may be rate-limited or change without notice.
