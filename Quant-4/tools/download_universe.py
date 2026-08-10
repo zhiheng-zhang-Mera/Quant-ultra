@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import msvcrt
 import os
 import sys
 import threading
@@ -206,9 +207,17 @@ def download_one(
 
 def cached_complete(
     cache_dir: Path, symbol: str, start: str, end: str, ipo_date: Optional[pd.Timestamp],
-    tolerance_days: int = 20,
+    tolerance_days: int = 20, lookback_days: int = 400,
 ) -> bool:
-    """True when the cached parquet already covers the requested window."""
+    """True when the cached parquet covers what the backtest actually needs.
+
+    The backtest starts 2016-01-01 and its factors need at most ~250 trading
+    days of lookback, so history from ``start + lookback_days`` onward is
+    sufficient. Several free sources (e.g. Sina's kline endpoint) only return
+    ~12 years of history even for names listed much earlier; requiring the
+    full ``start`` window would make those files permanently 'incomplete' and
+    trigger an endless re-download of identical data.
+    """
     path = cache_dir / f"{symbol}_history.parquet"
     if not path.exists():
         return False
@@ -225,7 +234,8 @@ def cached_complete(
         return False
     if ipo_date is not None and pd.notna(ipo_date) and ipo_date > pd.Timestamp(start):
         return first <= ipo_date + pd.Timedelta(days=tolerance_days)
-    return first <= pd.Timestamp(start) + pd.Timedelta(days=tolerance_days)
+    required_first = pd.Timestamp(start) + pd.Timedelta(days=lookback_days)
+    return first <= required_first
 
 
 def _save(cache_dir: Path, symbol: str, df: pd.DataFrame) -> None:
@@ -242,39 +252,56 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 class _DownloadLock:
-    """Single-instance guard so repeated launches never duplicate the job."""
+    """Single-instance guard so repeated launches never duplicate the job.
+
+    Uses an atomic Windows byte-range lock (msvcrt) instead of a pid file, so
+    the launcher/interpreter pair race cannot let two instances run at once."""
 
     def __init__(self, cache_dir: Path):
         self.path = cache_dir / "universe" / "download.lock"
+        self._fh = None
 
     def acquire(self) -> bool:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
+            self._fh = open(self.path, "a+")
+            msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+            self._fh.seek(0)
+            self._fh.truncate()
+            self._fh.write(str(os.getpid()))
+            self._fh.flush()
             return True
-        except FileExistsError:
-            try:
-                pid = int(self.path.read_text().strip())
-                psutil_alive = __import__("psutil").pid_exists(pid)
-            except Exception:
-                psutil_alive = False
-            if not psutil_alive:
-                self.path.unlink(missing_ok=True)
-                return self.acquire()
+        except OSError:
+            if self._fh is not None:
+                try:
+                    self._fh.close()
+                except OSError:
+                    pass
             return False
 
     def owns(self) -> bool:
-        """True while this process still owns the lock (another process may
-        have stolen it via a launch race; the loser must stop downloading)."""
+        """True while this process still owns the lock."""
         try:
             return self.path.exists() and self.path.read_text().strip() == str(os.getpid())
         except Exception:
             return False
 
     def release(self) -> None:
-        self.path.unlink(missing_ok=True)
+        if self._fh is not None:
+            try:
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -326,10 +353,12 @@ def _run_main(args, lock) -> int:
     out_dates_map = {s: (out_dates.get(s) or pd.Timestamp(args.end)) for s in targets}
     for symbol in targets:
         symbol_end = out_dates_map[symbol].strftime("%Y-%m-%d")
+        tolerance = 200 if out_dates.get(symbol) is not None else 20
         if cached_complete(
             args.cache_dir, symbol, args.start, symbol_end,
             master.loc[master["symbol"] == symbol, "ipo_date"].iloc[0]
             if (master["symbol"] == symbol).any() else None,
+            tolerance_days=tolerance,
         ):
             skipped += 1
             continue

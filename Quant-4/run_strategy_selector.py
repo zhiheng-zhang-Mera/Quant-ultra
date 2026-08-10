@@ -20,7 +20,15 @@ import pandas as pd
 
 from Main.strategy_selector import STRATEGY_ARCHETYPES
 from Main.weekly_rotation import weekly_rotation_backtest
-from run_weekly_rotation import DATA_CACHE, PRODUCTION_UNIVERSE, default_params, load_frames, load_pit_dividends
+from run_weekly_rotation import (
+    DATA_CACHE,
+    PRODUCTION_UNIVERSE,
+    build_pit_universe,
+    default_params,
+    load_cached_dividends,
+    load_frames,
+    load_pit_dividends,
+)
 
 
 def _oos(rets: pd.DataFrame) -> Dict[str, float]:
@@ -36,17 +44,30 @@ def _oos(rets: pd.DataFrame) -> Dict[str, float]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--capital", type=float, default=100_000.0)
+    parser.add_argument("--pit", action="store_true", help="run on the survivorship-free PIT universe (current cache coverage)")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "reports" / "strategy_selector")
     args = parser.parse_args()
 
-    frames = load_frames(DATA_CACHE, sorted(set(PRODUCTION_UNIVERSE)))
-    div_cash = load_pit_dividends(sorted(set(PRODUCTION_UNIVERSE)))
+    alive_mask = None
+    benchmark_exclude = None
+    if args.pit:
+        pit = build_pit_universe(DATA_CACHE)
+        frames = pit["frames"]
+        alive_mask = pit["alive_mask"]
+        from Main.pit_universe import ETF_UNIVERSE
+        benchmark_exclude = tuple(ETF_UNIVERSE)
+    else:
+        frames = load_frames(DATA_CACHE, sorted(set(PRODUCTION_UNIVERSE)))
+    div_cash = load_cached_dividends(sorted(frames)) if args.pit else load_pit_dividends(sorted(set(PRODUCTION_UNIVERSE)))
     rows: list[dict] = []
 
     for name in ["balanced", *sorted(k for k in STRATEGY_ARCHETYPES if k != "balanced")]:
         p = default_params()
         p.dividend_cash = div_cash
         p.capital_base = args.capital
+        p.alive_mask = alive_mask
+        if benchmark_exclude:
+            p.benchmark_exclude = benchmark_exclude
         if name != "balanced":
             from Main.strategy_selector import build_archetype_params
             p = build_archetype_params(p, name)
@@ -69,6 +90,9 @@ def main() -> int:
     p = default_params()
     p.dividend_cash = div_cash
     p.capital_base = args.capital
+    p.alive_mask = alive_mask
+    if benchmark_exclude:
+        p.benchmark_exclude = benchmark_exclude
     p.strategy_selector = "hysteresis"
     result = weekly_rotation_backtest(frames, p, regime_detector_kwargs={"bull_threshold": 0.55})
     s, rets = result["summary"], result["returns"]

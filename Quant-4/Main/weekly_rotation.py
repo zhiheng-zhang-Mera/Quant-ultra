@@ -171,8 +171,13 @@ def composite_factor_scores(
     if 60 in panel.momentum:
         factors["mom60"] = panel.momentum[60].loc[date]
     close_row = panel.close.loc[date]
-    ma20 = panel.close.rolling(20).mean().loc[date]
-    ma60 = panel.close.rolling(60).mean().loc[date]
+    if panel.ma20 is not None and panel.ma60 is not None and date in panel.ma20.index:
+        ma20 = panel.ma20.loc[date]
+        ma60 = panel.ma60.loc[date]
+    else:
+        # fallback for hand-built panels in tests (or pre-optimization panels)
+        ma20 = panel.close.rolling(20).mean().loc[date]
+        ma60 = panel.close.rolling(60).mean().loc[date]
     factors["trend"] = (close_row / ma20 - 1.0) + 0.5 * (ma20 / ma60 - 1.0)
     if 1 in panel.momentum:
         factors["rev1"] = -panel.momentum[1].loc[date]
@@ -248,6 +253,8 @@ class FeaturePanel:
     bench_ma_slow: pd.Series
     bench_ma_confirmation: pd.Series
     bench_ma_trend: pd.Series
+    ma20: Optional[pd.DataFrame] = None     # close.rolling(20).mean(), precomputed
+    ma60: Optional[pd.DataFrame] = None     # close.rolling(60).mean(), precomputed
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -277,6 +284,8 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     vol_base = volume.rolling(params.volume_confirm_base, min_periods=1).mean()
     volume_ratio = vol_short / vol_base.replace(0, np.nan)
     adv20 = amount.rolling(20, min_periods=5).mean()
+    ma20_panel = close.rolling(20).mean()
+    ma60_panel = close.rolling(60).mean()
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
         # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
@@ -305,7 +314,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
