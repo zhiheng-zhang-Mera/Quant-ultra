@@ -132,7 +132,7 @@ D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_adaptive_backtest.py 60
 | `euphoria_threshold` | 0.10 | 亢奋过滤（20日涨幅） |
 | `max_holding_days` | 63 | 3 个月持有上限 |
 | `enable_intraweek_stops` / `stop_loss_pct` / `take_profit_pct` | True / 0.08 / 0.06 | 小额收割 |
-| `confirm_leverage` / `confirm_ml_prob` | 1.15 / 0.65 | 确认牛市小杠杆 |
+| `confirm_leverage` / `max_gross_exposure` | 1.0 / 1.0 | 杠杆端到端禁用（个人资金不负债） |
 | `vol_target` / `vol_scale_floor` | 0.20 / 0.90 | 高地板波动率目标 |
 | `max_annual_vol` / `per_position_cap` | 0.40 / 0.30 | 波动率过滤/单票上限 |
 
@@ -153,7 +153,7 @@ D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_adaptive_backtest.py 60
 ### 9. FAQ
 
 - **为什么防御状态不再空仓？** 修正前约 52% 时间空仓错过反弹；现在防御状态持有避险资产，让净值在长熊中持续增长。
-- **1.15x 杠杆安全吗？** 仅“100% 确认牛市”（MA BULL + ML≥0.65 + 20日动量为正 + 净值贴近峰值 + 无风险锁定）时触发，其余时间只用自盘资金。
+- **为什么没有杠杆？** 按个人小资金原则杠杆端到端禁用（`confirm_leverage=1.0`、`max_gross_exposure=1.0`），只用自盘资金、无做空、无负债风险。
 - **回撤修复期为什么有两个值？** 门槛采用近 3 年滚动窗口口径；全窗口口径受 2018 与 2021-2023 两段市场性长熊影响，如实披露。
 - **可以用于实盘吗？** 不能。本项目为研究与工程验证，模拟成交不能替代券商回单，免费数据源可能限流/改版。
 
@@ -226,7 +226,7 @@ Search-grid iteration advances only when the data cutoff moves forward; every wa
 
 `Quant-4/Main/default_param.yaml` — pipeline-wide costs, slippage, cash buffer, turnover cap, concentration cap, embargo, optional local-LLM sentiment limits.
 
-`run_weekly_rotation.py::default_params` — regime MAs (40/10/200), logit regime detector, continuous ML exposure (floor 0.30 / low 0.40 / high 0.60), safe-asset pool (4 ETFs), defensive hold (exposure 1.0, safe share 0.65), event shock (0.025 / 0.70), euphoria filter (0.10), 63-day max hold, 6% TP / 8% SL harvesting, 1.15x confirmed-bull leverage, vol target 0.20/floor 0.90, vol cap 0.40, position cap 0.30.
+`run_weekly_rotation.py::default_params` — regime MAs (40/10/200), logit regime detector, continuous ML exposure (floor 0.30 / low 0.40 / high 0.60), safe-asset pool (4 ETFs), defensive hold (exposure 1.0, safe share 0.65), event shock (0.025 / 0.70), euphoria filter (0.10), 63-day max hold, 6% TP / 8% SL harvesting, no leverage (confirm_leverage=1.0, max_gross_exposure=1.0), vol target 0.20/floor 0.90, vol cap 0.40, position cap 0.30.
 
 ### 7. Reading the Gate Scorecard
 
@@ -245,7 +245,7 @@ The report's gate scorecard checks the four user-defined targets (Sharpe ≥0.9,
 ### 9. FAQ
 
 - **Why no more cash in defensive states?** The old model sat in cash ~52% of days; defensive states now hold safe assets so the equity keeps compounding through equity bears.
-- **Is 1.15x leverage safe?** It triggers only under a 100%-confirmed bull state; otherwise the strategy uses own capital only.
+- **Why no leverage?** Per the small-personal-capital principle, leverage is disabled end-to-end (`confirm_leverage=1.0`, `max_gross_exposure=1.0`): own capital only, no shorting, no debt risk.
 - **Why two recovery values?** The gate uses a rolling last-3-year window; the full-window value (affected by the 2018 and 2021-2023 market cycles) is disclosed.
 - **Can this trade live?** No. This is a research/engineering system; simulated fills are not broker confirmations and free data sources may be rate-limited.
 

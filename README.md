@@ -62,7 +62,7 @@ flowchart TD
     S[复合因子打分<br/>动量/趋势/反转/低波/股息] --> R[市场状态检测<br/>MA40/MA10 + ML logit]
     R --> E{防御状态?}
     E -->|熊市/风险关闭/亢奋| H[避险资产轮动<br/>国债/黄金/货币 4选1]
-    E -->|牛市| B[满仓强势标的<br/>确认牛市1.15x小杠杆]
+    E -->|牛市| B[满仓强势标的<br/>全程无杠杆]
     H --> X[周内6%止盈/8%止损<br/>3个月持有上限]
     B --> X
     X --> P[收盘信号 → 次日开盘执行]
@@ -77,27 +77,35 @@ flowchart TD
 | 事件冲击 + 亢奋过滤 | 单日暴跌与 20 日暴涨极端区自动转入安全资产 |
 | 小额收割 | 6% 止盈 / 8% 止损多次收割小利润，控制回撤深度 |
 | 3 个月持有上限 | 强制轮出，不设最短持有 |
-| 确认牛市小杠杆 | 仅 MA BULL + ML≥0.65 + 动量为正 + 净值贴近峰值时启用 1.15x |
+| 杠杆 | 全程禁用（个人资金不负债）：`confirm_leverage=1.0`、`max_gross_exposure=1.0`，无做空 |
 
-### ✦ 回测表现（2016-01 ~ 2026-08，2573 交易日）
+### ✦ 回测表现（2016-01 ~ 2026-08，2573 交易日，诚实口径：10 万元本金）
 
-| 指标 | 修正前基线 | 最终生产配置 | 目标 |
-|---|---|---|---|
-| 年化收益 | 8.6% | **12.9%**（OOS 2022+：13.4%） | — |
-| 夏普比率 | 0.86 | **1.34**（OOS 1.43） | ≥0.9 ✅ |
-| 卡玛比率 | 0.61 | **1.26**（OOS 1.60） | ≥1.2 ✅ |
-| 最大回撤 | -14.2% | **-10.2%** | — |
-| 回撤修复期（近3年窗口） | — | **111 交易日** | ≤126 ✅ |
-| 回撤修复期（全窗口，披露） | 374 日 | 369 日 | 披露 |
-| 季度超等权基准胜率 | 48.8% | **55.8%**（OOS 63.2%） | ≥50% ✅ |
-| 季度超沪深300胜率 | 62.8% | **62.8%**（OOS 68.4%） | ≥60% ✅ |
-| 平均敞口 | 39.9% | 76.1% | — |
+| 指标 | 诚实回测（PIT股息+显式费用+整手+无杠杆） | 目标 / 对照 |
+|---|---|---|
+| 年化收益 | **9.22%**（OOS 2022+：13.14%） | 沪深300(510300) 5.33% |
+| 夏普比率 | **1.31**（OOS 1.57） | ≥0.9 ✅ |
+| 卡玛比率 | **1.24**（OOS 1.76） | ≥1.2 ✅ |
+| 最大回撤 | **-7.46%** | 沪深300 -44.75% |
+| 回撤修复期（近3年窗口） | **114 交易日** | ≤126 ✅ |
+| 回撤修复期（全窗口，披露） | 203 日 | 披露 |
+| 季度超沪深300胜率 | 58.1% | ≥60% ❌ 未达 |
+| 季度超等权基准胜率 | 46.5%（等权池不可直接投资） | ≥50% ❌ 未达 |
+| 单次调仓换手率 | 29.8% | <30%~50% ✅ |
+| 杠杆 | 0.00x（禁用） | ✅ |
+| 平均总仓位 | 66.1% | — |
 
 ![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
 
 ![月度收益热力图](docs/images/weekly_rotation_monthly_heatmap.png)
 
 > 口径说明：回撤修复期采用“最近 3 年窗口内峰值→新高最大回撤天数”（滚动监测口径，用户授权定义）；全窗口口径同时披露。OOS 定义为 2022-01 之后的样本。
+
+### ✦ 策略决策层与开源对比（2026-08-10 证据门控）
+
+- 引擎已拆解并插入可选**策略决策层**（`Quant-4/Main/strategy_selector.py`：balanced / momentum / defensive / safe 四个原型 + 滞回切换），用样本外证据门控：选择器 OOS 夏普 1.40 低于最优固定原型 defensive 1.72，**生产默认保持禁用**（`strategy_selector=""`），避免“为自适应而自适应”的过拟合。
+- safe 原型为候选胜者：全窗口年化 10.56% / 夏普 1.48，OOS 年化 14.98% / 夏普 1.67（样本外仅一段市场，转正前需更长验证）。
+- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.94**、OOS **0.98**（≥0.70 = 前 30%）。
 
 ### ✦ 快速开始
 
@@ -140,6 +148,7 @@ Quant-Ultra/
 │   ├── Phase_1 … Phase_11/    # 十一阶段模块
 │   ├── run_weekly_rotation.py # 自适应周轮动回测入口
 │   ├── run_adaptive_backtest.py
+│   ├── benchmark/             # 开源非高频策略对比与综合排名
 │   ├── tests/                 # 单元与验收测试
 │   └── reports/               # 运行报告、CIO 决策、周轮动报告（gitignore）
 ├── docs/images/               # 文档配图（受版本控制）
@@ -163,6 +172,8 @@ git diff --check
 
 - [UserGuide.md](UserGuide.md) — 双语用户指南（安装、配置、运行、解读报告、故障排查）
 - `Quant-4/update plans/8-8-adaptive-model-frontier.md` — 自适应模型修正与四目标可行性证据档案
+- `Quant-4/update plans/8-9-update-plan.md` — 投产前迭代计划与诚实化减法记录
+- `Quant-4/benchmark/open_source_comparison.py` — 开源对比排名脚本（排名见其生成的 JSON）
 
 ---
 
@@ -222,27 +233,35 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 | Event-shock & euphoria filters | crash days and >10% 20-day spikes rotate into safe assets |
 | Small-profit harvesting | 6% take-profit / 8% stop-loss repeatedly harvests small gains |
 | 3-month rotation cap | hard max holding of 63 trading days, no minimum |
-| Confirmed-bull leverage | 1.15x only under MA BULL + ML≥0.65 + positive momentum + equity near peak |
+| Leverage | disabled end-to-end (personal capital, no debt): `confirm_leverage=1.0`, `max_gross_exposure=1.0`, no shorting |
 
-### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,573 trading days)
+### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,573 trading days, honest setup: 100k CNY)
 
-| Metric | Baseline | Final production | Target |
-|---|---|---|---|
-| Annual return | 8.6% | **12.9%** (OOS 2022+: 13.4%) | — |
-| Sharpe | 0.86 | **1.34** (OOS 1.43) | ≥0.9 ✅ |
-| Calmar | 0.61 | **1.26** (OOS 1.60) | ≥1.2 ✅ |
-| Max drawdown | -14.2% | **-10.2%** | — |
-| Recovery (last-3y window) | — | **111 trading days** | ≤126 ✅ |
-| Recovery (full window, disclosed) | 374 d | 369 d | disclosed |
-| Quarterly win vs equal-weight | 48.8% | **55.8%** (OOS 63.2%) | ≥50% ✅ |
-| Quarterly win vs CSI 300 | 62.8% | **62.8%** (OOS 68.4%) | ≥60% ✅ |
-| Average exposure | 39.9% | 76.1% | — |
+| Metric | Honest backtest (PIT div + explicit fees + board lots + no leverage) | Target / benchmark |
+|---|---|---|
+| Annual return | **9.22%** (OOS 2022+: 13.14%) | CSI300 (510300) 5.33% |
+| Sharpe | **1.31** (OOS 1.57) | ≥0.9 ✅ |
+| Calmar | **1.24** (OOS 1.76) | ≥1.2 ✅ |
+| Max drawdown | **-7.46%** | CSI300 -44.75% |
+| Recovery (last-3y window) | **114 trading days** | ≤126 ✅ |
+| Recovery (full window, disclosed) | 203 d | disclosed |
+| Quarterly win vs CSI 300 | 58.1% | ≥60% ❌ not met |
+| Quarterly win vs equal-weight | 46.5% (pool not directly investable) | ≥50% ❌ not met |
+| Turnover per rebalance | 29.8% | <30%~50% ✅ |
+| Leverage | 0.00x (disabled) | ✅ |
+| Average gross exposure | 66.1% | — |
 
 ![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
 
 ![Monthly return heatmap](docs/images/weekly_rotation_monthly_heatmap.png)
 
 > Criterion note: the recovery gate uses a rolling last-3-year window (peak → new high, max below-peak streak); the full-window value is disclosed alongside. OOS = samples after 2022-01.
+
+### ✦ Strategy-Selection Layer & Open-Source Ranking (2026-08-10, evidence-gated)
+
+- The engine is decomposed with an optional **strategy-selection layer** (`Quant-4/Main/strategy_selector.py`: balanced / momentum / defensive / safe archetypes + hysteresis), gated on out-of-sample evidence: the selector's OOS Sharpe 1.40 is below the best fixed archetype (defensive 1.72), so **production keeps it disabled** (`strategy_selector=""`) to avoid overfitting for adaptation's sake.
+- The `safe` archetype is the strongest candidate: 10.56% annual / Sharpe 1.48 full-window, 14.98% / 1.67 OOS (needs longer OOS validation before promotion).
+- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.94** full-window / **0.98** OOS (≥0.70 = top 30%).
 
 ### ✦ Quick Start
 

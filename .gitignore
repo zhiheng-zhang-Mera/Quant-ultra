@@ -47,6 +47,7 @@ Quant-4/Phase Result/
 Quant-4/logs/
 Quant-4/reports/
 Quant-4/.tmp/
+Quant-4/benchmark/*.json
 
 # --- Cython generated C ---
 Quant-4/cython/*.c
