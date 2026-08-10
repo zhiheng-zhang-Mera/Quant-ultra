@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from Main.weekly_rotation import RotationParams, build_reports, weekly_rotation_backtest
@@ -141,26 +142,90 @@ def load_pit_dividends(symbols: list[str]) -> Optional[pd.DataFrame]:
         return None
 
 
+def load_cached_dividends(symbols: list[str]) -> Optional[pd.DataFrame]:
+    """Cached-only PIT dividends (never triggers a network fetch)."""
+    from Main.pit_dividends import load_dividend_cash
+
+    return load_dividend_cash(DATA_CACHE / "dividends", symbols)
+
+
+def build_pit_universe(cache_dir: Path) -> dict:
+    """Load the survivorship-free PIT universe: ever-alive A-shares + ETFs."""
+    from Main.pit_universe import (
+        ETF_UNIVERSE,
+        alive_matrix,
+        ever_alive_stocks,
+        load_master_list,
+    )
+
+    master = load_master_list(cache_dir)
+    end = (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    stocks = ever_alive_stocks(master, "2016-01-01", end)
+    expected = stocks + list(ETF_UNIVERSE)
+    frames = load_frames(cache_dir, expected)
+    if not frames:
+        raise RuntimeError("PIT universe: no cached frames available; run tools/download_universe.py first")
+    dates = pd.DatetimeIndex(
+        np.unique(np.concatenate([f.index.values for f in frames.values()]))
+    )
+    alive = alive_matrix(master, dates, stocks)
+    alive = alive.reindex(columns=expected)
+    for etf in ETF_UNIVERSE:
+        alive[etf] = True
+    return {"master": master, "frames": frames, "alive_mask": alive, "expected": expected}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Quant-4 weekly-rotation backtest")
     parser.add_argument("--start", default="2016-01-01")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "reports" / "weekly_rotation")
     parser.add_argument("--universe", nargs="*", default=None)
+    parser.add_argument("--pit", action="store_true", help="survivorship-free PIT universe (ever-alive A-shares + ETFs)")
     parser.add_argument("--signal-mode", choices=["rule", "composite"], default="composite")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
-    frames = load_frames(DATA_CACHE, universe)
+    alive_mask = None
+    benchmark_exclude = None
+    pit_coverage = None
+    if args.pit:
+        pit = build_pit_universe(DATA_CACHE)
+        universe = pit["expected"]
+        frames = pit["frames"]
+        alive_mask = pit["alive_mask"]
+        # Pure-equity PIT benchmark: all ETFs (including safe assets) are
+        # excluded from the equal-weight benchmark; regime/selection still see
+        # them as tradeable assets.
+        from Main.pit_universe import ETF_UNIVERSE as _ETFS
+        benchmark_exclude = list(_ETFS)
+    else:
+        frames = load_frames(DATA_CACHE, universe)
     if len(frames) < 10:
         print(f"ERROR: only {len(frames)} symbols available in {DATA_CACHE}", file=sys.stderr)
         return 1
     params = default_params()
     params.start_date = args.start
     params.signal_mode = args.signal_mode
-    params.dividend_cash = load_pit_dividends(universe)
+    params.alive_mask = alive_mask
+    if benchmark_exclude:
+        params.benchmark_exclude = tuple(benchmark_exclude)
+    if args.pit:
+        params.dividend_cash = load_cached_dividends(list(frames))
+        if params.dividend_cash is None or params.dividend_cash.empty:
+            print("WARNING: no cached PIT dividends for the PIT universe; running without dividend factor")
+    else:
+        params.dividend_cash = load_pit_dividends(universe)
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)
+    if args.pit:
+        from Main.pit_universe import universe_coverage
+        pit_coverage = universe_coverage(frames, pit["master"], "2016-01-01", str(summary.get("end")))
+        (args.output_dir / "universe_coverage.json").write_text(
+            json.dumps(pit_coverage, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print("\nPIT universe coverage:")
+        print(json.dumps(pit_coverage, ensure_ascii=False, indent=2))
     print(json.dumps({k: summary[k] for k in ["observations", "start", "end", "annual_return", "monthly_avg_return", "annual_volatility", "sharpe", "calmar", "max_drawdown", "max_drawdown_recovery_days", "monthly_win_vs_index", "quarterly_win_vs_index", "monthly_win_vs_benchmark", "quarterly_win_vs_benchmark", "avg_rebalance_turnover", "operation_win_rate", "position_win_rate", "closed_trades_count", "final_equity", "average_exposure"]}, ensure_ascii=False, indent=2))
     print("\n牛熊市建议:")
     for regime in ("BULL", "NEUTRAL", "BEAR"):

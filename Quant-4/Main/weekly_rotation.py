@@ -122,6 +122,8 @@ class RotationParams:
     capital_base: float = 100_000.0          # CNY account size used to model min commission & board lots
     enable_board_lots: bool = True           # round orders to 100-share (200 for STAR) lots
     slippage_rate: float = 0.0002            # per-side slippage fraction on traded notional
+    # ---- survivorship-free universe membership (PIT) ----
+    alive_mask: Optional[pd.DataFrame] = None  # bool (date x symbol): alive on date; None disables
     # ---- optional strategy-selection layer (evidence-gated, default off) ----
     strategy_selector: str = ""              # "" = disabled; "hysteresis" enables the rule-based switcher
     selector_min_stay: int = 4               # consecutive rebalances required before switching archetype
@@ -319,6 +321,14 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
     trend_row = panel.trend.loc[date]
     adv_row = panel.adv20.loc[date]
     valid = row.notna() & vol_row.notna() & trend_row & (row > params.min_price) & (vol_row <= params.max_annual_vol) & (adv_row >= params.min_adv)
+    if params.alive_mask is not None and len(params.alive_mask):
+        # Point-in-time membership: a symbol is only a candidate on dates where
+        # it was actually listed (survivorship-free universe enforcement).
+        if date in params.alive_mask.index:
+            alive_row = params.alive_mask.loc[date].reindex(panel.symbols).fillna(False).astype(bool)
+        else:
+            alive_row = pd.Series(False, index=panel.symbols)
+        valid = valid & alive_row
     if params.max_short_term_gain is not None and 5 in panel.momentum:
         mom5 = panel.momentum[5].loc[date]
         valid = valid & (mom5 <= params.max_short_term_gain)
@@ -614,6 +624,7 @@ def weekly_rotation_backtest(
     close_matrix = pd.DataFrame({sym: frames[sym]["close"].reindex(common) for sym in symbols})
     volume_matrix = pd.DataFrame({sym: frames[sym]["volume"].reindex(common) for sym in symbols})
     prev_close_matrix = close_matrix.shift(1)
+    last_close_matrix = close_matrix.ffill()
     returns_matrix = open_matrix.shift(-1) / open_matrix - 1.0
     panel = precompute_panels(frames, params)
     recovery_win = max(3, int(params.event_shock_recovery_ma))
@@ -663,15 +674,38 @@ def weekly_rotation_backtest(
 
         if pending is not None and pending["execution_date"] == date:
             desired = pending["target"]
+            alive_row = pd.Series(True, index=symbols)
+            if params.alive_mask is not None and len(params.alive_mask):
+                if date in params.alive_mask.index:
+                    alive_row = params.alive_mask.loc[date].reindex(symbols).fillna(False).astype(bool)
+                else:
+                    alive_row = pd.Series(False, index=symbols)
+            # Terminal names (delisted/absorbed per the PIT master list) are
+            # force-sold at their last available close with sell fees, so a
+            # survivorship-free universe cannot leave zombie holdings behind.
+            dead_exits: Dict[str, float] = {}
+            eff_open: Dict[str, float] = {}
+            for symbol in symbols:
+                if weights[symbol] > 1e-9 and not bool(alive_row[symbol]):
+                    last_close = last_close_matrix.at[date, symbol]
+                    if pd.notna(last_close) and last_close > 0:
+                        dead_exits[symbol] = float(last_close)
             for symbol in symbols:
                 prev_close = float(prev_close_matrix.at[date, symbol]) if pd.notna(prev_close_matrix.at[date, symbol]) else np.nan
                 exec_open = float(open_matrix.at[date, symbol]) if pd.notna(open_matrix.at[date, symbol]) else np.nan
                 exec_volume = float(volume_matrix.at[date, symbol]) if pd.notna(volume_matrix.at[date, symbol]) else 0.0
-                if exec_volume <= 0 or prev_close <= 0 or exec_open <= 0:
+                eff_open[symbol] = exec_open if np.isfinite(exec_open) else np.nan
+                if symbol in dead_exits:
+                    exec_open = dead_exits[symbol]
+                    eff_open[symbol] = exec_open
+                    desired[symbol] = 0.0
+                elif exec_volume <= 0 or prev_close <= 0 or exec_open <= 0:
                     desired[symbol] = weights[symbol]
                     continue
                 gap = exec_open / prev_close - 1
                 old_w, new_w = weights[symbol], desired[symbol]
+                if symbol in dead_exits:
+                    continue  # forced exit is never blocked by limit rules
                 if new_w > old_w and gap >= 0.098:      # limit-up block on buys
                     desired[symbol] = old_w
                 elif new_w < old_w and gap <= -0.098:   # limit-down block on sells
@@ -689,10 +723,12 @@ def weekly_rotation_backtest(
                     delta = desired[symbol] - weights[symbol]
                     if abs(delta) < 1e-9 or desired[symbol] <= 1e-9:
                         continue
-                    exec_open = float(open_matrix.at[date, symbol]) if pd.notna(open_matrix.at[date, symbol]) else np.nan
+                    exec_open = eff_open.get(symbol, np.nan)
                     if not np.isfinite(exec_open) or exec_open <= 0:
                         desired[symbol] = weights[symbol]
                         continue
+                    if symbol in dead_exits:
+                        continue  # full exit of a terminal name keeps no lots
                     lot = 200 if symbol.startswith("688") else 100
                     if delta > 0:
                         lots = int(abs(delta) * account_value // (exec_open * lot))
@@ -723,12 +759,13 @@ def weekly_rotation_backtest(
                 cost = turnover * params.fee_rate
             # track entry prices for newly opened positions
             for symbol in symbols:
-                if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and pd.notna(open_matrix.at[date, symbol]):
-                    entry_prices[symbol] = float(open_matrix.at[date, symbol])
+                exec_open = eff_open.get(symbol, np.nan)
+                if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and np.isfinite(exec_open):
+                    entry_prices[symbol] = float(exec_open)
                     holding_days[symbol] = 0
                 elif desired[symbol] <= 1e-9:
-                    if weights[symbol] > 1e-9 and entry_prices[symbol] > 0 and pd.notna(open_matrix.at[date, symbol]):
-                        exit_price = float(open_matrix.at[date, symbol])
+                    if weights[symbol] > 1e-9 and entry_prices[symbol] > 0 and np.isfinite(exec_open):
+                        exit_price = float(exec_open)
                         closed_trades.append({"symbol": symbol, "entry": entry_prices[symbol], "exit": exit_price, "pnl": exit_price / entry_prices[symbol] - 1.0, "exit_date": date})
                     entry_prices[symbol] = 0.0
                     holding_days[symbol] = 0
@@ -778,6 +815,10 @@ def weekly_rotation_backtest(
         leverage_drag = max(0.0, sum(weights.values()) - 1.0) * params.leverage_annual_cost / 252.0
         strategy_return -= leverage_drag
         eligible = [symbol for symbol in symbols if symbol not in params.benchmark_exclude and pd.notna(ret_row[symbol])]
+        if params.alive_mask is not None and len(params.alive_mask):
+            if date in params.alive_mask.index:
+                alive_bench = params.alive_mask.loc[date].reindex(symbols).fillna(False).astype(bool)
+                eligible = [s for s in eligible if bool(alive_bench[s])]
         benchmark_return = float(np.mean([asset_returns[s] for s in eligible])) if eligible else 0.0
         rows.append({
             "date": date, "strategy_return": strategy_return, "benchmark_return": benchmark_return,
