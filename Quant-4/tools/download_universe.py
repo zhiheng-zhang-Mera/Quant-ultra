@@ -231,7 +231,7 @@ def cached_complete(
 def _save(cache_dir: Path, symbol: str, df: pd.DataFrame) -> None:
     path = cache_dir / f"{symbol}_history.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp.parquet")
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.parquet")
     df.to_parquet(tmp, index=False)
     tmp.replace(path)
 
@@ -263,6 +263,14 @@ class _DownloadLock:
             if not psutil_alive:
                 self.path.unlink(missing_ok=True)
                 return self.acquire()
+            return False
+
+    def owns(self) -> bool:
+        """True while this process still owns the lock (another process may
+        have stolen it via a launch race; the loser must stop downloading)."""
+        try:
+            return self.path.exists() and self.path.read_text().strip() == str(os.getpid())
+        except Exception:
             return False
 
     def release(self) -> None:

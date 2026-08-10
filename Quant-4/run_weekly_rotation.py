@@ -217,10 +217,12 @@ def main() -> int:
         params.dividend_cash = load_pit_dividends(universe)
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
-    paths = build_reports(result, args.output_dir)
     if args.pit:
         from Main.pit_universe import universe_coverage
         pit_coverage = universe_coverage(frames, pit["master"], "2016-01-01", str(summary.get("end")))
+        result["universe_coverage"] = pit_coverage
+    paths = build_reports(result, args.output_dir)
+    if args.pit:
         (args.output_dir / "universe_coverage.json").write_text(
             json.dumps(pit_coverage, ensure_ascii=False, indent=2), encoding="utf-8"
         )

@@ -1262,6 +1262,18 @@ def build_reports(result: dict, output_dir) -> dict:
     advice_lines.append(f"- 季度超等权基准胜率: {summary.get('quarterly_win_vs_benchmark', 0):.1%} (目标 ≥50%)")
     advice_lines.append(f"- 单次调仓换手率: {summary.get('avg_rebalance_turnover', 0):.1%} (目标 <30%~50%) | 杠杆: 禁用")
     advice_lines.append(f"- 操作胜率(有仓位周): {summary.get('operation_win_rate', 0):.1%} | 持仓胜率: {summary.get('position_win_rate', 0):.1%} | 平仓次数: {summary.get('closed_trades_count', 0)}")
+    cov = result.get("universe_coverage")
+    if cov:
+        advice_lines += [
+            "",
+            "## 股票池与幸存者偏差披露 / Universe & Survivorship Disclosure",
+            "",
+            f"- 池定义: 全 A 股曾上市(PIT, baostock 主列表) + {cov.get('expected_etfs', 0)} 只审计 ETF; 成员资格按 ipo/out 日期逐日判定, 退市股在退市前仍为候选, 退市当日按最后收盘价强制平仓。",
+            f"- 覆盖率: {cov.get('covered_total', 0)}/{cov.get('expected_total', 0)} = {cov.get('coverage_ratio', 0):.1%} (目标 ≥95%); "
+            f"退市股 {cov.get('delisted_covered', 0)}/{cov.get('delisted_expected', 0)} = {cov.get('delisted_coverage_ratio', 0):.1%} (目标 ≥90%)。",
+            "- 残余偏差: 覆盖率未达 100% 前, 未覆盖标的以“不可选”处理, 结果含数据缺口偏差; 退市结算以最后收盘价近似(非退市结算价); BSE(4/8/92 开头)排除在外。",
+            "",
+        ]
     advice_lines += ["", "## 牛熊市分段表现 / Regime Breakdown", "", "| 市场状态 | 交易日 | 累计收益 |", "|---|---|---|"]
     for regime in ("BULL", "NEUTRAL", "BEAR"):
         info = summary["regime_breakdown"].get(regime)
