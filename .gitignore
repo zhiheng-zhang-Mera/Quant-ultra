@@ -25,6 +25,7 @@ venv/
 
 # --- pytest / IDE-local ---
 .pytest_cache/
+pytest_tmp*/
 .coverage
 htmlcov/
 .idea/

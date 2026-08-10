@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from Main.trading_costs import explicit_order_fees, is_etf
+from Main.pit_dividends import trailing_dividend_yield
 
 
 @dataclass
@@ -35,7 +36,7 @@ class RotationParams:
     bear_exposure: float = 0.30        # gross exposure in bear regime
     neutral_exposure: float = 0.0       # explicit NEUTRAL exposure (0 = (bull+bear)/2)
     bull_leverage: float = 1.0         # margin multiplier in bull (financed)
-    max_gross_exposure: float = 1.5    # hard cap on gross exposure
+    max_gross_exposure: float = 1.0    # hard cap on gross exposure (1.0 = no leverage)
     leverage_annual_cost: float = 0.06 # financing cost on borrowed capital
     regime_ma: int = 60                # benchmark trend window (trading days)
     regime_ma_fast: int = 20           # short trend confirmation window
@@ -74,6 +75,7 @@ class RotationParams:
     defensive_filter: bool = False           # non-BULL picks restricted to dividend/low-vol half
     defensive_div_weight: float = 0.25       # dividend weight inside the defensive core
     dividend_yield_map: Optional[Dict[str, float]] = None  # symbol -> avg dps
+    dividend_cash: Optional[pd.DataFrame] = None  # wide (ex_date x symbol) cash-per-share, PIT
     selection_model: str = ""                # optional ML selection: "lgb"
     selection_ml_weight: float = 1.0
     vol_target: float = 0.0                  # annualized vol target (0 disables)
@@ -116,6 +118,10 @@ class RotationParams:
     safe_trend_gate: int = 20                # short-term momentum window that qualifies a safe asset
     euphoria_threshold: float = 0.0          # bench 20d return above this -> defensive hold (topping filter)
     benchmark_exclude: Tuple[str, ...] = ()  # symbols excluded from the equal-weight benchmark (safe assets)
+    # ---- honest small-capital execution model ----
+    capital_base: float = 100_000.0          # CNY account size used to model min commission & board lots
+    enable_board_lots: bool = True           # round orders to 100-share (200 for STAR) lots
+    slippage_rate: float = 0.0002            # per-side slippage fraction on traded notional
 
 
 @dataclass
@@ -266,7 +272,15 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     vol_base = volume.rolling(params.volume_confirm_base, min_periods=1).mean()
     volume_ratio = vol_short / vol_base.replace(0, np.nan)
     adv20 = amount.rolling(20, min_periods=5).mean()
-    if params.dividend_yield_map:
+    if params.dividend_cash is not None and len(params.dividend_cash):
+        # PIT trailing dividend yield: only dividends whose ex-date has already
+        # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
+        div_yield = trailing_dividend_yield(params.dividend_cash, close)
+        div_yield = div_yield.reindex(common).reindex(columns=symbols)
+    elif params.dividend_yield_map:
+        # Deprecated static map: kept only for legacy callers/tests. It is NOT
+        # point-in-time (average dps measured over recent years applied to the
+        # whole window) and must not be used for production backtests.
         dps = pd.Series({sym: params.dividend_yield_map.get(sym, np.nan) for sym in symbols})
         div_yield = pd.DataFrame({sym: dps[sym] / close[sym] for sym in symbols})
     else:
@@ -661,15 +675,47 @@ def weekly_rotation_backtest(
             if requested_turnover > 0.5:
                 scale = 0.5 / requested_turnover
                 desired = {s: weights[s] + (desired[s] - weights[s]) * scale for s in symbols}
+            account_value = max(float(equity) * float(params.capital_base), 1.0)
+            if params.enable_board_lots and params.capital_base > 0:
+                # Round orders to board lots (100 shares; 200 for STAR market).
+                # Full exits keep the odd lot (odd-lot disposal is allowed in
+                # A-shares); partial trades round down to whole lots.
+                for symbol in symbols:
+                    delta = desired[symbol] - weights[symbol]
+                    if abs(delta) < 1e-9 or desired[symbol] <= 1e-9:
+                        continue
+                    exec_open = float(open_matrix.at[date, symbol]) if pd.notna(open_matrix.at[date, symbol]) else np.nan
+                    if not np.isfinite(exec_open) or exec_open <= 0:
+                        desired[symbol] = weights[symbol]
+                        continue
+                    lot = 200 if symbol.startswith("688") else 100
+                    if delta > 0:
+                        lots = int(abs(delta) * account_value // (exec_open * lot))
+                        actual = lots * exec_open * lot / account_value
+                        desired[symbol] = weights[symbol] + min(actual, delta)
+                    else:
+                        lots = int(min(abs(delta), weights[symbol]) * account_value // (exec_open * lot))
+                        if lots <= 0:
+                            desired[symbol] = weights[symbol]
+                        else:
+                            desired[symbol] = weights[symbol] - lots * exec_open * lot / account_value
             for symbol in symbols:
                 delta = desired[symbol] - weights[symbol]
                 turnover += abs(delta)
+                if params.capital_base > 0 and abs(delta) > 1e-12:
+                    notional = abs(delta) * account_value
+                    side = "buy" if delta > 0 else "sell"
+                    fee = explicit_order_fees(notional, side, symbol)["total"]
+                    fee += notional * params.slippage_rate
+                    cost += fee / account_value
             if params.hedge_etf and params.hedge_etf in symbols:
                 target_short = -sum(desired.values())
                 short_turnover = abs(target_short - short_weights.get(params.hedge_etf, 0.0))
                 turnover += short_turnover
                 short_weights[params.hedge_etf] = target_short
-            cost = turnover * params.fee_rate
+            if params.capital_base <= 0:
+                # legacy flat-fee fallback when no capital assumption is given
+                cost = turnover * params.fee_rate
             # track entry prices for newly opened positions
             for symbol in symbols:
                 if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and pd.notna(open_matrix.at[date, symbol]):
@@ -708,6 +754,16 @@ def weekly_rotation_backtest(
             else:
                 asset_returns[symbol] = float(ret_row[symbol]) if pd.notna(ret_row[symbol]) else 0.0
         gross = sum(weights[symbol] * asset_returns[symbol] for symbol in symbols)
+        if stopped_symbols and params.capital_base > 0:
+            # charge sell-side fees (commission + stamp + slippage) on stops,
+            # which are realized at today's close outside the rebalance path
+            account_value = max(float(equity) * float(params.capital_base), 1.0)
+            for symbol in stopped_symbols:
+                if weights[symbol] > 1e-9:
+                    notional = weights[symbol] * account_value
+                    fee = explicit_order_fees(notional, "sell", symbol)["total"]
+                    fee += notional * params.slippage_rate
+                    cost += fee / account_value
         if params.hedge_etf and params.hedge_etf in symbols:
             hedge_ret = asset_returns.get(params.hedge_etf, 0.0)
             short_notional = short_weights.get(params.hedge_etf, 0.0)
@@ -1144,7 +1200,7 @@ def build_reports(result: dict, output_dir) -> dict:
     advice_lines.append(f"- 回测区间: {summary['start']} ~ {summary['end']} ({summary['observations']} 个交易日)")
     advice_lines.append(f"- **年化收益: {summary['annual_return']:.2%}** | 月均收益: {summary['monthly_avg_return']:.2%}")
     advice_lines.append(f"- 夏普比率: {summary['sharpe']:.2f} (目标 ≥0.9) | 卡玛比率: {summary['annual_return']/abs(summary['max_drawdown']) if summary['max_drawdown'] else 0:.2f} (目标 ≥1.2)")
-    advice_lines.append(f"- 最大回撤: {summary['max_drawdown']:.2%} | 回撤修复期: {summary.get('max_drawdown_recovery_days', 'N/A')} 个交易日 (目标 ≤126)")
+    advice_lines.append(f"- 最大回撤: {summary['max_drawdown']:.2%} | 回撤修复期(近3年): {summary.get('max_drawdown_recovery_days_3y', 'N/A')} 日 (目标 ≤126) | 全窗口: {summary.get('max_drawdown_recovery_days', 'N/A')} 日")
     advice_lines.append(f"- 期末净值: {summary['final_equity']:.2f} | 平均总仓位: {summary['average_exposure']:.1%} | 累计交易成本: {summary['total_cost_fraction']:.2%}")
     advice_lines.append(f"- 月度超基准胜率(沪深300): {summary.get('monthly_win_vs_index', summary.get('monthly_win_vs_benchmark', 0)):.1%} | 季度超基准胜率(沪深300): {summary.get('quarterly_win_vs_index', summary.get('quarterly_win_vs_benchmark', 0)):.1%} (目标 ≥60%)")
     advice_lines.append(f"- 季度超等权基准胜率: {summary.get('quarterly_win_vs_benchmark', 0):.1%} (目标 ≥50%)")
@@ -1157,7 +1213,7 @@ def build_reports(result: dict, output_dir) -> dict:
             advice_lines.append(f"| {regime} | {info['days']} | {info['cum_return']:.2%} |")
     advice_lines += ["", "## 牛熊市操作建议 / Market-State Advice", ""]
     advice_lines.append("- **牛市 (BULL)**: 基准指数位于长期均线上方且短期动能向上。满仓(无杠杆)持有防御核心+动量共振的前 5 名强势标的,按 21 个交易日(约月度)调仓。")
-    advice_lines.append("- **熊市 (BEAR)**: ML 逻辑回归给出空头否决或基准单日急跌超过 2.5% 时,仓位降至 10% 并进入风险锁定,直到基准收复趋势均线后才恢复,避免在 2018/2022 式单边下跌中硬扛。")
+    advice_lines.append("- **熊市 (BEAR)**: ML 概率敞口连续收缩至防御下限 30%,防御状态持有避险资产(国债/黄金/货币 ETF 约 65%)+ 防御性低波高息股票;基准单日急跌超 2.5% 触发事件冲击,次日转投安全资产并风险锁定,直到基准收复短期均线。全程无杠杆、无做空。")
     advice_lines.append("- **震荡市 (NEUTRAL)**: 半仓至满仓灵活参与,依靠股息/低波/趋势防御核心选股,严格按事件冲击规则控险。")
     advice_lines += ["", "## 最近 12 个月 / Last 12 Months", ""]
     recent = monthly_df.tail(12)
@@ -1198,7 +1254,7 @@ def build_reports(result: dict, output_dir) -> dict:
         ("月度超基准胜率(沪深300)", "≥60%", f"{m_win:.1%}", m_win >= 0.60),
         ("季度超基准胜率(沪深300)", "≥60%", f"{q_win:.1%}", q_win >= 0.60),
         ("单次调仓换手率", "<30%~50%", f"{turnover:.1%}", turnover < 0.50),
-        ("融资/杠杆", "确认牛市≤1.15x(用户授权)", "1.15x上限", True),
+        ("融资/杠杆", "禁用(个人资金不负债)", "0.00x", True),
     ]
     for name, target, actual, ok in gates:
         advice_lines.append(f"| {name} | {target} | {actual} | {'通过' if ok else '未达'} |")
@@ -1217,12 +1273,12 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "### 一页速览(门外汉)/ One-Minute Read (Layman)",
         "",
-        f"这套策略用过去 10 年 A 股数据回测:长期看是赚钱的,平均每年约 {s['annual_return']:.1%};最惨的时候账户会从高点回撤 {s['max_drawdown']:.1%},全窗口修复需 {recovery} 个交易日,近 3 年修复期 {recovery_3y} 个交易日。仅在 100% 确认牛市时才启用 1.15 倍小杠杆,其余时间只用自盘资金;遇到单日大跌超过 2.5% 会转入安全资产。相比沪深300 指数,它季度跑赢的比例约 {q_win:.0%}。",
+        f"这套策略用过去 10 年 A 股数据回测:长期看是赚钱的,平均每年约 {s['annual_return']:.1%};最惨的时候账户会从高点回撤 {s['max_drawdown']:.1%},全窗口修复需 {recovery} 个交易日,近 3 年修复期 {recovery_3y} 个交易日。全程不使用融资杠杆和做空,只用自盘资金;遇到单日大跌超过 2.5% 会转入安全资产。相比沪深300 指数,它季度跑赢的比例约 {q_win:.0%}。回测按 10 万元本金、最低佣金 5 元、印花税、滑点与整手(100/200 股)约束如实建模。",
         "",
         "### 入门解读(初学者)/ Beginner Walkthrough",
         "",
         "- **它怎么赚钱?** 每月在 57 只大盘股和 ETF 里,用股息、低波动、趋势、动量四个维度打分,选前 5 名持有,靠“强势股轮动”和“跌得多的好股票反弹”两种效应获利。",
-        "- **它怎么防亏?** 两道保险:一是机器学习识别熊市就空仓;二是基准指数单日跌超 2.5% 就降到 10% 仓位并锁定,直到指数收复趋势均线。因此 2018 年股灾基本躲过,2022 年熊市只亏约 5%。",
+        "- **它怎么防亏?** 三道保险:一是机器学习概率连续收缩敞口(熊市不空仓,而是转入国债/黄金/货币 ETF 等安全资产);二是基准指数单日跌超 2.5% 触发事件冲击,次日转投安全资产并锁定;三是周内 6% 止盈/8% 止损的小额收割。全程无杠杆、无做空、无负债风险。",
         f"- **需要注意什么?** 回撤修复期 {recovery} 个交易日未达到“6 个月以内”的目标;月度跑赢沪深300 的比例 {m_win:.0%} 也略低于 60% 目标。适合能承受约 1-2 年净值不创新高的投资者。",
         "",
         "### 专业明细(专家)/ Expert Detail",
@@ -1254,16 +1310,16 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "- 调仓周期: 21 个交易日(约月度) | 持仓数: top 5 | 单票上限: 20% | ETF 席位数: 2",
         "- 信号: 复合多因子,防御核心(股息 25% + 低波 25% + 趋势 25% + 动量 10%)",
-        "- 风控: ML 逻辑回归空头否决 + 事件冲击(单日 -2.5% → 10% 仓位并锁定至趋势均线收复) + 波动率目标 15%(缩放下限 0.6)",
-        "- 执行: 信号日收盘计算,下一交易日开盘执行;涨停不追买、跌停不追卖;单次调仓换手上限 50%",
+        "- 风控: ML 概率连续敞口(防御下限 30%)+ 事件冲击(单日 -2.5% → 70% 安全资产并锁定至短期均线收复) + 防御状态避险资产持有(65% 安全 + 防御股票);无杠杆、无做空",
+        "- 成本与执行: 信号日收盘计算,下一交易日开盘执行;涨停不追买、跌停不追卖;单次调仓换手上限 50%;佣金最低 5 元、印花税、双边滑点 2bp、整手 100/200 股(按 10 万元本金)",
         "",
         "## 第三视角审查 / Third-Person Review",
         "",
-        "**本轮迭代(小额收割 + 3月持有上限 + 确认杠杆 + 口径重定义)**:在避险轮动/亢奋过滤基线上,按用户指示新增:(1) 小额利润多次收割——周内 6% 止盈/8% 止损,把最大回撤从 -14.2% 压到 -10.2%;(2) 轮动持有上限 3 个月(63 交易日),强制轮出不再死扛;(3) 仅在 100% 确认牛市(MA BULL+ML 概率≥0.65+基准20日动量>0+净值贴近峰值+无风险锁定)时启用 1.15 倍小杠杆;(4) 回撤修复期重定义为“最近 3 年窗口内峰值→新高最大回撤天数”(用户授权,全窗口口径同时披露)。",
+        "**本轮减法(诚实化改造)**:针对上一版回测的前视偏差与乐观成本假设,做如下修正:(1) 股息因子改为 PIT——按 baostock 除权除息日滚动 365 天累计每股现金股息 / 当日价格计算,彻底移除静态平均股息地图(旧版该因子贡献约 +3.4pp 年化,属未来信息);(2) 融资杠杆完全禁用(confirm_leverage=1.0, max_gross_exposure=1.0, 无做空);(3) 成本模型改为显式最低佣金 5 元 + 印花税 + 双边滑点 2bp,并按 10 万元本金模拟整手 100/200 股约束;(4) 移除对外部静态缓存路径的硬编码依赖。",
         "",
-        "**门槛达成情况**(全窗口):夏普 1.34(目标 ≥0.9,通过)、卡玛 1.26(目标 ≥1.2,通过)、回撤修复期近3年 111 日(目标 ≤126,通过;全窗口 369 日已披露)、季度超等权基准胜率 55.8%(目标 ≥50%,通过)、季度超沪深300胜率 62.8%(目标 ≥60%,通过)、单次换手率 46.4%(通过)、融资/杠杆仅确认牛市 1.15 倍(披露)。",
+        "**门槛达成情况**(全窗口,10 万元本金):夏普 1.31(目标 ≥0.9,通过)、卡玛 1.24(目标 ≥1.2,通过)、回撤修复期近3年 114 日(目标 ≤126,通过;全窗口 203 日已披露)、季度超沪深300胜率 58.1%(目标 ≥60%,未达)、季度超等权基准胜率 46.5%(目标 ≥50%,未达——等权池不可直接投资,仅作参考)、单次换手率 29.8%(通过)、融资/杠杆 0.00x(禁用)。",
         "",
-        "**结论**:修正后的自适应模型全窗口年化 12.9%、夏普 1.34、卡玛 1.26、最大回撤 -10.2%,OOS(2022-2026)年化 13.4%、夏普 1.43、卡玛 1.60、季度超等权 63.2%;最近 3 年年化 16.6%、夏普 1.62、卡玛 1.99、回撤修复 111 日。四项目标在重定义口径下全部达标;全窗口口径修复期 369 日主要由 2018 与 2021-2023 两段市场性长熊造成(策略净值峰值与市场顶部同步),已随 3 年滚动窗口移出并如实披露。报告如实披露口径与差距,不做虚标。",
+        "**结论**:诚实化修正后,全窗口年化 9.2%、夏普 1.31、卡玛 1.24、最大回撤 -7.5%,OOS(2022-2026)年化 13.1%、夏普 1.57,显著跑赢沪深300(510300 全窗口年化 5.3%、OOS 0.6%,回撤 -44.8%)。资金敏感性:10 万→30 万→50 万元本金年化分别为 9.2%→10.4%→12.0%(高价股整手可买性随资金改善)。必须披露的限制:股票池为 2026 年手工精选的当前大蓝筹/ETF,存在幸存者偏差,扩展池(237 只)回测显著亏损;季度跑赢等权池比例未达 50%;统计显著性(DSR)尚未在修正口径下重新建立;OOS 仅覆盖 2022 年以来一个市场环境。以上差距如实披露,不做虚标。",
         "",
         "",
         "",

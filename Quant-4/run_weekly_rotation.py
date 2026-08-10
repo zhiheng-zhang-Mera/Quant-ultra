@@ -16,6 +16,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -83,7 +84,7 @@ def default_params() -> RotationParams:
         leverage_annual_cost=0.06,
         hold_persistent=False,
         max_holding_days=63,
-        confirm_leverage=1.15,
+        confirm_leverage=1.0,            # no margin/leverage for personal capital
         confirm_ml_prob=0.65,
         confirm_equity_proximity=0.97,
         enable_intraweek_stops=True,
@@ -116,20 +117,28 @@ def default_params() -> RotationParams:
         safe_trend_gate=20,
         euphoria_threshold=0.10,
         benchmark_exclude=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),
+        capital_base=100_000.0,          # CNY, drives min-commission & board-lot model
+        enable_board_lots=True,
+        slippage_rate=0.0002,
     )
 
 
-def load_dividend_map() -> dict:
-    """Load the cached dividend-per-share map if present."""
-    import json
-    path = Path("D:/quant-4-test-cache/dividend_cache.json")
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            return {sym: float(info.get("dps_avg", 0.0)) for sym, info in payload.items()}
-        except Exception:
-            pass
-    return {}
+def load_pit_dividends(symbols: list[str]) -> Optional[pd.DataFrame]:
+    """Load point-in-time dividend cash history (ex-date x symbol) from the
+    local cache. Fetches from baostock on first use (network required). Never
+    falls back to a static average map: no data means no dividend factor."""
+    from Main.pit_dividends import fetch_dividend_history, load_dividend_cash
+
+    cache_dir = DATA_CACHE / "dividends"
+    cached = load_dividend_cash(cache_dir, symbols)
+    if cached is not None and not cached.empty:
+        return cached
+    try:
+        fetched = fetch_dividend_history(symbols, start_year=2014, cache_dir=cache_dir)
+        return load_dividend_cash(cache_dir, symbols)
+    except Exception as exc:
+        print(f"WARNING: PIT dividend fetch failed ({exc}); running without dividend factor")
+        return None
 
 
 def main() -> int:
@@ -148,9 +157,7 @@ def main() -> int:
     params = default_params()
     params.start_date = args.start
     params.signal_mode = args.signal_mode
-    dividend_map = load_dividend_map()
-    if dividend_map:
-        params.dividend_yield_map = dividend_map
+    params.dividend_cash = load_pit_dividends(universe)
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
     paths = build_reports(result, args.output_dir)

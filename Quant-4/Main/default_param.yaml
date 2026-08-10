@@ -51,7 +51,7 @@ min_vol_obs: 5
 error_threshold_window: 252
 embargo_min: 5
 holding_period: 5
-max_leverage: 2.0
+max_leverage: 1.0
 d_min_search: [0.1, 0.3, 0.5, 0.7, 0.9]
 vif_threshold: 30
 cluster_select_ratio: 0.8
