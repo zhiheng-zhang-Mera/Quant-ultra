@@ -81,19 +81,21 @@ flowchart TD
 
 ### ✦ 回测表现（2016-01 ~ 2026-08，2573 交易日，诚实口径：10 万元本金）
 
-| 指标 | 诚实回测（PIT股息+显式费用+整手+无杠杆） | 目标 / 对照 |
+| 指标 | 诚实回测（PIT 全市场 5475 只、覆盖 100%、显式费用、整手、无杠杆） | 目标 / 对照 |
 |---|---|---|
-| 年化收益 | **9.22%**（OOS 2022+：13.14%） | 沪深300(510300) 5.33% |
-| 夏普比率 | **1.31**（OOS 1.57） | ≥0.9 ✅ |
-| 卡玛比率 | **1.24**（OOS 1.76） | ≥1.2 ✅ |
-| 最大回撤 | **-7.46%** | 沪深300 -44.75% |
-| 回撤修复期（近3年窗口） | **114 交易日** | ≤126 ✅ |
-| 回撤修复期（全窗口，披露） | 203 日 | 披露 |
-| 季度超沪深300胜率 | 58.1% | ≥60% ❌ 未达 |
-| 季度超等权基准胜率 | 46.5%（等权池不可直接投资） | ≥50% ❌ 未达 |
-| 单次调仓换手率 | 29.8% | <30%~50% ✅ |
+| 年化收益 | **4.27%**（OOS 2022+：2.90%） | 沪深300(510300) 5.33% ❌ 未达 |
+| 夏普比率 | **0.53**（OOS 0.38） | ≥0.9 ❌ 未达 |
+| 卡玛比率 | **0.39**（OOS 0.27） | ≥1.2 ❌ 未达 |
+| 最大回撤 | **-10.81%** | 沪深300 -44.75% ✅ |
+| 回撤修复期（近3年窗口） | **109 交易日** | ≤126 ✅ |
+| 回撤修复期（全窗口，披露） | 315 日 | 披露 |
+| 季度超沪深300胜率 | 48.8% | ≥60% ❌ 未达 |
+| 季度超等权基准胜率 | 37.2% | ≥50% ❌ 未达 |
+| 累计交易成本 | 38.0%（350 笔） | 换手偏高 ❌ |
 | 杠杆 | 0.00x（禁用） | ✅ |
-| 平均总仓位 | 66.1% | — |
+| 平均总仓位 | 72.1% | — |
+
+> **2026-08-10 诚实化里程碑**：股票池已从"2026 年手工精选 57 只"改为"全 A 股曾上市 + 退市股"的 PIT 池（5475 只，含 248 只窗口内退市股，覆盖率 100%）。幸存者偏差清除后，旧口径的 9.22% 被证实含约 2.9pp 偏差；全池真实年化 4.27%，低于沪深300（5.33%）——当前策略是"低回撤包装"（回撤 -10.8% vs 指数 -44.8%），选择 alpha 不足。详见 `Quant-4/update plans/8-10-pit-universe-plan.md`。
 
 ![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
 
@@ -104,8 +106,8 @@ flowchart TD
 ### ✦ 策略决策层与开源对比（2026-08-10 证据门控）
 
 - 引擎已拆解并插入可选**策略决策层**（`Quant-4/Main/strategy_selector.py`：balanced / momentum / defensive / safe 四个原型 + 滞回切换），用样本外证据门控：选择器 OOS 夏普 1.40 低于最优固定原型 defensive 1.72，**生产默认保持禁用**（`strategy_selector=""`），避免“为自适应而自适应”的过拟合。
-- safe 原型为候选胜者：全窗口年化 10.56% / 夏普 1.48，OOS 年化 14.98% / 夏普 1.67（样本外仅一段市场，转正前需更长验证）。
-- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.94**、OOS **0.98**（≥0.70 = 前 30%）。
+- 原型对比在 100% PIT 池上收敛到 ~4-4.4%（balanced 4.27%、safe 4.09%、no-div 4.39%），均未达门槛；早期“safe 7.71%”被证实为稀疏股息面板导致的候选池坍缩伪影，已撤销转正。
+- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.42**、OOS **0.40**（未达前 30%）；回撤百分位 0.85（参考集最优区间）。
 
 ### ✦ 快速开始
 
@@ -237,19 +239,21 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 
 ### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,573 trading days, honest setup: 100k CNY)
 
-| Metric | Honest backtest (PIT div + explicit fees + board lots + no leverage) | Target / benchmark |
+| Metric | Honest backtest (PIT universe 5,475 names, 100% coverage, explicit fees, board lots, no leverage) | Target / benchmark |
 |---|---|---|
-| Annual return | **9.22%** (OOS 2022+: 13.14%) | CSI300 (510300) 5.33% |
-| Sharpe | **1.31** (OOS 1.57) | ≥0.9 ✅ |
-| Calmar | **1.24** (OOS 1.76) | ≥1.2 ✅ |
-| Max drawdown | **-7.46%** | CSI300 -44.75% |
-| Recovery (last-3y window) | **114 trading days** | ≤126 ✅ |
-| Recovery (full window, disclosed) | 203 d | disclosed |
-| Quarterly win vs CSI 300 | 58.1% | ≥60% ❌ not met |
-| Quarterly win vs equal-weight | 46.5% (pool not directly investable) | ≥50% ❌ not met |
-| Turnover per rebalance | 29.8% | <30%~50% ✅ |
+| Annual return | **4.27%** (OOS 2022+: 2.90%) | CSI300 (510300) 5.33% ❌ not met |
+| Sharpe | **0.53** (OOS 0.38) | ≥0.9 ❌ not met |
+| Calmar | **0.39** (OOS 0.27) | ≥1.2 ❌ not met |
+| Max drawdown | **-10.81%** | CSI300 -44.75% ✅ |
+| Recovery (last-3y window) | **109 trading days** | ≤126 ✅ |
+| Recovery (full window, disclosed) | 315 d | disclosed |
+| Quarterly win vs CSI 300 | 48.8% | ≥60% ❌ not met |
+| Quarterly win vs equal-weight | 37.2% | ≥50% ❌ not met |
+| Cumulative cost | 38.0% (350 trades) | churn too high ❌ |
 | Leverage | 0.00x (disabled) | ✅ |
-| Average gross exposure | 66.1% | — |
+| Average gross exposure | 72.1% | — |
+
+> **2026-08-10 honesty milestone**: the universe was replaced with the full ever-listed A-share PIT pool (5,475 names incl. 248 delisted, 100% coverage). After removing survivorship bias the old 9.22% was inflated by ~2.9pp; the true all-pool return is 4.27%, below CSI300 (5.33%). The strategy is currently a low-drawdown wrapper (-10.8% vs index -44.8%) with insufficient selection alpha. See `Quant-4/update plans/8-10-pit-universe-plan.md`.
 
 ![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
 
@@ -260,8 +264,8 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 ### ✦ Strategy-Selection Layer & Open-Source Ranking (2026-08-10, evidence-gated)
 
 - The engine is decomposed with an optional **strategy-selection layer** (`Quant-4/Main/strategy_selector.py`: balanced / momentum / defensive / safe archetypes + hysteresis), gated on out-of-sample evidence: the selector's OOS Sharpe 1.40 is below the best fixed archetype (defensive 1.72), so **production keeps it disabled** (`strategy_selector=""`) to avoid overfitting for adaptation's sake.
-- The `safe` archetype is the strongest candidate: 10.56% annual / Sharpe 1.48 full-window, 14.98% / 1.67 OOS (needs longer OOS validation before promotion).
-- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.94** full-window / **0.98** OOS (≥0.70 = top 30%).
+- On the 100% PIT pool all archetypes converge to ~4-4.4% (balanced 4.27%, safe 4.09%, no-dividend 4.39%) - none meet the gates; the earlier "safe 7.71%" was an artifact of the sparse dividend panel collapsing the candidate pool and was retracted.
+- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.42** full-window / **0.40** OOS (below top 30%); drawdown percentile 0.85 (best-in-set region).
 
 ### ✦ Quick Start
 

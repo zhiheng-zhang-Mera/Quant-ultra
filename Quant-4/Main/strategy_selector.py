@@ -97,7 +97,11 @@ class StrategySelector:
         vol = float(bench.pct_change(fill_method=None).tail(60).std(ddof=0) * np.sqrt(252)) if len(bench) >= 30 else 0.5
         # breadth: fraction of the (ex-benchmark) universe above its 60d MA
         close = panel.close.loc[date]
-        ma60 = panel.close.rolling(60, min_periods=20).mean().loc[date]
+        ma60_panel = getattr(panel, "ma60", None)
+        if ma60_panel is not None and date in ma60_panel.index:
+            ma60 = ma60_panel.loc[date]
+        else:
+            ma60 = panel.close.rolling(60, min_periods=20).mean().loc[date]
         valid = close.notna() & ma60.notna()
         breadth = float((close[valid] > ma60[valid]).mean()) if valid.any() else 0.5
         # safe-asset momentum: best 120d momentum among defensive assets

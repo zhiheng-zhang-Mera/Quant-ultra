@@ -75,6 +75,59 @@ def test_production_defaults_are_leverage_free():
     assert p.hedge_etf == ""
 
 
+def test_defensive_filter_uses_strict_positive_dividend():
+    """A dense dividend panel where most names pay nothing must not make the
+    defensive filter pass the whole universe: outside BULL only dividend
+    payers (trailing yield > 0) or the low-volatility half qualify."""
+    from Main.weekly_rotation import RegimeState, precompute_panels, rank_candidates
+
+    frames = _synthetic_frames()
+    dates = frames["600000.SH"].index
+    n = len(dates)
+    # A high-volatility, non-dividend name: it must be filtered out even
+    # though its raw momentum is strong.
+    rng = np.random.default_rng(7)
+    wild = 10.0 + np.cumsum(rng.normal(0.0, 0.25, n))
+    wild = np.maximum(wild, 1.0)
+    frames["600519.SH"] = pd.DataFrame(
+        {
+            "date": dates,
+            "open": wild * 0.999,
+            "high": wild * 1.02,
+            "low": wild * 0.98,
+            "close": wild,
+            "volume": np.full(n, 2_000_000.0),
+            "amount": wild * 2_000_000.0,
+        }
+    ).set_index("date")
+    # Dense dividend panel: only 600000.SH pays (positive yield); the other
+    # three have exactly 0 cash per share.
+    div_cash = pd.DataFrame(0.0, index=dates, columns=frames)
+    div_cash.loc[dates[60], "600000.SH"] = 0.5
+    p = RotationParams(
+        momentum_windows=(5,),
+        momentum_weights=(1.0,),
+        signal_mode="composite",
+        defensive_core=True,
+        defensive_filter=True,
+        defensive_core_bull_momentum=False,
+        require_relative_strength=False,
+        min_adv=1e6,
+        dividend_cash=div_cash,
+    )
+    panel = precompute_panels(frames, p)
+    date = dates[150]
+    regime = RegimeState(
+        date=date, regime="NEUTRAL", benchmark_close=10.0,
+        benchmark_ma_fast=10.0, benchmark_ma_slow=10.0, exposure=0.6,
+        advice_zh="test", advice_en="test",
+    )
+    ranked = rank_candidates(panel, date, p, None, regime)
+    ranked_symbols = [s for s, _, _ in ranked]
+    assert "600519.SH" not in ranked_symbols  # high-vol, no dividend
+    assert "600000.SH" in ranked_symbols      # dividend payer passes
+
+
 def test_explicit_fees_apply_minimum_commission_and_stamp():
     """Small notional must still pay the 5 CNY minimum; stocks pay stamp tax
     on sells; ETFs do not."""

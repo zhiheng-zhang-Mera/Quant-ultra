@@ -353,12 +353,17 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
     # into the defensive book through extreme momentum z-scores.
     if params.defensive_filter and params.defensive_core and (regime is None or regime.regime != "BULL"):
         dy = panel.div_yield.loc[date].reindex(valid_symbols)
-        median_dy = dy.median(skipna=True)
+        # Dividend-qualified means a strictly positive trailing yield. A
+        # median-based rule silently collapses to 'everyone passes' when the
+        # dividend panel is dense but most names pay no cash dividend, which
+        # makes the defensive filter depend on data coverage rather than
+        # fundamentals (observed 2026-08-10 on the full PIT panel).
+        dividend_ok = (dy > 0.0).fillna(False)
         lv = panel.volatility.loc[date].reindex(valid_symbols)
         median_lv = lv.median(skipna=True)
         valid_symbols = [
             s for s in valid_symbols
-            if (pd.notna(dy.get(s)) and dy.get(s) >= median_dy) or (pd.notna(lv.get(s)) and lv.get(s) <= median_lv)
+            if bool(dividend_ok.get(s, False)) or (pd.notna(lv.get(s)) and lv.get(s) <= median_lv)
         ]
     if not valid_symbols:
         return []
