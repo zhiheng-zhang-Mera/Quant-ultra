@@ -17,6 +17,32 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
     total_nav = engine.calc_nav()
     target_values = {sym: total_nav * target_weights.get(sym, 0.0) for sym in engine.assets}
 
+    # ---- 0. Execution price model: open (default) / twap / vwap_proxy ----
+    # 8-9 plan task 3: finer execution simulation. TWAP uses the day open/close
+    # average; VWAP proxy uses (open+high+low+close)/4 when all are available.
+    exec_model = engine.config.get("execution_price_model", "open")
+    exec_prices = {}
+    for sym in engine.assets:
+        p = prices.get(sym)
+        if p is None or np.isnan(p) or p <= 0:
+            exec_prices[sym] = p
+            continue
+        if exec_model in ("twap", "vwap_proxy"):
+            o = engine.bus.query_by_pit(sym, engine.current_date, "open")
+            c = engine.bus.query_by_pit(sym, engine.current_date, "close")
+            if exec_model == "twap":
+                if o is not None and c is not None and np.isfinite(o) and np.isfinite(c) and o > 0 and c > 0:
+                    p = 0.5 * (float(o) + float(c))
+            else:
+                h = engine.bus.query_by_pit(sym, engine.current_date, "high")
+                l = engine.bus.query_by_pit(sym, engine.current_date, "low")
+                vals = [v for v in (o, h, l, c) if v is not None and np.isfinite(v) and v > 0]
+                if len(vals) == 4:
+                    p = float(np.mean(vals))
+        exec_prices[sym] = p
+
+    min_trade_weight = float(engine.config.get("min_trade_weight", 0.0) or 0.0)
+
     # ---- 1. 退市资产强制清算 ----
     for sym in engine.assets:
         if engine._check_is_delisted(sym):
@@ -64,17 +90,22 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
         current_val = current_shares * price
         t_val = target_values.get(sym, 0.0)
         diff_val = t_val - current_val
+        if min_trade_weight > 0 and abs(diff_val) < min_trade_weight * total_nav:
+            continue
         if diff_val < 0:  # 需要卖出
             # 整手截断
             lot = engine._get_lot_size(sym)
-            sell_shares = min(abs(diff_val) / price, current_shares)
+            exec_price = exec_prices.get(sym, price)
+            if exec_price is None or not np.isfinite(exec_price) or exec_price <= 0:
+                continue
+            sell_shares = min(abs(diff_val) / exec_price, current_shares)
             # 保留至少一手，如果剩余不足一手则全清
             if current_shares - sell_shares < lot and current_shares - sell_shares > 0:
                 sell_shares = current_shares
             else:
                 sell_shares = np.floor(sell_shares / lot) * lot
             if sell_shares > 0:
-                engine._sell_asset_action(sym, sell_shares, price)
+                engine._sell_asset_action(sym, sell_shares, exec_price)
 
     # ---- 4. 再处理买入 ----
     for sym in engine.assets:
@@ -85,9 +116,14 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
         current_val = current_shares * price
         t_val = target_values.get(sym, 0.0)
         diff_val = t_val - current_val
+        if min_trade_weight > 0 and abs(diff_val) < min_trade_weight * total_nav:
+            continue
         if diff_val > 0 and engine.cash > 1000:
             lot = engine._get_lot_size(sym)
-            buy_shares = np.floor(diff_val / price / lot) * lot
+            exec_price = exec_prices.get(sym, price)
+            if exec_price is None or not np.isfinite(exec_price) or exec_price <= 0:
+                continue
+            buy_shares = np.floor(diff_val / exec_price / lot) * lot
             if buy_shares <= 0:
                 continue
             # 平方根市场冲击
@@ -96,7 +132,7 @@ def process_state_4_execution(engine, target_weights: dict, prices: dict):
             turnover = (buy_shares * price) / adv
             slippage_impact = STATIC_KAPPA_IMPACT * (turnover ** STATIC_ALPHA_IMPACT)
             base_slippage = float(merged_cost_config(engine.config)['slippage_rate'])
-            exec_price = price * (1.0 + slippage_impact + base_slippage)
+            exec_price = exec_price * (1.0 + slippage_impact + base_slippage)
             cost = buy_shares * exec_price
             fees = explicit_order_fees(cost, "buy", symbol=sym, config=engine.config)
             if engine.cash >= cost + fees['total']:

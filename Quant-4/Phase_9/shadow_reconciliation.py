@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 import numpy as np
 import pandas as pd
-import pandas as pd
 from Phase_9.config import DEFAULT_MLOPS_CONFIG
 
 logger = logging.getLogger("MLOps.ShadowRecon")
@@ -24,21 +23,9 @@ def run_shadow_reconciliation(context: dict) -> dict:
         if isinstance(daily_weights, pd.DataFrame) and not daily_weights.empty:
             target_weights = daily_weights.iloc[-1].dropna().astype(float).to_dict()
             context['target_weights'] = target_weights
-    if not target_weights:
-        daily_weights = context.get('daily_weights')
-        if isinstance(daily_weights, pd.DataFrame) and not daily_weights.empty:
-            target_weights = daily_weights.iloc[-1].dropna().astype(float).to_dict()
-            context['target_weights'] = target_weights
     executed_weights = {}
     is_live = context.get('is_live', False)
     mae_ceiling = context.get('config', {}).get('reconciliation_mae_ceiling', DEFAULT_MLOPS_CONFIG['reconciliation_mae_ceiling'])
-
-    if not target_weights:
-        context['reconciliation_mae'] = float('inf')
-        context['recon_passed'] = False
-        context['reconciliation_evidence_status'] = 'MISSING_TARGET_WEIGHTS'
-        logger.critical("Reconciliation rejected because no target portfolio evidence was available.")
-        return context
 
     if not target_weights:
         context['reconciliation_mae'] = float('inf')
@@ -83,7 +70,6 @@ def run_shadow_reconciliation(context: dict) -> dict:
     recon_passed = mae <= mae_ceiling
     context['recon_passed'] = recon_passed
     context['reconciliation_evidence_status'] = 'VERIFIED' if recon_passed else 'POSITION_MISMATCH'
-    context['reconciliation_evidence_status'] = 'VERIFIED' if recon_passed else 'POSITION_MISMATCH'
 
     # logger.info("[OP] Run Deterministic MAE Calculation | [SOURCE] Comparative Asset Portfolios | [RESULT] Current MAE: %.8f, Limits Ceiling: %.8f, Passed: %s | [SIGNIFICANCE] Determines whether execution drift triggers trade hold locks", mae, mae_ceiling, recon_passed)
     logger.info("[操作] 计算确定性持仓 MAE 偏离度 | [来源] 理论与执行双端持仓明细对账 | [结果] 截面 MAE 误差: %.8f, 允许限额: %.8f, 对账通过: %s | [意义] 以高精度数学均值衡量实盘调仓损耗，不平账则立刻对系统下单实施封锁锁死", mae, mae_ceiling, recon_passed)
@@ -125,7 +111,14 @@ def enforce_reconciliation_gate(context: dict) -> dict:
     """Freeze order generation on reconciliation failure; liquidate only in live mode."""
     if context.get("recon_passed") is True:
         context["trading_halted"] = False
-        context["kill_switch_report"] = None
+        # 对账通过时不得返回 None：Phase 9 输出契约将 None 视为缺失证据，
+        # 历史上只有“对账失败”分支才写入 kill_switch_report，导致通过态反而崩溃。
+        # 改为写入明确的“未触发熔断”审计记录，保证契约与审计链完整性。
+        context["kill_switch_report"] = {
+            "status": "NO_KILL_SWITCH_TRIGGERED",
+            "reason": "RECONCILIATION_PASSED",
+            "liquidation_attempted": False,
+        }
         return context
 
     context["trading_halted"] = True

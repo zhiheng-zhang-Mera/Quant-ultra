@@ -26,6 +26,7 @@ def run_stress_test(context: dict) -> None:
             raise TypeError("daily_nav must be a DatetimeIndexed pandas Series.")
 
         stress_drawdowns = {}
+        stress_drawdowns_covered = {}
         for scenario, (start_str, end_str) in stress_scenarios.items():
             start = pd.Timestamp(start_str)
             end = pd.Timestamp(end_str)
@@ -47,16 +48,21 @@ def run_stress_test(context: dict) -> None:
                 # logger.warning("[OP] Slice Crisis Window | [SOURCE] Scenario Calendar: %s | [RESULT] Vacuum Period (0 or 1 row) | [SIGNIFICANCE] No overlapping dates in backtest; safely bypasses", scenario)
                 logger.warning("[操作] 截取历史危机时间切片 | [来源] 极端场景日历轴: %s | [结果] 数据真空（零行或单行） | [意义] 当前回测窗口未覆盖该危机区间，安全跳过此项场景模拟", scenario)
                 dd = float('nan')
+                covered = False
             else:
                 dd = compute_max_drawdown(window_nav)
+                covered = True
                 # logger.info("[OP] Compute Crisis Max Drawdown | [SOURCE] Sliced Period: %s | [RESULT] Drawdown: %.4f | [SIGNIFICANCE] Quantifies historical tail damage", scenario, dd)
                 logger.info("[操作] 求解危机最大回撤 | [来源] 截取后的危机高波波时段: %s | [结果] 期间最大回撤: %.4f | [意义] 量化历史真实系统性尾部崩塌对本策略净值的最大压榨杀伤深度", scenario, dd)
 
             stress_drawdowns[scenario] = dd
+            stress_drawdowns_covered[scenario] = covered
 
         context["stress_drawdowns"] = stress_drawdowns
+        context["stress_drawdowns_covered"] = stress_drawdowns_covered
 
     except Exception as e:
         # logger.error("[OP] Run Stress Simulator | [SOURCE] Crisis Slicer Pipeline | [RESULT] Failure: %s | [SIGNIFICANCE] Keeps default empty drawdown registry to alert master audit", str(e))
         logger.error("[操作] 运行极端高压模拟器 | [来源] 危机时空切轨管线 | [结果] 算法失败: %s | [意义] 保留默认空回撤字典注册表，向上游主控制器警示潜在的数据断层风险", str(e))
         context["stress_drawdowns"] = {scen: float('nan') for scen in stress_scenarios.keys()}
+        context["stress_drawdowns_covered"] = {scen: False for scen in stress_scenarios.keys()}

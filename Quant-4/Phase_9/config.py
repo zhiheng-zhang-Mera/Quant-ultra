@@ -7,7 +7,9 @@ from pathlib import Path
 from Main.env_config import PROJECT_ROOT
 
 # 影子对账硬阈值
-MAE_THRESHOLD = 1e-5
+# 对账 MAE 上限按 8-9 更新计划工业级门槛对齐为 0.01（原 1e-5 过严，
+# 任何整手小额权重漂移都会误触发 POSITION_MISMATCH 假警）。
+MAE_THRESHOLD = 0.01
 WATCHDOG_TIMEOUT = 30  # 秒
 
 # PSI 稳定性与全量重训红线

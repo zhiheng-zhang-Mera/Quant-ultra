@@ -22,4 +22,8 @@ DEFAULT_CONFIG = {
     'parallel_time_slice_cap': 8,
     'python_solver_iterations': 250,
     'python_solver_step': 0.05,
+    # ---- 8-9 更新计划任务二/三：整手约束 + 最小调仓阈值 + 多日复合调仓 ----
+    'board_lot_rounding': True,          # 目标权重按整手(100/200股)对齐，消除 Phase6/7 对账漂移
+    'min_trade_weight': 0.005,           # 单资产权重变化低于 0.5% 不交易，抑制高频微调摩擦
+    'rebalance_every': 1,                # 每隔 N 个交易日才重新求解（主流程通过 rotation_rebalance_days 覆盖为 5）
 }

@@ -79,7 +79,7 @@ def run_pipeline(args):
         "cluster_select_ratio": 0.8, "lgb_params": {"n_estimators": 100, "num_leaves": 31, "learning_rate": 0.05, "deterministic": True, "num_threads": 1, "random_state": 42, "verbosity": -1},
         "train_b1_grid_gamma": np.linspace(0.3, 0.7, 9).tolist(), "error_min_samples": 50, "cv_folds": 3,
         "psi_lookback_days": 60, "volatility_window": 20, "crowded_corr_threshold": 0.95, "vol_compress_quantile": 0.1,
-        "mae_threshold": 1e-5, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
+        "mae_threshold": 0.01, "watchdog_timeout": 30, "psi_threshold": 0.25, "psi_window": 5, "max_incremental_trees": 2000,
         "max_model_size": 2e9, "smoothing_period": 25,
         "federated_nodes": ["A_share_node", "US_share_node"], "negative_transfer_patience": 3,
         "domain_adaptation_alpha": 0.1, "gradient_compression_top_k": 0.1,
@@ -90,7 +90,12 @@ def run_pipeline(args):
         "local_llm_model": "qwen3-coder:30b", "local_llm_base_url": "http://127.0.0.1:11434",
         "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
         "local_llm_max_records_per_symbol": 2, "local_llm_max_chars_per_record": 300,
-        "rotation_mode": "FULL_MARKET_DAILY_GUERRILLA", "rotation_rebalance_days": 1,
+        # 按 8-9 计划任务三：日度微调改为多日复合调仓，从源头压降佣金与冲击成本；
+        # 执行模拟启用 TWAP（开收均价），替代单一收盘价成交假设。
+        "rotation_mode": "FULL_MARKET_MULTI_DAY_COMPOSITE", "rotation_rebalance_days": 5,
+        "execution_price_model": "twap",
+        # 8-9 计划任务四：特征面板启用仅用历史窗口的 Rolling Z-Score，降低 PSI 分布漂移。
+        "rolling_zscore_features": True, "rolling_zscore_lookback": 60, "rolling_zscore_min_periods": 20,
         "rotation_minimum_market_coverage": 50,
         "rotation_minimum_stock_coverage": 100,
         "market_source_timeout_seconds": 90.0,

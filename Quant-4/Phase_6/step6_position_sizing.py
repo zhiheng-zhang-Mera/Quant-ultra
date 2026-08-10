@@ -25,6 +25,48 @@ os.environ["NUMEXPR_NUM_THREADS"] = num_cores
 
 logger = logging.getLogger("PositionSizing")
 
+
+def apply_execution_alignment(context: dict, date, weights, previous, nav: float, assets) -> np.ndarray:
+    """将连续优化权重对齐到物理执行边界（8-9 计划任务二/三）。
+
+    1. 最小调仓阈值：权重变化低于 min_trade_weight 时保持原权重，抑制高频微小调仓；
+    2. 整手约束：按收盘价将目标市值折算为 100/200 股整手，使 Phase 6 目标权重
+       直接匹配 Phase 7 FSM 的物理执行结果，从源头消除对账漂移；
+    3. 保证金约束：调整后总权重不超过 1 - cash_buffer。
+    """
+    config = context.get("config", {}) or {}
+    weights = np.asarray(weights, dtype=float).copy()
+    previous = np.asarray(previous, dtype=float)
+    n = len(weights)
+    if n == 0:
+        return weights
+
+    min_trade = float(config.get("min_trade_weight", 0.0) or 0.0)
+    if min_trade > 0:
+        for i in range(n):
+            if abs(weights[i] - previous[i]) < min_trade:
+                weights[i] = previous[i]
+
+    if bool(config.get("board_lot_rounding", True)):
+        bulk = context.get("bulk_history_cache", {}) or {}
+        for i, sym in enumerate(assets):
+            df = bulk.get(sym)
+            price = None
+            if df is not None and date in df.index:
+                price = df.at[date, "close"]
+            if price is None or not np.isfinite(price) or price <= 0:
+                continue
+            lot = 200 if str(sym).startswith("688") else 100
+            target_shares = float(weights[i]) * nav / float(price)
+            lot_shares = np.floor(target_shares / lot) * lot
+            weights[i] = lot_shares * float(price) / nav
+
+    # 总和约束由优化器保证（sum <= 1 - cash_buffer）；此处只做非负裁剪，
+    # 不做重缩放——重缩放会破坏整手股数与目标权重的对应关系。
+    weights = np.maximum(weights, 0.0)
+    return weights
+
+
 def _phase6_parallelism(context: dict, date_count: int) -> int:
     config = context.get("config", {})
     plan = context.get("compute_audit", {}).get("resource_plan", config.get("compute_resource_plan", {}))
@@ -46,11 +88,21 @@ def solve_time_slices(context: dict, test_dates, nav: float):
         local.pop("cvx_prob_cache_v2", None)
         previous = np.zeros(len(local["assets"]))
         records = []
-        for date in dates:
+        # 优先采用主流程的 rotation_rebalance_days（多日复合调仓节奏），
+        # 其次才是局部 rebalance_every 覆盖。
+        rebalance_every = int(local.get("config", {}).get(
+            "rotation_rebalance_days", local.get("config", {}).get("rebalance_every", 1)
+        ) or 1)
+        for date_idx, date in enumerate(dates):
+            if date_idx % max(1, rebalance_every) != 0:
+                # 多日复合调仓：非调仓日直接沿用上一期目标权重，不再触发微调交易。
+                records.append((date, previous.copy()))
+                continue
             local["directional_symbol_masks"] = step_m_1_directional_mask(local, date)
             R_BL, Sigma_robust, Q_view, Omega_diag = step_m_2_black_litterman_fusion(local, date, previous)
             local.update({"R_BL": R_BL, "Sigma_robust": Sigma_robust, "Q_view": Q_view, "Omega_diag": Omega_diag})
             weights = step_m_3_convex_optimization(local, date, nav, previous)
+            weights = apply_execution_alignment(local, date, weights, previous, nav, local["assets"])
             records.append((date, weights))
             previous = weights.copy()
         return chunk_index, records, local.get("phase6_solver_backend", {})

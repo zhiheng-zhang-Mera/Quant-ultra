@@ -5,6 +5,23 @@ from pathlib import Path
 from Main.parameter_governance import validate_parameter_proposal, write_pending_proposal
 
 
+def _json_safe(value):
+    """Recursively convert NaN/Infinity into JSON-safe null values."""
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if not isinstance(value, (int, float)):
+        return value
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return value
+    if numeric != numeric or numeric in (float("inf"), float("-inf")):
+        return None
+    return value
+
+
 def execute(context: dict) -> dict:
     report_root = Path(__file__).parents[1] / "reports" / "cio"
     report_root.mkdir(parents=True, exist_ok=True)
@@ -27,9 +44,11 @@ def execute(context: dict) -> dict:
         missing.append("completed_phases:" + ",".join(prerequisite_gap))
     governance_failed = evidence.get("audit_passed") is not True or evidence.get("recon_passed") is not True
     decision = "HOLD_FOR_REVIEW" if missing or governance_failed else "ELIGIBLE_FOR_PHASE_11"
-    payload = {"decision": decision, "missing_evidence": missing, "evidence": evidence}
+    # 禁止非法的 NaN/Infinity 裸标记进入 JSON 报告（标准 JSON 解析器会拒绝），
+    # 统一序列化为 null，同时保留“压力场景未覆盖”的标注供人工解读。
+    payload = _json_safe({"decision": decision, "missing_evidence": missing, "evidence": evidence})
     path = report_root / f"cio_{run_id}.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     proposal = context.get("parameter_proposal")
     proposal_status, proposal_path = "NOT_PROPOSED", None
     if proposal is not None:

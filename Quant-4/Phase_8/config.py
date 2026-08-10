@@ -7,6 +7,9 @@ DEFAULT_CONFIG = {
     # 阶段 8.3 Christoffersen 似然比覆盖率检验合规阈值
     "min_coverage": 0.935,                  # 95% 置信度 VaR 的无条件覆盖率保底容忍线 (93.5%)
     "christoffersen_pval_threshold": 0.01,  # VaR 独立性 LR 检验的显著性 p 值门槛 (1%)
+    # 8-9 更新计划容错保护：违规样本过少（<10 次）时卡方近似不可靠，
+    # 独立性 LR 检验退化为无聚集证据（p=1.0），仅以无条件覆盖率判定。
+    "min_violations_for_lr_test": 10,
     
     # 阶段 8.1 统计学夏普多重试验 DSR 审计门槛
     "sharpe_threshold": 0.50,              # 策略期望的目标夏普比率底线 (0.50)

@@ -66,5 +66,7 @@ def execute(pipeline_context: dict) -> dict:
         "q_error_threshold_dict": pipeline_context['q_error_threshold_dict'],
         "fractional_features_cube": pipeline_context['fractional_features_cube'],
         "feature_scaler": pipeline_context['feature_scaler'],
+        "feature_normalization": pipeline_context.get('feature_normalization', 'none'),
+        "feature_zscore_warmup": pipeline_context.get('feature_zscore_warmup', 0),
         "model_training_ready": True
     }

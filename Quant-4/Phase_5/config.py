@@ -34,3 +34,10 @@ TRANSFER_WEIGHT_INITIAL = 1.0
 NEGATIVE_TRANSFER_PATIENCE = 3
 MMD_ALPHA = 0.1
 TOP_K_GRADIENT_RATIO = 0.1
+
+# 8-9 计划任务四：特征漂移治理（Rolling Z-Score）
+# 开启后特征面板按“仅用历史窗口”的滚动均值/标准差标准化，替代全样本 StandardScaler，
+# 消除跨周期分布偏移（PSI），且不引入未来函数。
+ROLLING_ZSCORE_FEATURES = False
+ROLLING_ZSCORE_LOOKBACK = 60
+ROLLING_ZSCORE_MIN_PERIODS = 20

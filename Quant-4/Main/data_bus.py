@@ -199,9 +199,15 @@ class PITDataBus:
                     val_list[:] = [val_list[i] for i in order]
                     ann_list[:] = [ann_list[i] for i in order]
                     self._atom_sorted_keys.add(key)
-                pos = bisect.bisect_right(ts_list, dt_tz_naive) - 1
-                # Walk back from the newest timestamp until the announcement is
-                # also visible at the request date (usually the first candidate).
+                # Point-in-time visibility is governed by the announcement date:
+                # an atom announced on date D is knowable from D onward even when
+                # its value timestamp (the period the value refers to) is later
+                # than the request date. Walk back from the newest atom until the
+                # announcement is visible at the request date (usually the first
+                # candidate). Previously this walked back only from timestamps <=
+                # the request date, silently dropping announced-but-future-valued
+                # atoms (a real PIT boundary bug).
+                pos = len(ts_list) - 1
                 while pos >= 0:
                     if self._atom_ann[field][asset][pos] <= dt_tz_naive:
                         return self._atom_val[field][asset][pos]

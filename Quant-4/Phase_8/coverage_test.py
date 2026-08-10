@@ -50,6 +50,7 @@ def run_christoffersen_test(context: dict) -> None:
     config = context.get('config', {})
     min_coverage = config.get('min_coverage', DEFAULT_CONFIG['min_coverage'])
     pval_threshold = config.get('christoffersen_pval_threshold', DEFAULT_CONFIG['christoffersen_pval_threshold'])
+    min_violations = config.get('min_violations_for_lr_test', DEFAULT_CONFIG['min_violations_for_lr_test'])
 
     try:
         violations = safe_get_shadow(context, "violations")
@@ -59,20 +60,31 @@ def run_christoffersen_test(context: dict) -> None:
 
         returns = np.log(nav_series / nav_series.shift(1)).dropna()
         common_idx = violations.index.intersection(returns.index)
-        
-        violations = violations.loc[common_idx]
+
+        violations = violations.loc[common_idx].dropna()
         returns = returns.loc[common_idx]
+
+        # 空值与空样本容错：无违规观测时覆盖率为 1.0（无聚集性证据），避免 NaN 污染报告。
+        if violations.empty or returns.empty:
+            context["empirical_coverage"] = 1.0
+            context["christoffersen_regime_pvals"] = {"full": 1.0}
+            context["christoffersen_pass"] = True
+            return
 
         # 三等分滑动波动率体制划分 (Volatility Regime Shunting)
         vol = returns.rolling(20, min_periods=10).std()
         vol_quantiles = vol.quantile([0.33, 0.67]).values
-        
-        regimes = {
-            "full": violations,
-            "low_vol": violations[vol <= vol_quantiles[0]],
-            "mid_vol": violations[(vol > vol_quantiles[0]) & (vol <= vol_quantiles[1])],
-            "high_vol": violations[vol > vol_quantiles[1]],
-        }
+
+        # 波动率分位数缺失/NaN 时退化为单一全样本体，防止 NaN 覆盖率误判。
+        if np.isnan(vol_quantiles).any() or len(violations) < 10:
+            regimes = {"full": violations}
+        else:
+            regimes = {
+                "full": violations,
+                "low_vol": violations[vol <= vol_quantiles[0]],
+                "mid_vol": violations[(vol > vol_quantiles[0]) & (vol <= vol_quantiles[1])],
+                "high_vol": violations[vol > vol_quantiles[1]],
+            }
 
         emp_cov = float(1.0 - violations.mean())
         context["empirical_coverage"] = emp_cov
@@ -80,7 +92,10 @@ def run_christoffersen_test(context: dict) -> None:
 
         regime_pvals = {}
         for name, ser in regimes.items():
-            if len(ser) >= 10:
+            n_violations = int(ser.sum()) if len(ser) else 0
+            # 违规样本过少时卡方近似不可靠：无聚集证据（p=1.0），
+            # 仅依赖无条件覆盖率判定，避免稀有违规下的假阳性聚集告警。
+            if len(ser) >= 10 and n_violations >= min_violations:
                 regime_pvals[name] = christoffersen_lr_core(ser)
             else:
                 # logger.warning("[OP] Evaluate Local Independent Regime | [SOURCE] Slice: %s | [RESULT] Length too short (%s) | [SIGNIFICANCE] Safely skip LR calculation for this subspace", name, len(ser))

@@ -49,6 +49,7 @@ def execute(pipeline_context: dict) -> dict:
         "empirical_coverage": pipeline_context.get("empirical_coverage"),
         "christoffersen_pvals": pipeline_context.get("christoffersen_regime_pvals"),
         "stress_drawdowns": pipeline_context.get("stress_drawdowns"),
+        "stress_drawdowns_covered": pipeline_context.get("stress_drawdowns_covered"),
         "max_participation_rate": pipeline_context.get("max_participation_rate"),
         "total_impact_loss_nav": pipeline_context.get("total_impact_loss_nav"),
         "veto_details": {

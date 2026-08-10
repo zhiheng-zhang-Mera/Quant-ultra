@@ -13,6 +13,26 @@ from Phase_5.config import VIF_THRESHOLD, CLUSTER_SELECT_RATIO
 
 logger = logging.getLogger("ModelTraining.Features")
 
+
+def apply_rolling_zscore(cube: np.ndarray, lookback: int = 60, min_periods: int = 20) -> np.ndarray:
+    """As-of rolling z-score per (asset, feature) along the time axis.
+
+    8-9 计划任务四：在特征面板生成阶段引入自适应滚动标准差标准化。
+    仅使用截至当日的历史窗口统计量（rolling window ending at t），不读取未来数据，
+    因此相比全样本 StandardScaler 既降低跨周期分布漂移（PSI），又杜绝未来函数。
+    """
+    T, N, F = cube.shape
+    out = np.empty_like(cube, dtype=float)
+    for n in range(N):
+        for f in range(F):
+            series = pd.Series(cube[:, n, f])
+            mean = series.rolling(lookback, min_periods=min_periods).mean()
+            std = series.rolling(lookback, min_periods=min_periods).std(ddof=0)
+            z = (series - mean) / std.replace(0.0, np.nan)
+            out[:, n, f] = z.fillna(0.0).to_numpy()
+    return out
+
+
 def generate_fractional_features(context: dict):
     d = context['best_d']
     bus = context['data_bus']
@@ -58,6 +78,21 @@ def generate_fractional_features(context: dict):
     context['fractional_features_cube'] = diff_cube
     context['alive_mask_matrix'] = alive_mask_matrix
     context['trading_days_dt'] = master_timeline
+
+    # ---- 8-9 计划任务四：可选 Rolling Z-Score 标准化（默认由主流程配置开启） ----
+    config = context.get('config', {}) or {}
+    if config.get('rolling_zscore_features', False):
+        diff_cube = apply_rolling_zscore(
+            diff_cube,
+            lookback=int(config.get('rolling_zscore_lookback', 60)),
+            min_periods=int(config.get('rolling_zscore_min_periods', 20)),
+        )
+        context['fractional_features_cube'] = diff_cube
+        context['feature_normalization'] = 'rolling_zscore'
+        context['feature_zscore_warmup'] = int(config.get('rolling_zscore_min_periods', 20))
+    else:
+        context['feature_normalization'] = 'none'
+        context['feature_zscore_warmup'] = 0
     
     # logger.info("[OP] Construct Fractional Dimension Cube | [SOURCE] Parallel Multi-Market Parser | [RESULT] High-Dim Cube Dimension: %s | [SIGNIFICANCE] Solidifies spatial input graphs for multi-domain adapters", diff_cube.shape)
     logger.info("[操作] 构建三维分数阶立体特征矩阵 | [来源] 并行多市场数据解析器 | [结果] 高维数据立方体维度 footprint: %s | [意义] 为跨域对齐适配器准备饱满、对齐的立体时空截面数据底座", diff_cube.shape)

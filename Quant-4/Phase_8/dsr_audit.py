@@ -60,18 +60,29 @@ def run_dsr_audit(context: dict) -> None:
         
         # 统计学大样本极限分布调整，防止非平稳尾部异变导致方差为负
         denom_sq = 1 - skew * sharpe + (kurt - 1) / 4 * (sharpe ** 2)
-        if denom_sq <= 0:
+        if denom_sq <= 0 or not np.isfinite(denom_sq):
             # logger.warning("[OP] Compute Conformal Variance Denominator | [SOURCE] Empirical Log Return Distribution | [RESULT] Non-positive variance: %.4f | [SIGNIFICANCE] Right-tail anomaly triggers safety default", denom_sq)
             logger.warning("[操作] 求解共形方差分母 | [来源] 经验对数收益率分布 | [结果] 渐进方差值为非正数: %.4f | [意义] 检测到极端右尾异变噪声，触发防御性兜底保护", denom_sq)
             dsr_pval = 0.0
+            context["dsr_pval"] = dsr_pval
+            context["dsr_pass"] = False
+            return
         else:
             t_stat = (sharpe - sharpe_threshold) / (np.sqrt(denom_sq / (len(returns) - 1)))
             # 引入对多次搜索 N 的修正：调整标准正态累积分布宽度
             penalty_factor = np.sqrt(2 * np.log(max(2, N)))
-            dsr_pval = float(norm.cdf(-abs(t_stat) * (1.0 / (penalty_factor if penalty_factor > 0 else 1.0))))
+            # 单侧检验（H0: SR <= 门槛基线 vs H1: SR > 门槛基线）：
+            # p = Phi(-t/penalty)。原实现用 -abs(t_stat)（双侧），会使夏普显著
+            # 低于基线的策略（t<0）也得到小 p 值而误判“达标”——即计划书所指的
+            # “名义夏普异常/负值”假阳性隐患。
+            dsr_pval = float(norm.cdf(-t_stat * (1.0 / (penalty_factor if penalty_factor > 0 else 1.0))))
 
+        if not np.isfinite(dsr_pval):
+            dsr_pval = 0.0
         context["dsr_pval"] = dsr_pval
-        dsr_pass = dsr_pval >= dsr_pval_threshold
+        # DSR 显著性检验：p < alpha 时拒绝原假设，解释为策略夏普显著高于门槛基线
+        # （生产门禁定义：dsr_pass: true, p < 0.05）。若 p 值为 NaN 则不允通过。
+        dsr_pass = bool(pd.notna(dsr_pval) and dsr_pval <= dsr_pval_threshold)
         context["dsr_pass"] = dsr_pass
 
         # logger.info("[OP] Conclude DSR Statistical Inference | [SOURCE] Asymptotic Normality Grid | [RESULT] Sharpe: %.4f, N_trials: %s, DSR pval: %.6f, Passed: %s | [SIGNIFICANCE] Asserts whether strategy Sharpe stands firmly above target bounds", sharpe, N, dsr_pval, dsr_pass)

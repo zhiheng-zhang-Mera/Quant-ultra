@@ -551,7 +551,11 @@ def test_delisted_stock_interfaces_are_combined():
             return pd.DataFrame({"公司代码": ["600001"]})
         def stock_info_sz_delist(self):
             return pd.DataFrame({"证券代码": ["000003"]})
-    manager = type("Manager", (), {"_ak": Ak()})()
+    # 生产数据管理器通过 _bounded_source_call 封装超时/熔断；测试桩需提供同一接口。
+    manager = type("Manager", (), {
+        "_ak": Ak(),
+        "_bounded_source_call": lambda self, name, func, *args, **kwargs: func(*args, **kwargs),
+    })()
     assert set(_get_delisted_a_stocks(manager)) == {"600001.SH", "000003.SZ"}
 
 def test_point_in_time_atoms_respect_announcement_boundary(tmp_path):
@@ -646,6 +650,16 @@ def test_reconciliation_failure_freezes_non_live_orders_without_claiming_liquida
     assert result["kill_switch_report"]["status"]=="ORDER_GENERATION_FROZEN"
     assert not result["kill_switch_report"]["liquidation_attempted"]
 
+
+def test_reconciliation_pass_records_no_kill_switch_report():
+    """对账通过时必须写入明确的 NO_KILL_SWITCH_TRIGGERED 审计记录，
+    否则 Phase 9 输出契约会因 kill_switch_report=None 把“通过态”误判为缺失证据。"""
+    from Phase_9.shadow_reconciliation import enforce_reconciliation_gate
+    result = enforce_reconciliation_gate({"recon_passed": True})
+    assert result["trading_halted"] is False
+    assert result["kill_switch_report"]["status"] == "NO_KILL_SWITCH_TRIGGERED"
+    assert result["kill_switch_report"]["reason"] == "RECONCILIATION_PASSED"
+
 def test_reconciliation_fails_closed_without_target_portfolio():
     from Phase_9.shadow_reconciliation import run_shadow_reconciliation
     result=run_shadow_reconciliation({"config":{}})
@@ -696,3 +710,165 @@ def test_bounded_universe_filters_screening_cache(tmp_path):
     run_screening(context,Bus(),manager)
     assert context["assets"]==["600519.SH"]
     assert set(context["adv_data"])=={"600519.SH"}
+
+
+# ---------------------------------------------------------------------------
+# 8-9 update plan regression tests (P0/P1/P2 fixes)
+# ---------------------------------------------------------------------------
+
+def test_dsr_significance_requires_small_p_value():
+    """DSR 门禁方向：p < 0.05 表示夏普显著高于门槛基线 → 通过；
+    p 大（不显著）→ 不通过。原实现比较方向写反，会放行不显著策略并拒绝显著策略。"""
+    from Phase_8.dsr_audit import run_dsr_audit
+    rng = np.random.default_rng(0)
+    strong_returns = np.full(400, 0.0008) + rng.normal(0, 0.005, 400)
+    strong = {"daily_nav": pd.Series(100 * np.exp(np.cumsum(strong_returns))), "config": {"min_samples_for_dsr": 20}, "num_trials": 50}
+    run_dsr_audit(strong)
+    assert strong["dsr_pass"] is True
+    assert strong["dsr_pval"] < 0.05
+
+    flat = {"daily_nav": pd.Series(100 + np.sin(np.linspace(0, 4, 400)) * 0.001), "config": {"min_samples_for_dsr": 20}, "num_trials": 50}
+    run_dsr_audit(flat)
+    assert flat["dsr_pass"] is False
+
+    # 夏普低于门槛基线（0.50）时必须不通过；单侧 p = Phi(-t/penalty)，
+    # 不能因 abs(t) 的双侧化而把小 p 误判为“达标”。
+    rng_below = np.random.default_rng(0)
+    below_returns = np.full(600, 0.00012) + rng_below.normal(0, 0.0025, 600)
+    below = {"daily_nav": pd.Series(100 * np.exp(np.cumsum(below_returns))), "config": {"min_samples_for_dsr": 20}, "num_trials": 50}
+    run_dsr_audit(below)
+    assert below["nominal_sharpe"] < 0.5
+    assert below["dsr_pval"] > 0.05
+    assert below["dsr_pass"] is False
+
+
+def test_dsr_degenerate_variance_fails_closed():
+    """分母非正/非有限（极端右尾）时必须显式判失败，不能因 p=0 而通过。"""
+    from Phase_8.dsr_audit import run_dsr_audit
+    rng = np.random.default_rng(7)
+    r = np.where(rng.random(50) < 0.5, 0.1 * 0.001, -0.1 * 0.05)
+    r = r + rng.normal(0, 0.1 * 0.0002, 50)
+    context = {"daily_nav": pd.Series(100 * np.exp(np.cumsum(r))),
+               "config": {"min_samples_for_dsr": 20}, "num_trials": 50}
+    run_dsr_audit(context)
+    assert context["dsr_pass"] is False
+
+
+def test_coverage_handles_empty_and_nan_violations():
+    from Phase_8.coverage_test import run_christoffersen_test
+    dates = pd.date_range("2024-01-01", periods=300)
+    nav = pd.Series(np.exp(np.cumsum(np.full(300, 0.0008))), index=dates)
+    empty = {"daily_nav": nav, "violations": pd.Series([], dtype=float), "config": {}}
+    run_christoffersen_test(empty)
+    assert empty["empirical_coverage"] == 1.0
+    assert empty["christoffersen_pass"] is True
+    assert not pd.isna(empty["empirical_coverage"])
+
+    with_nan = {"daily_nav": nav, "violations": pd.Series([np.nan] * 300, index=dates), "config": {}}
+    run_christoffersen_test(with_nan)
+    assert not pd.isna(with_nan["empirical_coverage"])
+
+
+def test_coverage_sparse_violations_do_not_trigger_lr_false_alarm():
+    """违规次数极少（如 500+ 天仅 5 次）时 LR 独立性检验无统计效力，
+    应按容错保护退化为通过（p=1.0），仅以无条件覆盖率判定。"""
+    from Phase_8.coverage_test import run_christoffersen_test
+    dates = pd.date_range("2024-01-01", periods=500)
+    nav = pd.Series(np.exp(np.cumsum(np.full(500, 0.0005))), index=dates)
+    viol = pd.Series(0, index=dates)
+    for i in (50, 120, 210, 320, 430):
+        viol.iloc[i] = 1
+    context = {"daily_nav": nav, "violations": viol, "config": {}}
+    run_christoffersen_test(context)
+    assert context["empirical_coverage"] > 0.98
+    assert context["christoffersen_pass"] is True
+
+
+def test_stress_test_marks_out_of_window_scenarios_uncovered():
+    from Phase_8.stress_test import run_stress_test
+    dates = pd.date_range("2024-01-05", periods=200)
+    nav = pd.Series(np.exp(np.cumsum(np.full(200, 0.0005))), index=dates)
+    context = {"daily_nav": nav, "config": {}}
+    run_stress_test(context)
+    assert context["stress_drawdowns_covered"]["2015_liq"] is False
+    assert context["stress_drawdowns_covered"]["2016_meltdown"] is False
+    assert context["stress_drawdowns_covered"]["2024_microcap"] is True
+
+
+def test_cio_report_is_strict_json_without_nan(tmp_path):
+    import json as jsonlib
+    import Phase_10.step10_cio_reporting as phase10
+    context = {
+        "run_metadata": {"timestamp": "test_strict_json"},
+        "audit_summary": {"stress_drawdowns": {"2015_liq": float("nan"), "2024_microcap": -0.12}},
+        "audit_passed": False,
+        "final_nav": 100.0,
+        "reconciliation_mae": 0.001,
+        "recon_passed": True,
+        "psi_consecutive_breaches": 0,
+        "_completed_phases": {"Phase_8.step8_audit_stress_test", "Phase_9.step9_live_mlops"},
+    }
+    result = phase10.execute(context)
+    path = result["cio_report_path"]
+    payload = jsonlib.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["decision"] == "HOLD_FOR_REVIEW"
+    assert payload["evidence"]["audit_summary"]["stress_drawdowns"]["2015_liq"] is None
+    assert payload["evidence"]["audit_summary"]["stress_drawdowns"]["2024_microcap"] == -0.12
+
+
+def test_reconciliation_ceiling_aligns_to_production_gate():
+    from Phase_9.config import DEFAULT_MLOPS_CONFIG
+    assert DEFAULT_MLOPS_CONFIG["reconciliation_mae_ceiling"] == 0.01
+
+
+def test_board_lot_alignment_rounds_targets_to_lots():
+    from Phase_6.step6_position_sizing import apply_execution_alignment
+    dates = pd.date_range("2024-01-01", periods=5)
+    frame = pd.DataFrame({"close": [10.0] * 5}, index=dates)
+    context = {
+        "config": {"board_lot_rounding": True, "min_trade_weight": 0.0, "cash_buffer_weight": 0.05},
+        "bulk_history_cache": {"600519.SH": frame},
+    }
+    assets = ["600519.SH"]
+    nav = 1_000_000.0
+    weights = apply_execution_alignment(context, dates[2], np.array([0.25]), np.array([0.0]), nav, assets)
+    shares = weights[0] * nav / 10.0
+    assert abs(shares - round(shares / 100) * 100) < 1e-6
+    assert weights[0] > 0
+
+
+def test_min_trade_weight_suppresses_micro_rebalances():
+    from Phase_6.step6_position_sizing import apply_execution_alignment
+    context = {"config": {"min_trade_weight": 0.01, "board_lot_rounding": False}}
+    weights = apply_execution_alignment(context, pd.Timestamp("2024-01-01"), np.array([0.20, 0.11]), np.array([0.20, 0.10]), 1e7, ["A", "B"])
+    assert weights[0] == 0.20
+    assert weights[1] == 0.10
+
+
+def test_rolling_zscore_uses_only_past_window():
+    from Phase_5.step_5_2_3_features import apply_rolling_zscore
+    cube = np.ones((100, 1, 1), dtype=float)
+    cube[20:, 0, 0] = 100.0
+    z = apply_rolling_zscore(cube, lookback=60, min_periods=20)
+    # 跳跃前的点只应使用历史窗口（全部为 1 → 均值为 1、标准差为 0 → 中性 0），
+    # 不受未来第 20 天跳跃的影响；跳跃当天及之后才被标准化为正值。
+    assert z[19, 0, 0] == 0.0
+    assert z[20, 0, 0] > 0.0
+    assert np.isfinite(z).all()
+
+
+def test_live_kill_switch_liquidates_positions():
+    from Phase_9.shadow_reconciliation import trigger_physical_hard_kill_switch
+    class FakeEngine:
+        holdings = {"600519.SH": 100.0, "000001.SZ": 200.0}
+        cash = 100.0
+        def calc_nav(self):
+            return 1_000_000.0
+    class FakeGateway:
+        def close_all_market_positions(self):
+            self.closed = True
+    gateway = FakeGateway()
+    report = trigger_physical_hard_kill_switch(FakeEngine(), gateway)
+    assert report["status"] == "TOTAL_LIQUIDATION_EXECUTED"
+    assert report["liquidated_assets"][0] == "ALL_LIVE_PORTFOLIO_LIQUIDATED"
+    assert getattr(gateway, "closed", False) is True
