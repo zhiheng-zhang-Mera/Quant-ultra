@@ -122,6 +122,9 @@ class RotationParams:
     capital_base: float = 100_000.0          # CNY account size used to model min commission & board lots
     enable_board_lots: bool = True           # round orders to 100-share (200 for STAR) lots
     slippage_rate: float = 0.0002            # per-side slippage fraction on traded notional
+    # ---- optional strategy-selection layer (evidence-gated, default off) ----
+    strategy_selector: str = ""              # "" = disabled; "hysteresis" enables the rule-based switcher
+    selector_min_stay: int = 4               # consecutive rebalances required before switching archetype
 
 
 @dataclass
@@ -641,7 +644,9 @@ def weekly_rotation_backtest(
     equity_peak = 1.0
     risk_off = False
     dd_guard_active = False
+    base_params = params
     gross_ceiling = float(params.max_gross_exposure)
+    selector = None
 
     for idx, date in enumerate(simulation):
         next_date = common[common.get_loc(date) + 1]
@@ -874,6 +879,16 @@ def weekly_rotation_backtest(
                             pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
 
         if is_rebalance_day:
+            if params.strategy_selector:
+                # Evidence-gated strategy layer: choose an archetype with
+                # hysteresis, then run this rebalance under that archetype's
+                # parameter overrides. Base parameters stay pristine so the
+                # archetype swap never accumulates stale overrides.
+                from Main.strategy_selector import StrategySelector, build_archetype_params
+                if selector is None:
+                    selector = StrategySelector(min_stay=params.selector_min_stay)
+                archetype = selector.select(panel, date, base_params)
+                params = build_archetype_params(base_params, archetype)
             if selection_predictor is not None:
                 epoch = idx // params.rebalance_days
                 selection_predictor.fit_if_due(epoch, panel.close, panel.volume, panel.amount, panel.common, date)

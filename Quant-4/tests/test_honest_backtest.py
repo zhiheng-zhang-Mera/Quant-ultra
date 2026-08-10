@@ -12,6 +12,7 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
 from Main.pit_dividends import load_dividend_cash, trailing_dividend_yield
+from Main.strategy_selector import STRATEGY_ARCHETYPES, StrategySelector, build_archetype_params
 from Main.trading_costs import explicit_order_fees
 from Main.weekly_rotation import RotationParams, weekly_rotation_backtest
 
@@ -153,3 +154,40 @@ def test_pit_dividend_cache_roundtrip(tmp_path):
     assert wide is not None
     assert "600000.SH" in wide.columns
     assert len(wide) == 2
+
+
+def test_archetype_overrides_never_enable_leverage():
+    """Every named archetype must stay leverage-free and long-only."""
+    base = RotationParams()
+    for name in STRATEGY_ARCHETYPES:
+        p = build_archetype_params(base, name)
+        assert p.max_gross_exposure <= 1.0
+        assert p.confirm_leverage == 1.0
+        assert p.bull_leverage == 1.0
+        assert p.hedge_etf == ""
+
+
+def test_selector_hysteresis_requires_min_stay():
+    """The selector must not flip on a single rebalance."""
+    sel = StrategySelector(min_stay=3)
+    # force state: bear + high vol -> defensive, bull + high breadth -> momentum
+    class FakePanel:
+        def __init__(self):
+            idx = pd.bdate_range("2023-01-02", periods=300)
+            self.bench_close = pd.Series([0.9] * 300, index=idx)   # below MAs -> BEAR
+            self.bench_ma_fast = pd.Series([0.98] * 300, index=idx)
+            self.bench_ma_slow = pd.Series([1.0] * 300, index=idx)
+            self.bench_ma_confirmation = pd.Series([1.0] * 300, index=idx)
+            self.bench_return_20d = pd.Series([-0.01] * 300, index=idx)
+            self.close = pd.DataFrame({"A": [10.0] * 300, "B": [10.0] * 300}, index=idx)
+            self.momentum = {120: pd.DataFrame({"511010.SH": [0.03] * 300, "A": [0.1] * 300}, index=idx)}
+    panel = FakePanel()
+    base = RotationParams(defensive_hold_assets=("511010.SH",), regime_ma=40, regime_ma_fast=10, regime_confirmation_ma=200)
+    date = pd.Timestamp("2024-02-15")
+    assert sel.select(panel, date, base) == "balanced"       # first call starts balanced
+    assert sel.select(panel, date, base) == "balanced"       # stay_count=1 < 3
+    assert sel.select(panel, date, base) == "defensive"      # stay_count=3 >= min_stay
+
+
+def _mk_close(level: float) -> pd.Series:
+    return pd.Series([level] * 300, index=pd.bdate_range("2023-01-02", periods=300))
