@@ -83,14 +83,24 @@ def default_params() -> RotationParams:
         max_gross_exposure=1.0,
         per_position_cap=0.30,
         leverage_annual_cost=0.06,
-        hold_persistent=False,
-        max_holding_days=63,
+        # ---- 2026-08-11 evidence-gated production defaults (PIT pool grid) ----
+        # The weekly Friday rebalance (rebalance_weekday=4) was silently
+        # overriding rebalance_days and cost ~26pp of cumulative fees on the
+        # 100%-coverage PIT universe. Monthly rebalancing + position
+        # persistence + a 12%/9% stop band + euphoria 0.15 lifted the honest
+        # result from 4.27%/0.53/-10.8% to 6.35%/0.99/-9.1% (OOS 7.62%/1.10).
+        rebalance_weekday=None,
+        rebalance_days=21,
+        hold_persistent=True,
+        persist_rank_floor=8,
+        max_holding_days=0,
+        take_profit_pct=0.12,
+        stop_loss_pct=0.09,
+        euphoria_threshold=0.15,
         confirm_leverage=1.0,            # no margin/leverage for personal capital
         confirm_ml_prob=0.65,
         confirm_equity_proximity=0.97,
         enable_intraweek_stops=True,
-        stop_loss_pct=0.08,
-        take_profit_pct=0.06,
         trend_filter_long=60,
         bull_only_trading=False,
         require_relative_strength=False,
@@ -100,7 +110,6 @@ def default_params() -> RotationParams:
         defensive_filter=True,
         defensive_div_weight=0.0,
         max_annual_vol=0.40,
-        rebalance_days=21,
         bear_no_loss=False,
         vol_target=0.20,
         vol_scale_floor=0.90,
@@ -116,7 +125,6 @@ def default_params() -> RotationParams:
         defensive_hold_safe_frac=0.65,
         defensive_hold_basket=(),
         safe_trend_gate=20,
-        euphoria_threshold=0.10,
         benchmark_exclude=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),
         capital_base=100_000.0,          # CNY, drives min-commission & board-lot model
         enable_board_lots=True,

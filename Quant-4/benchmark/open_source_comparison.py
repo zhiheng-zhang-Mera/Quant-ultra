@@ -122,17 +122,17 @@ REFERENCE_STRATEGIES: List[Dict] = [
 
 
 OURS_FULL = {
-    "name": "Quant-Ultra weekly rotation (PIT full-universe, honest)",
+    "name": "Quant-Ultra monthly rotation (PIT full-universe, honest)",
     "source": "this repo, 2016-2026, 100k CNY, PIT universe 5475 names, real fees, no leverage",
     "market": "A-share large caps + ETFs", "period": "2016-2026",
-    "ann": 0.0427, "sharpe": 0.5284, "mdd": -0.1081, "calmar": 0.3950,
-    "note": "full-window, 100% survivorship-free PIT universe; quarterly win vs CSI300 48.8%",
+    "ann": 0.0635, "sharpe": 0.9907, "mdd": -0.0909, "calmar": 0.6979,
+    "note": "full-window, 100% survivorship-free PIT universe; quarterly win vs CSI300 53.5%",
 }
 OURS_OOS = {
-    "name": "Quant-Ultra weekly rotation (PIT OOS 2022+)",
+    "name": "Quant-Ultra monthly rotation (PIT OOS 2022+)",
     "source": "this repo, 2022-2026",
     "market": "A-share large caps + ETFs", "period": "2022-2026",
-    "ann": 0.0290, "sharpe": 0.3805, "mdd": -0.1067, "calmar": 0.2718,
+    "ann": 0.0762, "sharpe": 1.1042, "mdd": -0.0909, "calmar": 0.8385,
     "note": "out-of-sample window (single regime so far)",
 }
 

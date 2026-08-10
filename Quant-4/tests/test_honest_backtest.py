@@ -75,6 +75,30 @@ def test_production_defaults_are_leverage_free():
     assert p.hedge_etf == ""
 
 
+def test_production_defaults_are_monthly_persistent_config():
+    """The 2026-08-11 evidence-gated production default (PIT pool grid):
+    monthly rebalancing (weekly Friday override removed), position
+    persistence without a forced rotation cap, a 12%/9% stop band, and
+    euphoria threshold 0.15. All leverage-free."""
+    import sys
+    from pathlib import Path
+    ROOT = Path(__file__).parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from run_weekly_rotation import default_params
+
+    p = default_params()
+    assert p.rebalance_weekday is None
+    assert p.rebalance_days == 21
+    assert p.hold_persistent is True
+    assert p.persist_rank_floor == 8
+    assert p.max_holding_days == 0
+    assert p.take_profit_pct == 0.12
+    assert p.stop_loss_pct == 0.09
+    assert p.euphoria_threshold == 0.15
+    assert p.confirm_leverage == 1.0 and p.max_gross_exposure <= 1.0
+
+
 def test_defensive_filter_uses_strict_positive_dividend():
     """A dense dividend panel where most names pay nothing must not make the
     defensive filter pass the whole universe: outside BULL only dividend
