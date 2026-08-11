@@ -88,14 +88,16 @@ def default_params() -> RotationParams:
         # overriding rebalance_days and cost ~26pp of cumulative fees on the
         # 100%-coverage PIT universe. Monthly rebalancing + position
         # persistence + a 12%/9% stop band + euphoria 0.15 lifted the honest
-        # result from 4.27%/0.53/-10.8% to 6.35%/0.99/-9.1% (OOS 7.62%/1.10).
+        # result from 4.27%/0.53/-10.8% to 6.35%/0.99/-9.1% (OOS 7.62%/1.10);
+        # the 2026-08-11 Calmar push (30+ configs) added safe-asset share 0.75
+        # and disabled vol-targeting: 6.25%/1.00/-7.65% (Calmar 0.82, OOS 1.07).
         rebalance_weekday=None,
         rebalance_days=21,
         hold_persistent=True,
         persist_rank_floor=8,
         max_holding_days=0,
         take_profit_pct=0.12,
-        stop_loss_pct=0.09,
+        stop_loss_pct=0.07,
         euphoria_threshold=0.15,
         confirm_leverage=1.0,            # no margin/leverage for personal capital
         confirm_ml_prob=0.65,
@@ -111,7 +113,7 @@ def default_params() -> RotationParams:
         defensive_div_weight=0.0,
         max_annual_vol=0.40,
         bear_no_loss=False,
-        vol_target=0.20,
+        vol_target=0.0,
         vol_scale_floor=0.90,
         drawdown_guard=0.0,
         drawdown_guard_max=0.14,
@@ -122,7 +124,7 @@ def default_params() -> RotationParams:
         event_shock_exposure=0.70,
         defensive_hold_assets=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),
         defensive_hold_exposure=1.0,
-        defensive_hold_safe_frac=0.65,
+        defensive_hold_safe_frac=0.75,
         defensive_hold_basket=(),
         safe_trend_gate=20,
         benchmark_exclude=("511010.SH", "511260.SH", "518880.SH", "511880.SH"),

@@ -94,8 +94,10 @@ def test_production_defaults_are_monthly_persistent_config():
     assert p.persist_rank_floor == 8
     assert p.max_holding_days == 0
     assert p.take_profit_pct == 0.12
-    assert p.stop_loss_pct == 0.09
+    assert p.stop_loss_pct == 0.07
     assert p.euphoria_threshold == 0.15
+    assert p.defensive_hold_safe_frac == 0.75
+    assert p.vol_target == 0.0
     assert p.confirm_leverage == 1.0 and p.max_gross_exposure <= 1.0
 
 

@@ -72,6 +72,122 @@ CONFIGS = {
         "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
         "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
     },
+    # ---- Calmar >= 1.0 push (2026-08-11): drawdown compression ----
+    "ddg08": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
+        "drawdown_guard": 0.08, "drawdown_guard_max": 0.14, "dd_guard_exposure": 0.35,
+    },
+    "ddg06": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
+        "drawdown_guard": 0.06, "drawdown_guard_max": 0.12, "dd_guard_exposure": 0.30,
+    },
+    "safefrac75": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
+        "defensive_hold_safe_frac": 0.75,
+    },
+    "sl07": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+    },
+    "daily_mon": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
+        "daily_regime_monitoring": True,
+    },
+    "daily_mon_ddg": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "daily_regime_monitoring": True, "drawdown_guard": 0.06, "dd_guard_exposure": 0.25,
+    },
+    "vol15": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "vol_target": 0.15,
+    },
+    "safefrac75_sl07": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "defensive_hold_safe_frac": 0.75,
+    },
+    "ddg_sanity": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.09,
+        "drawdown_guard": 0.05, "drawdown_guard_max": 0.08, "dd_guard_exposure": 0.05,
+    },
+    "bg_sl07_sf75": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "enable_intraweek_stops": True, "take_profit_pct": 0.15, "stop_loss_pct": 0.07,
+        "euphoria_threshold": 0.15, "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "defensive_hold_safe_frac": 0.75,
+    },
+    "conc20": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "per_position_cap": 0.20, "max_annual_vol": 0.30,
+    },
+    "monthly_momentum": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "defensive_core": False, "defensive_filter": False, "defensive_core_bull_momentum": False,
+        "require_relative_strength": True, "top_n": 8, "per_position_cap": 0.15,
+        "hold_persistent": True, "persist_rank_floor": 12, "max_holding_days": 0,
+        "stop_loss_pct": 0.08, "take_profit_pct": 0.15, "euphoria_threshold": 0.15,
+    },
+    "vtoff": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "vol_target": 0.0,
+    },
+    "vtoff_sf75": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "vol_target": 0.0, "defensive_hold_safe_frac": 0.75,
+    },
+    "vtoff_tp15": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.15, "stop_loss_pct": 0.07,
+        "vol_target": 0.0,
+    },
+    "bull_hold": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "defensive_hold_safe_frac": 0.75, "bull_benchmark_hold": True,
+    },
+    "bull_hold_euph25": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.25, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "defensive_hold_safe_frac": 0.75, "bull_benchmark_hold": True,
+    },
+    "bull_hold_shock": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "defensive_hold_safe_frac": 0.75, "bull_benchmark_hold": True,
+        "event_shock_threshold": 0.015, "event_shock_exposure": 0.30,
+    },
+    "bull_hold_sf85": {
+        "rebalance_weekday": None, "rebalance_days": 21,
+        "hold_persistent": True, "persist_rank_floor": 8, "max_holding_days": 0,
+        "euphoria_threshold": 0.15, "take_profit_pct": 0.12, "stop_loss_pct": 0.07,
+        "defensive_hold_safe_frac": 0.85, "bull_benchmark_hold": True,
+    },
 }
 
 

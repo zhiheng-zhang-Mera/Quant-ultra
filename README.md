@@ -83,10 +83,10 @@ flowchart TD
 
 | 指标 | 诚实回测（PIT 全市场 5475 只、覆盖 100%、月频、显式费用、整手、无杠杆） | 目标 / 对照 |
 |---|---|---|
-| 年化收益 | **6.35%**（OOS 2022+：7.62%） | 沪深300(510300) 5.33% ✅ |
-| 夏普比率 | **0.99**（OOS 1.10） | ≥0.9 ✅ |
-| 卡玛比率 | **0.70**（OOS 0.84） | ≥1.2 ❌ 未达 |
-| 最大回撤 | **-9.09%** | 沪深300 -44.75% ✅ |
+| 年化收益 | **6.25%**（OOS 2022+：6.95%） | 沪深300(510300) 5.33% ✅ |
+| 夏普比率 | **1.00**（OOS 1.07） | ≥0.9 ✅ |
+| 卡玛比率 | **0.82**（OOS 0.91） | ≥1.2 ❌ 未达 |
+| 最大回撤 | **-7.65%** | 沪深300 -44.75% ✅ |
 | 回撤修复期（近3年窗口） | **110 交易日** | ≤126 ✅ |
 | 回撤修复期（全窗口，披露） | 629 日 | 披露 |
 | 季度超沪深300胜率 | 53.5% | ≥60% ❌ 未达 |
@@ -95,7 +95,7 @@ flowchart TD
 | 杠杆 | 0.00x（禁用） | ✅ |
 | 平均总仓位 | ~70% | — |
 
-> **2026-08-11 里程碑**：股票池已改为"全 A 股曾上市 + 退市股"的 PIT 池（5475 只，含 248 只窗口内退市股，覆盖率 100%）。关键修复：原生产配置的 `rebalance_weekday=4` 使再平衡实际为每周五（`rebalance_days=21` 被覆盖），累计成本高达 38%；改为月频 + 持仓延续 + 12%/9% 止盈止损带 + 亢奋阈值 0.15 后，诚实全池成绩从 4.27%/0.53/-10.8% 提升到 **6.35%/0.99/-9.1%**（OOS 7.62%/1.10），跑赢沪深300 且回撤仅为指数的五分之一。
+> **2026-08-11 里程碑**：股票池已改为"全 A 股曾上市 + 退市股"的 PIT 池（5475 只，含 248 只窗口内退市股，覆盖率 100%）。关键修复：原生产配置的 `rebalance_weekday=4` 使再平衡实际为每周五（`rebalance_days=21` 被覆盖），累计成本高达 38%；改为月频 + 持仓延续 + 12%/7% 止盈止损带 + 亢奋阈值 0.15 + 避险占比 0.75 后，诚实全池成绩提升到 **6.25%/1.00/-7.65%**（OOS 6.95%/1.07），卡玛 0.82（30+ 配置网格后的最优，≥1.0 受无杠杆长多月频的结构性限制，详见计划文档）。
 
 ![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
 
@@ -107,7 +107,7 @@ flowchart TD
 
 - 引擎已拆解并插入可选**策略决策层**（`Quant-4/Main/strategy_selector.py`：balanced / momentum / defensive / safe 四个原型 + 滞回切换），用样本外证据门控：选择器 OOS 夏普 1.40 低于最优固定原型 defensive 1.72，**生产默认保持禁用**（`strategy_selector=""`），避免“为自适应而自适应”的过拟合。
 - 2026-08-11 参数网格（月频+持仓延续+止盈带）将诚实成绩提升到 **6.35%/0.99**；早期“safe 7.71%”等数字被证实为稀疏股息面板导致的候选池坍缩伪影，已撤销。
-- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.76**、OOS **0.86**（≥0.70 = 前 30% ✅）；回撤百分位 0.92（参考集最优区间）。
+- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.86**、OOS **0.92**（≥0.70 = 前 30% ✅）；回撤百分位 1.00（参考集最优）。
 
 ### ✦ 快速开始
 
@@ -241,10 +241,10 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 
 | Metric | Honest backtest (PIT universe 5,475 names, 100% coverage, monthly, explicit fees, board lots, no leverage) | Target / benchmark |
 |---|---|---|
-| Annual return | **6.35%** (OOS 2022+: 7.62%) | CSI300 (510300) 5.33% ✅ |
-| Sharpe | **0.99** (OOS 1.10) | ≥0.9 ✅ |
-| Calmar | **0.70** (OOS 0.84) | ≥1.2 ❌ not met |
-| Max drawdown | **-9.09%** | CSI300 -44.75% ✅ |
+| Annual return | **6.25%** (OOS 2022+: 6.95%) | CSI300 (510300) 5.33% ✅ |
+| Sharpe | **1.00** (OOS 1.07) | ≥0.9 ✅ |
+| Calmar | **0.82** (OOS 0.91) | ≥1.2 ❌ not met |
+| Max drawdown | **-7.65%** | CSI300 -44.75% ✅ |
 | Recovery (last-3y window) | **110 trading days** | ≤126 ✅ |
 | Recovery (full window, disclosed) | 629 d | disclosed |
 | Quarterly win vs CSI 300 | 53.5% | ≥60% ❌ not met |
@@ -253,7 +253,7 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 | Leverage | 0.00x (disabled) | ✅ |
 | Average gross exposure | ~70% | — |
 
-> **2026-08-11 milestone**: the universe is the full ever-listed A-share PIT pool (5,475 names incl. 248 delisted, 100% coverage). Key fix: the old `rebalance_weekday=4` silently made rebalancing weekly (costing ~26pp cumulative fees); monthly rebalancing + persistence + a 12%/9% stop band + euphoria 0.15 lifted the honest all-pool result from 4.27%/0.53/-10.8% to **6.35%/0.99/-9.1%** (OOS 7.62%/1.10), beating CSI300 with ~1/5 of its drawdown. See `Quant-4/update plans/8-10-pit-universe-plan.md`.
+> **2026-08-11 milestone**: the universe is the full ever-listed A-share PIT pool (5,475 names incl. 248 delisted, 100% coverage). Key fix: the old `rebalance_weekday=4` silently made rebalancing weekly (costing ~26pp cumulative fees); monthly rebalancing + persistence + a 12%/7% stop band + euphoria 0.15 + 75% safe-asset share lifted the honest all-pool result to **6.25%/1.00/-7.65%** (OOS 6.95%/1.07), Calmar 0.82 (best of a 30+-config grid; ≥1.0 is structurally capped for a no-leverage long-only monthly strategy). See `Quant-4/update plans/8-10-pit-universe-plan.md`.
 
 ![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
 
@@ -265,7 +265,7 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 
 - The engine is decomposed with an optional **strategy-selection layer** (`Quant-4/Main/strategy_selector.py`: balanced / momentum / defensive / safe archetypes + hysteresis), gated on out-of-sample evidence: the selector's OOS Sharpe 1.40 is below the best fixed archetype (defensive 1.72), so **production keeps it disabled** (`strategy_selector=""`) to avoid overfitting for adaptation's sake.
 - The 2026-08-11 parameter grid (monthly + persistence + stop band) lifted the honest result to **6.35%/0.99**; earlier "safe 7.71%" style numbers were artifacts of the sparse dividend panel collapsing the candidate pool and were retracted.
-- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.76** full-window / **0.86** OOS (≥0.70 = top 30% ✅); drawdown percentile 0.92 (best-in-set region).
+- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.86** full-window / **0.92** OOS (≥0.70 = top 30% ✅); drawdown percentile 1.00 (best in set).
 
 ### ✦ Quick Start
 

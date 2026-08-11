@@ -94,6 +94,8 @@ class RotationParams:
     drawdown_recovery_ma: int = 20           # kept for backwards compatibility (unused by continuous guard)
     neutral_benchmark_hold: bool = False     # hold broad ETF instead of cash in NEUTRAL
     neutral_benchmark_symbol: str = "510300.SH"
+    bull_benchmark_hold: bool = False        # hold broad ETF in BULL (index participation)
+    bull_benchmark_symbol: str = "510300.SH"
     rebalance_weekday: Optional[int] = 4     # align rebalances to Fridays (0=Mon..4=Fri)
     regime_benchmark_symbols: Optional[Tuple[str, ...]] = None  # subset for regime
     hold_persistent: bool = True             # keep a name while still top-2K or trend intact
@@ -1002,6 +1004,14 @@ def weekly_rotation_backtest(
                 neutral_target = {symbol: 0.0 for symbol in symbols}
                 neutral_target[params.neutral_benchmark_symbol] = min(regime.exposure, 1.0)
                 pending = {"signal_date": date, "execution_date": next_date, "target": neutral_target}
+                continue
+            if params.bull_benchmark_hold and regime.regime == "BULL" and params.bull_benchmark_symbol in symbols:
+                # Index participation in confirmed bull regimes: hold the broad
+                # ETF instead of concentrated single-name momentum picks, which
+                # historically lagged the rally (BULL +7% vs market +25%+).
+                bull_target = {symbol: 0.0 for symbol in symbols}
+                bull_target[params.bull_benchmark_symbol] = min(regime.exposure, params.max_gross_exposure)
+                pending = {"signal_date": date, "execution_date": next_date, "target": bull_target}
                 continue
             ranked = rank_candidates(panel, date, params, win_probs, regime)
             ranked_symbols = [s for s, _, _ in ranked]
