@@ -84,6 +84,10 @@ def main() -> int:
     parser.add_argument("--stops-atr-tp-mult", type=float, default=None)
     parser.add_argument("--balanced-max-ret", type=float, default=0.0,
                         help="MAX-effect factor weight on the balanced sleeve (0 = off)")
+    parser.add_argument("--persist-rank-floor", type=int, default=12,
+                        help="hold_persistent rank floor for every sleeve "
+                             "(sleeve-layer default 12 = PIT-gate-validated; "
+                             "pass 8 to match the single-book production base)")
     args = parser.parse_args()
 
     alive_mask = None
@@ -104,6 +108,7 @@ def main() -> int:
 
     params = default_params()
     params.start_date = args.start or params.start_date
+    params.persist_rank_floor = args.persist_rank_floor
     if args.dynamic_stops:
         params.dynamic_stops = True
         if args.stops_atr_sl_mult is not None:
