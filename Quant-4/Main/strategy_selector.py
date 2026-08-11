@@ -68,10 +68,13 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
     # 8/5 stop band scored 2.75%/0.47 on the honest full-pool gate - the 5%
     # stop churned positions and the signal was not differentiated from the
     # momentum sleeve. v2 uses a dedicated breakout/new-high factor
-    # (breakout_weight 0.35 on the 60d-high proximity z-score), keeps top-2
-    # concentration with a 40% single-name cap, and widens the band to
-    # 15%/8% so strong trends are not stopped out early. Only meaningful as a
-    # small sleeve inside the 40/30/20/10 portfolio (see Main.sleeve_allocation).
+    # (breakout_weight 0.35 on the 60d-high proximity z-score; 0.50 was tried
+    # and rejected by the honest PIT gate: mix OOS 6.91%/1.11/-8.42% vs
+    # 0.35's 7.11%/1.14/-7.99% - the fast-pool edge did not survive the
+    # survivorship-free pool), keeps top-2 concentration with a 40% single-
+    # name cap, and widens the band to 15%/8% so strong trends are not
+    # stopped out early. Only meaningful as a small sleeve inside the
+    # 40/30/20/10 portfolio (see Main.sleeve_allocation).
     "sprint": {
         "top_n": 2,
         "momentum_windows": (5, 20),
