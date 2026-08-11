@@ -88,6 +88,8 @@ def main() -> int:
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
                              "pass 8 to match the single-book production base)")
+    parser.add_argument("--sleeve-sprint-min-adv", type=float, default=None,
+                        help="min_adv override for the sprint sleeve (e.g. 50000000)")
     args = parser.parse_args()
 
     alive_mask = None
@@ -123,6 +125,14 @@ def main() -> int:
             if sleeve.archetype == "balanced":
                 overrides = dict(sleeve.overrides)
                 overrides["max_ret_weight"] = args.balanced_max_ret
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                break
+    if args.sleeve_sprint_min_adv is not None:
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.archetype == "sprint":
+                overrides = dict(sleeve.overrides)
+                overrides["min_adv"] = args.sleeve_sprint_min_adv
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 break

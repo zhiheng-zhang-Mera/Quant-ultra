@@ -73,8 +73,13 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
     # rejected by honest PIT gates: bw 0.50 (mix OOS 6.91%/1.11 vs 7.11/1.14)
     # and regime-adaptive scaling bull0.30/highvol0.50 (sprint 4.08%/0.52 vs
     # fixed 4.19%/0.54; BULL -15.3% vs -14.2% - the fixed weight wins).
-    # Only meaningful as a small sleeve inside the 40/30/20/10 portfolio (see
-    # Main.sleeve_allocation).
+    # PIT gate #7 (2026-08-12): min_adv lowered 1e8 -> 5e7 to open the
+    # mid-cap pool where A-share breakout/momentum alpha lives; sprint layer
+    # 4.19%/0.54 -> 5.47%/0.69, mix full-window 6.46% -> 6.58% (Sharpe
+    # 1.10 -> 1.11, Calmar 0.81 -> 0.82) at MDD -8.04% (-0.09pp deeper);
+    # OOS 7.14%/1.13 vs 7.20%/1.15 - within noise. Adopted as the sprint
+    # default. Only meaningful as a small sleeve inside the 40/30/20/10
+    # portfolio (see Main.sleeve_allocation).
     "sprint": {
         "top_n": 2,
         "momentum_windows": (5, 20),
@@ -97,7 +102,7 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
         "stop_loss_pct": 0.08,
         "enable_intraweek_stops": True,
         "max_annual_vol": 0.60,
-        "min_adv": 100_000_000.0,
+        "min_adv": 50_000_000.0,
     },
 }
 
