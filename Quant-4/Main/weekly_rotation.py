@@ -71,6 +71,13 @@ class RotationParams:
     breakout_weight: float = 0.0
     breakout_window: int = 60          # trailing high lookback (trading days)
     breakout_volume_confirm: bool = False  # require volume ratio >= 1 on breakouts
+    # Regime-adaptive breakout scaling (fixed-vs-dynamic evidence gate,
+    # 2026-08-11): the honest PIT gate showed the sprint's 60d-high breakout
+    # tilt loses in BULL (-14.2% vs momentum +8.9%) while winning in NEUTRAL.
+    # Scales < 1.0 fade the breakout factor in those regimes; 1.0 (default)
+    # keeps the fixed-weight behaviour byte-identical.
+    breakout_bull_scale: float = 1.0   # fade breakout chase in BULL (extension risk)
+    breakout_highvol_scale: float = 1.0  # fade in HIGH_VOL (breakout noise)
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -251,8 +258,13 @@ def composite_factor_scores(
     if "breakout" in z and params.breakout_weight > 0:
         # Renormalize the regime-adaptive weights so the breakout factor takes
         # its configured share and the total stays 1.0 (default 0 keeps the
-        # evidence-gated production score byte-identical).
+        # evidence-gated production score byte-identical). The share can be
+        # scaled down per regime (see breakout_bull_scale / highvol_scale).
         bw = float(np.clip(params.breakout_weight, 0.0, 1.0))
+        if state == "TREND_BULL":
+            bw *= float(getattr(params, "breakout_bull_scale", 1.0))
+        elif state == "HIGH_VOL":
+            bw *= float(getattr(params, "breakout_highvol_scale", 1.0))
         base_total = sum(weights.values())
         if base_total > 0:
             weights = {k: v / base_total * (1.0 - bw) for k, v in weights.items()}

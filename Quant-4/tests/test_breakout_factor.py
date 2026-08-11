@@ -76,11 +76,21 @@ def test_sprint_archetype_carries_breakout_signal():
     p = build_archetype_params(RotationParams(), "sprint")
     assert p.breakout_weight == 0.35
     assert p.breakout_window == 60
+    # regime-adaptive scaling was rejected by the honest PIT gate (fixed wins)
+    assert p.breakout_bull_scale == 1.0
+    assert p.breakout_highvol_scale == 1.0
     assert p.top_n == 2
     assert p.per_position_cap == 0.40
     assert p.take_profit_pct == 0.15
     assert p.stop_loss_pct == 0.08
     assert p.enable_intraweek_stops is True
+
+
+def test_breakout_regime_scale_defaults_preserve_behavior():
+    """Scales default to 1.0 so the fixed-weight score is unchanged."""
+    p = RotationParams(breakout_weight=0.35)
+    assert p.breakout_bull_scale == 1.0
+    assert p.breakout_highvol_scale == 1.0
 
 
 def test_breakout_changes_ranking_and_runs():
