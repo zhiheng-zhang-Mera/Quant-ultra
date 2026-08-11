@@ -63,6 +63,30 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
         "per_position_cap": 0.20,
         "top_n": 3,
     },
+    # Sprint: highest-conviction momentum book for the 10% allocation sleeve.
+    # Top-2 concentration, short-horizon momentum + reversal, no defensive
+    # filter, tight stop band. High turnover by design; only meaningful as a
+    # small sleeve inside the 40/30/20/10 portfolio (see Main.sleeve_allocation).
+    "sprint": {
+        "top_n": 2,
+        "momentum_windows": (5, 20),
+        "momentum_weights": (0.60, 0.40),
+        "reversal_1d_weight": 3.0,
+        "defensive_core": False,
+        "defensive_core_bull_momentum": False,
+        "defensive_filter": False,
+        "require_relative_strength": True,
+        "bull_exposure": 1.0,
+        "bear_exposure": 0.0,
+        "neutral_exposure": 0.0,
+        "min_top_momentum_gate": 0.02,
+        "max_short_term_gain": 0.30,
+        "per_position_cap": 0.50,
+        "take_profit_pct": 0.08,
+        "stop_loss_pct": 0.05,
+        "enable_intraweek_stops": True,
+        "max_annual_vol": 0.50,
+    },
 }
 
 

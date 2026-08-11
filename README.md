@@ -139,6 +139,7 @@ flowchart TD
 | `main.py --offline` | 全离线调试（仅缓存） |
 | `main.py --symbols 600519.SH,510300.SH` | 受限真实数据运行 |
 | `run_weekly_rotation.py --start 2020-01-01` | 自定义回测起点 |
+| `run_sleeve_portfolio.py [--pit] [--dynamic-stops]` | 四层 40/30/20/10 资金配置组合（保底/平衡/先锋/冲刺），可选动态 ATR 止盈止损 |
 | `run_adaptive_backtest.py <code> --kind etf --disable-self-optimize` | 禁用跨运行参数迭代的诊断模式 |
 
 ### ✦ 项目结构
@@ -175,6 +176,7 @@ git diff --check
 - [UserGuide.md](UserGuide.md) — 双语用户指南（安装、配置、运行、解读报告、故障排查）
 - `Quant-4/update plans/8-8-adaptive-model-frontier.md` — 自适应模型修正与四目标可行性证据档案
 - `Quant-4/update plans/8-9-update-plan.md` — 投产前迭代计划与诚实化减法记录
+- `Quant-4/update plans/8-11-sleeve-dynamic-stops.md` — 四层资金配置 + 动态止盈止损的解耦模块化设计与证据门控
 - `Quant-4/benchmark/open_source_comparison.py` — 开源对比排名脚本（排名见其生成的 JSON）
 
 ---

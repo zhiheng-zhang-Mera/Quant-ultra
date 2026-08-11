@@ -1,0 +1,76 @@
+# 四层资金配置 + 动态止盈止损（解耦模块化）迭代计划 (2026-08-11)
+
+## 1. 目标（用户指示）
+
+1. 把 **40% 保底 + 30% 平衡 + 20% 先锋 + 10% 冲刺** 的四层资金配置按**解耦化模块**插入现有引擎；
+2. 每次调仓的**止盈/止损点由底层向上动态决定**（per-symbol ATR 带，PIT）；
+3. 盈利后总资金**保持配额不变**（constant-mix 固定比例再平衡）；
+4. 提交并同步到 `8-10` 分支。
+
+## 2. 设计原则
+
+- **引擎零侵入**：`weekly_rotation_backtest` 仍是单账户单书回测；四层结构是引擎**外部**的组合器，只组合各层日收益。
+- **每层独立成书**：每层有自己的 archetype 参数、成本、持仓与止盈止损；层与层之间无共享状态。
+- **默认关闭**：生产默认（`run_weekly_rotation.py`）不加载任何新层；`dynamic_stops=False` 时引擎行为与 e3885f8 完全一致。
+- **证据门控**：新层必须先在诚实全 PIT 池上验证（`run_sleeve_portfolio.py --pit`），OOS 跑赢单书基线才允许成为生产默认。
+
+## 3. 新增模块
+
+| 模块 | 职责 | 依赖 |
+|---|---|---|
+| `Main/dynamic_stops.py` | Wilder ATR(14) 向量化计算 + PIT 止盈/止损带（`stop=k_sl·ATR/price`、`take=k_tp·ATR/price`，带地板/上限与 `take≥1.15·stop`） | 纯函数，不 import 引擎 |
+| `Main/sleeve_allocation.py` | `SleeveSpec`/`SleevePortfolioConfig`/`combine_sleeves`/`run_sleeve_portfolio`：各层独立回测 → 月度固定配额再平衡（偏离>3pp 触发）→ 层间换手成本 0.17% | 复用 `weekly_rotation_backtest` + `summarize` |
+| `run_sleeve_portfolio.py` | CLI：`--pit / --weights / --dynamic-stops / --rebalance-days / --threshold`，输出 JSON + CSV | — |
+| `strategy_selector.py` | 新增 `sprint` 原型（top2、5/20 动量、无防御过滤、8/5 止盈止损带） | 既有 archetype 体系 |
+
+引擎侧仅加了两处**可选钩子**：
+
+- `RotationParams` 新增 `dynamic_stops` 及 `stops_*` 参数（默认全关）；
+- `precompute_panels` 在 `dynamic_stops=True` 时一次性预计算全面板止盈/止损带；盘中检查块按 `band_at()` 读取每只持仓当日的带（NaN 回退静态 12/7）。
+
+## 4. 证据（方向性，生产池 42 只，2016-01 ~ 2026-08，10 万本金，无杠杆）
+
+> 生产池存在幸存者偏差，仅验证**机制**；诚实结论必须以 `--pit` 全池为准。
+
+| 配置 | 年化 | 夏普 | 卡玛 | 回撤 | OOS 夏普 |
+|---|---|---|---|---|---|
+| 单书 100% 平衡（现状） | 7.33% | 1.32 | 1.33 | -5.53% | 1.58 |
+| 四层 40/30/20/10 固定配额 | 7.59% | **1.43** | 1.32 | -5.76% | 1.59 |
+| 四层 + 动态止盈止损 | 6.49% | 1.40 | **1.63** | **-3.98%** | — |
+| 动态：波动率平价 | 6.64% | 1.30 | 1.20 | -5.54% | 1.57 |
+| 动态：体制倾斜 | 7.14% | 1.34 | 1.22 | -5.84% | 1.52 |
+
+结论：
+
+1. 固定 40/30/20/10 比单书夏普高 ~0.1，属温和改善；四层相关性 0.71–0.97，分散有限；
+2. **动态调仓（波动率平价/体制倾斜）输给固定配额**——与仓库既有证据一致（selector 门控禁用、每日监控反噬）；
+3. 固定配额再平衡累计层间成本仅 0.01%（相关性高、漂移小），"盈利后保持配额"几乎免费；
+4. 动态 ATR 止盈止损在方向性测试中提高夏普（1.35 vs 1.32）并显著降回撤（-5.13% vs -5.53%），但收益略降；需在 PIT 全池复验。
+
+## 5. 测试与验收
+
+- 新增 `tests/test_dynamic_stops.py`（6 项）：ATR 精确性、PIT 性、边界、默认关闭、引擎钩子；
+- 新增 `tests/test_sleeve_allocation.py`（6 项）：constant-mix 恢复、阈值、漂移、40/30/20/10 默认、sprint 原型、端到端组合；
+- 全套 **109 项通过**（原 97 + 新 12）；
+- 生产默认行为不变：`run_weekly_rotation.py` 输出与 e3885f8 一致（夏普 1.00、回撤 -7.65%）。
+
+## 6. 使用方式
+
+```powershell
+# 四层组合（生产池，方向性验证）
+python run_sleeve_portfolio.py
+
+# 四层 + 动态止盈止损
+python run_sleeve_portfolio.py --dynamic-stops
+
+# 诚实 PIT 全池证据门（单轮约 80 分钟）
+python run_sleeve_portfolio.py --pit
+
+# 单独动态止损回测
+python -c "from run_weekly_rotation import *; ..."
+```
+
+## 7. 下一步
+
+- `--pit` 全池证据门：四层 + 动态止损若 OOS 2022+ 跑赢单书基线（夏普、卡玛、季度胜率），才可升级为生产默认；
+- 若门控不通过，维持 `run_weekly_rotation` 为生产入口，新层保持"可选实验层"。

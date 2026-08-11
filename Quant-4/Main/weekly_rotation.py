@@ -50,6 +50,19 @@ class RotationParams:
     stop_loss_pct: float = 0.10        # intra-week catastrophic stop
     take_profit_pct: float = 0.15      # intra-week profit-taking exit
     enable_intraweek_stops: bool = False
+    # ---- bottom-up dynamic stop bands (decoupled module: Main.dynamic_stops) ----
+    # When enabled, each held symbol gets its own PIT ATR-scaled band instead
+    # of the two global constants above. Bands are precomputed once per
+    # backtest and only read for held symbols at each date; NaN falls back to
+    # the static band. Default off preserves the evidence-gated static band.
+    dynamic_stops: bool = False
+    stops_atr_window: int = 14         # Wilder ATR lookback (trading days)
+    stops_atr_sl_mult: float = 2.5     # stop-loss = k_sl * ATR / price
+    stops_atr_tp_mult: float = 4.0     # take-profit = k_tp * ATR / price
+    stops_floor: float = 0.04          # absolute floor for stop-loss fraction
+    stops_cap: float = 0.15            # absolute cap for stop-loss fraction
+    stops_take_floor: float = 0.06     # absolute floor for take-profit fraction
+    stops_take_cap: float = 0.30       # absolute cap for take-profit fraction
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -257,6 +270,8 @@ class FeaturePanel:
     bench_ma_trend: pd.Series
     ma20: Optional[pd.DataFrame] = None     # close.rolling(20).mean(), precomputed
     ma60: Optional[pd.DataFrame] = None     # close.rolling(60).mean(), precomputed
+    stop_band: Optional[pd.DataFrame] = None  # PIT ATR stop-loss fractions
+    take_band: Optional[pd.DataFrame] = None  # PIT ATR take-profit fractions
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -288,6 +303,14 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     adv20 = amount.rolling(20, min_periods=5).mean()
     ma20_panel = close.rolling(20).mean()
     ma60_panel = close.rolling(60).mean()
+    stop_band = None
+    take_band = None
+    if params.dynamic_stops:
+        # Decoupled bottom-up stop bands (see Main.dynamic_stops); computed
+        # once here so the per-day loop only does a panel lookup.
+        from Main.dynamic_stops import precompute_stop_bands
+
+        stop_band, take_band = precompute_stop_bands(frames, common, symbols, params)
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
         # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
@@ -316,7 +339,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
@@ -798,7 +821,15 @@ def weekly_rotation_backtest(
                 if not np.isfinite(close_now):
                     continue
                 pnl = close_now / entry_prices[symbol] - 1.0
-                if pnl <= -params.stop_loss_pct or pnl >= params.take_profit_pct:
+                if params.dynamic_stops and panel.stop_band is not None:
+                    # Bottom-up band: per-symbol PIT ATR fractions with static
+                    # fallback on NaN (decoupled in Main.dynamic_stops).
+                    from Main.dynamic_stops import band_at
+
+                    stop_pct, take_pct = band_at(panel, symbol, date, params.stop_loss_pct, params.take_profit_pct)
+                else:
+                    stop_pct, take_pct = params.stop_loss_pct, params.take_profit_pct
+                if pnl <= -stop_pct or pnl >= take_pct:
                     stopped_symbols.add(symbol)
 
         ret_row = returns_matrix.loc[date]
