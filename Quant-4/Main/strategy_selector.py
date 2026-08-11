@@ -63,15 +63,23 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
         "per_position_cap": 0.20,
         "top_n": 3,
     },
-    # Sprint: highest-conviction momentum book for the 10% allocation sleeve.
-    # Top-2 concentration, short-horizon momentum + reversal, no defensive
-    # filter, tight stop band. High turnover by design; only meaningful as a
+    # Sprint: highest-expected-return book for the 10% allocation sleeve.
+    # v2 redesign (2026-08-11 PIT gate): the v1 top-2 + 5/20 momentum +
+    # 8/5 stop band scored 2.75%/0.47 on the honest full-pool gate - the 5%
+    # stop churned positions and the signal was not differentiated from the
+    # momentum sleeve. v2 uses a dedicated breakout/new-high factor
+    # (breakout_weight 0.35 on the 60d-high proximity z-score), keeps top-2
+    # concentration with a 40% single-name cap, and widens the band to
+    # 15%/8% so strong trends are not stopped out early. Only meaningful as a
     # small sleeve inside the 40/30/20/10 portfolio (see Main.sleeve_allocation).
     "sprint": {
         "top_n": 2,
         "momentum_windows": (5, 20),
         "momentum_weights": (0.60, 0.40),
         "reversal_1d_weight": 3.0,
+        "breakout_weight": 0.35,
+        "breakout_window": 60,
+        "breakout_volume_confirm": False,
         "defensive_core": False,
         "defensive_core_bull_momentum": False,
         "defensive_filter": False,
@@ -81,11 +89,12 @@ STRATEGY_ARCHETYPES: Dict[str, Dict] = {
         "neutral_exposure": 0.0,
         "min_top_momentum_gate": 0.02,
         "max_short_term_gain": 0.30,
-        "per_position_cap": 0.50,
-        "take_profit_pct": 0.08,
-        "stop_loss_pct": 0.05,
+        "per_position_cap": 0.40,
+        "take_profit_pct": 0.15,
+        "stop_loss_pct": 0.08,
         "enable_intraweek_stops": True,
-        "max_annual_vol": 0.50,
+        "max_annual_vol": 0.60,
+        "min_adv": 100_000_000.0,
     },
 }
 

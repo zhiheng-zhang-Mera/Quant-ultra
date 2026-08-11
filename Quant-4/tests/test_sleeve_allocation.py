@@ -111,9 +111,10 @@ def test_sprint_archetype_exists_and_builds():
     assert "sprint" in STRATEGY_ARCHETYPES
     p = build_archetype_params(RotationParams(), "sprint")
     assert p.top_n == 2
-    assert p.take_profit_pct == 0.08
-    assert p.stop_loss_pct == 0.05
+    assert p.take_profit_pct == 0.15
+    assert p.stop_loss_pct == 0.08
     assert p.defensive_filter is False
+    assert p.breakout_weight == 0.35
 
 
 def test_run_sleeve_portfolio_end_to_end():

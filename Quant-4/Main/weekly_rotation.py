@@ -63,6 +63,14 @@ class RotationParams:
     stops_cap: float = 0.15            # absolute cap for stop-loss fraction
     stops_take_floor: float = 0.06     # absolute floor for take-profit fraction
     stops_take_cap: float = 0.30       # absolute cap for take-profit fraction
+    # ---- optional breakout / new-high factor (sprint sleeve signal) ----
+    # When > 0, the composite score adds a cross-sectional z-score of the
+    # proximity to the trailing breakout-window high, renormalizing the
+    # regime-adaptive weights so the total stays 1.0. Default off preserves
+    # the evidence-gated production score exactly.
+    breakout_weight: float = 0.0
+    breakout_window: int = 60          # trailing high lookback (trading days)
+    breakout_volume_confirm: bool = False  # require volume ratio >= 1 on breakouts
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -201,6 +209,13 @@ def composite_factor_scores(
     factors["lowvol"] = -panel.volatility.loc[date]
     factors["vol_ratio"] = panel.volume_ratio.loc[date]
     factors["divyield"] = panel.div_yield.loc[date]
+    if params.breakout_weight > 0 and panel.breakout is not None and date in panel.breakout.index:
+        breakout_row = panel.breakout.loc[date]
+        if params.breakout_volume_confirm:
+            vol_ok = panel.volume_ratio.loc[date] >= 1.0
+            breakout_row = breakout_row.where(vol_ok, np.nan)
+        if breakout_row.notna().sum() >= 5:
+            factors["breakout"] = breakout_row
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
@@ -233,6 +248,15 @@ def composite_factor_scores(
     else:
         weights = {"mom20": 0.12, "mom60": 0.08, "trend": 0.12, "rev1": 0.16, "rev5": 0.16, "lowvol": 0.12, "vol_ratio": 0.04, "divyield": 0.20}
         state = "RANGE"
+    if "breakout" in z and params.breakout_weight > 0:
+        # Renormalize the regime-adaptive weights so the breakout factor takes
+        # its configured share and the total stays 1.0 (default 0 keeps the
+        # evidence-gated production score byte-identical).
+        bw = float(np.clip(params.breakout_weight, 0.0, 1.0))
+        base_total = sum(weights.values())
+        if base_total > 0:
+            weights = {k: v / base_total * (1.0 - bw) for k, v in weights.items()}
+            weights["breakout"] = bw
     scores: Dict[str, float] = {}
     for sym in symbols:
         total, ok = 0.0, True
@@ -272,6 +296,7 @@ class FeaturePanel:
     ma60: Optional[pd.DataFrame] = None     # close.rolling(60).mean(), precomputed
     stop_band: Optional[pd.DataFrame] = None  # PIT ATR stop-loss fractions
     take_band: Optional[pd.DataFrame] = None  # PIT ATR take-profit fractions
+    breakout: Optional[pd.DataFrame] = None   # close / trailing-high proximity (PIT)
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -311,6 +336,11 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         from Main.dynamic_stops import precompute_stop_bands
 
         stop_band, take_band = precompute_stop_bands(frames, common, symbols, params)
+    breakout = None
+    if params.breakout_weight > 0:
+        # PIT proximity to the trailing high: 1.0 = making a new high today.
+        high_win = max(5, int(params.breakout_window))
+        breakout = close / close.rolling(high_win, min_periods=20).max()
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
         # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
@@ -339,7 +369,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
