@@ -78,6 +78,15 @@ class RotationParams:
     # keeps the fixed-weight behaviour byte-identical.
     breakout_bull_scale: float = 1.0   # fade breakout chase in BULL (extension risk)
     breakout_highvol_scale: float = 1.0  # fade in HIGH_VOL (breakout noise)
+    # ---- optional A-share anomaly factors (signal-layer expansion) ----
+    # MAX effect: 20d maximum daily return is a negative predictor in A-shares
+    # (lottery demand). illiquidity: log Amihud (|ret|/amount) carries a
+    # positive premium. Both default 0 so the evidence-gated production score
+    # is unchanged; when > 0 they are z-scored and added like the breakout
+    # factor, with the base regime weights renormalized to 1.0.
+    max_ret_weight: float = 0.0          # weight on -z(max 20d daily return)
+    max_ret_window: int = 20
+    illiquidity_weight: float = 0.0      # weight on z(log Amihud illiquidity)
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -223,6 +232,14 @@ def composite_factor_scores(
             breakout_row = breakout_row.where(vol_ok, np.nan)
         if breakout_row.notna().sum() >= 5:
             factors["breakout"] = breakout_row
+    if params.max_ret_weight > 0 and panel.max_ret is not None and date in panel.max_ret.index:
+        maxret_row = panel.max_ret.loc[date]
+        if maxret_row.notna().sum() >= 5:
+            factors["maxret"] = -maxret_row  # low MAX (lottery demand) preferred
+    if params.illiquidity_weight > 0 and panel.illiquidity is not None and date in panel.illiquidity.index:
+        illiq_row = panel.illiquidity.loc[date]
+        if illiq_row.notna().sum() >= 5:
+            factors["illiq"] = illiq_row
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
@@ -255,20 +272,32 @@ def composite_factor_scores(
     else:
         weights = {"mom20": 0.12, "mom60": 0.08, "trend": 0.12, "rev1": 0.16, "rev5": 0.16, "lowvol": 0.12, "vol_ratio": 0.04, "divyield": 0.20}
         state = "RANGE"
+    # Optional extra factors (breakout / MAX effect / Amihud illiquidity) are
+    # z-scored and blended by renormalizing the regime-adaptive base weights so
+    # the total stays 1.0. All default to 0, keeping the evidence-gated
+    # production score byte-identical. Breakout can be scaled per regime (the
+    # fixed-vs-dynamic gate kept fixed 0.35 for sprint; scales default 1.0).
+    extra_weights: Dict[str, float] = {}
     if "breakout" in z and params.breakout_weight > 0:
-        # Renormalize the regime-adaptive weights so the breakout factor takes
-        # its configured share and the total stays 1.0 (default 0 keeps the
-        # evidence-gated production score byte-identical). The share can be
-        # scaled down per regime (see breakout_bull_scale / highvol_scale).
         bw = float(np.clip(params.breakout_weight, 0.0, 1.0))
         if state == "TREND_BULL":
             bw *= float(getattr(params, "breakout_bull_scale", 1.0))
         elif state == "HIGH_VOL":
             bw *= float(getattr(params, "breakout_highvol_scale", 1.0))
+        extra_weights["breakout"] = bw
+    if "maxret" in z:
+        extra_weights["maxret"] = float(np.clip(params.max_ret_weight, 0.0, 1.0))
+    if "illiq" in z:
+        extra_weights["illiq"] = float(np.clip(params.illiquidity_weight, 0.0, 1.0))
+    if extra_weights:
+        extra_total = float(sum(extra_weights.values()))
+        if extra_total > 1.0:
+            extra_weights = {k: v / extra_total for k, v in extra_weights.items()}
+            extra_total = 1.0
         base_total = sum(weights.values())
         if base_total > 0:
-            weights = {k: v / base_total * (1.0 - bw) for k, v in weights.items()}
-            weights["breakout"] = bw
+            weights = {k: v / base_total * (1.0 - extra_total) for k, v in weights.items()}
+            weights.update(extra_weights)
     scores: Dict[str, float] = {}
     for sym in symbols:
         total, ok = 0.0, True
@@ -309,6 +338,8 @@ class FeaturePanel:
     stop_band: Optional[pd.DataFrame] = None  # PIT ATR stop-loss fractions
     take_band: Optional[pd.DataFrame] = None  # PIT ATR take-profit fractions
     breakout: Optional[pd.DataFrame] = None   # close / trailing-high proximity (PIT)
+    max_ret: Optional[pd.DataFrame] = None    # rolling max daily return (PIT)
+    illiquidity: Optional[pd.DataFrame] = None  # log Amihud |ret|/amount (PIT)
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -353,6 +384,15 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         # PIT proximity to the trailing high: 1.0 = making a new high today.
         high_win = max(5, int(params.breakout_window))
         breakout = close / close.rolling(high_win, min_periods=20).max()
+    max_ret = None
+    if params.max_ret_weight > 0:
+        daily_ret = close.pct_change(fill_method=None)
+        max_ret = daily_ret.rolling(max(2, int(params.max_ret_window)), min_periods=5).max()
+    illiquidity = None
+    if params.illiquidity_weight > 0:
+        daily_ret = close.pct_change(fill_method=None)
+        amihud = daily_ret.abs() / amount.replace(0, np.nan)
+        illiquidity = np.log(amihud + 1e-12)
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
         # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
@@ -381,7 +421,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:

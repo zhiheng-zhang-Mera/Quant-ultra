@@ -82,6 +82,8 @@ def main() -> int:
     parser.add_argument("--dynamic-stops", action="store_true", help="enable bottom-up ATR stop bands on every sleeve")
     parser.add_argument("--stops-atr-sl-mult", type=float, default=None)
     parser.add_argument("--stops-atr-tp-mult", type=float, default=None)
+    parser.add_argument("--balanced-max-ret", type=float, default=0.0,
+                        help="MAX-effect factor weight on the balanced sleeve (0 = off)")
     args = parser.parse_args()
 
     alive_mask = None
@@ -111,6 +113,14 @@ def main() -> int:
     div_cash = load_cached_dividends(sorted(frames)) if args.pit else load_pit_dividends(sorted(set(PRODUCTION_UNIVERSE)) if not args.universe else args.universe)
 
     sleeves = build_sleeves(args.sleeves, parse_weights(args.weights))
+    if args.balanced_max_ret > 0:
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.archetype == "balanced":
+                overrides = dict(sleeve.overrides)
+                overrides["max_ret_weight"] = args.balanced_max_ret
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                break
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,
