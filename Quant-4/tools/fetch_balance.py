@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -76,6 +77,21 @@ def fetch_annual(bs, code: str, start_year: int, end_year: int) -> list:
     return records
 
 
+def _fetch_symbol(bs, sym: str, fetch, start_year: int, end_year: int, timeout: float = 60.0) -> list:
+    box: dict = {}
+
+    def worker():
+        box["records"] = fetch(bs, sym, start_year, end_year)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        print(f"  WARN: {sym} timed out after {timeout:.0f}s, skipped", flush=True)
+        return []
+    return box.get("records", [])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch annual balance/operation data for liquid PIT names")
     parser.add_argument("--top-n", type=int, default=600)
@@ -107,7 +123,7 @@ def main() -> int:
         for i, sym in enumerate(symbols):
             if sym in cache and cache[sym]:
                 continue
-            records = fetch_annual(bs, to_baostock_code(sym), args.start_year, 2025)
+            records = _fetch_symbol(bs, to_baostock_code(sym), fetch_annual, args.start_year, 2025)
             if records:
                 cache[sym] = records
                 done += 1
