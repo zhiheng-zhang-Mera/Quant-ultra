@@ -307,12 +307,15 @@ def composite_factor_scores(
         for fname, w in params.fundamental_factors.items():
             if float(w) <= 0 or fname in factors:
                 continue
-            fp = panel.fundamental_panels.get(fname)
+            base_name = fname[4:] if fname.startswith("low_") else fname
+            fp = panel.fundamental_panels.get(base_name)
             if fp is None or date not in fp.index:
                 continue
             row = fp.loc[date].astype(float)
             if row.notna().sum() >= 5:
                 row = row.fillna(row.median(skipna=True))
+                if fname.startswith("low_"):
+                    row = -row  # prefer LOW values (e.g. low_debt_ratio)
                 factors[fname] = row
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
