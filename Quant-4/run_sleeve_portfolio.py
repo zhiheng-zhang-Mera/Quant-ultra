@@ -98,7 +98,7 @@ def main() -> int:
                              "(0.25 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
-    parser.add_argument("--fundamental-factors", default="gp_margin:0.10,yoy_ni:0.05",
+    parser.add_argument("--fundamental-factors", default="gp_margin:0.10,yoy_ni:0.05,np_margin:0.05",
                         help="comma-separated NAME:WEIGHT pairs, e.g. "
                              "'gp_margin:0.10,yoy_ni:0.05' (PIT fundamentals, "
                              "uncovered names fall back to the median; "
