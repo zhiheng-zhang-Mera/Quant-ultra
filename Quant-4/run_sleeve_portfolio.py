@@ -173,9 +173,12 @@ def main() -> int:
         for i, sleeve in enumerate(sleeves):
             if sleeve.name == sleeve_name:
                 overrides = dict(sleeve.overrides)
-                extra = dict(overrides.get("extra_factor_weights", {}))
-                extra[factor_name] = factor_weight
-                overrides["extra_factor_weights"] = extra
+                if factor_name == "sector_mom":
+                    overrides["sector_momentum_weight"] = factor_weight
+                else:
+                    extra = dict(overrides.get("extra_factor_weights", {}))
+                    extra[factor_name] = factor_weight
+                    overrides["extra_factor_weights"] = extra
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 matched = True
