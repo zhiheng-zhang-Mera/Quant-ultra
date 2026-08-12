@@ -90,6 +90,9 @@ def main() -> int:
     parser.add_argument("--balanced-sector-mom", type=float, default=0.15,
                         help="sector-momentum weight on the balanced sleeve "
                              "(0.15 = PIT-gate-validated default; 0 = off)")
+    parser.add_argument("--momentum-sector-mom", type=float, default=0.15,
+                        help="sector-momentum weight on the momentum sleeve "
+                             "(0.15 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
@@ -163,6 +166,14 @@ def main() -> int:
             if sleeve.archetype == "balanced":
                 overrides = dict(sleeve.overrides)
                 overrides["sector_momentum_weight"] = args.balanced_sector_mom
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                break
+    if args.momentum_sector_mom > 0:
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.archetype == "momentum":
+                overrides = dict(sleeve.overrides)
+                overrides["sector_momentum_weight"] = args.momentum_sector_mom
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 break
