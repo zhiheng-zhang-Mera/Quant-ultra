@@ -98,6 +98,10 @@ def main() -> int:
                              "(0.25 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
+    parser.add_argument("--fundamental-factors", default="",
+                        help="comma-separated NAME:WEIGHT pairs, e.g. "
+                             "'gp_margin:0.10,yoy_ni:0.05' (PIT fundamentals, "
+                             "uncovered names fall back to the median)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
@@ -220,6 +224,12 @@ def main() -> int:
             raise SystemExit(f"unknown sleeve {sleeve_name!r} in --sleeve-factor")
     if args.sector_momentum_weight > 0:
         params.sector_momentum_weight = args.sector_momentum_weight
+    if args.fundamental_factors:
+        fund: dict = {}
+        for pair in args.fundamental_factors.split(","):
+            name, _, weight = pair.partition(":")
+            fund[name.strip()] = float(weight)
+        params.fundamental_factors = fund
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,
