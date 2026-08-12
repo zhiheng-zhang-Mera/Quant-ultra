@@ -87,6 +87,10 @@ class RotationParams:
     max_ret_weight: float = 0.0          # weight on -z(max 20d daily return)
     max_ret_window: int = 20
     illiquidity_weight: float = 0.0      # weight on z(log Amihud illiquidity)
+    # Pluggable open-source factor weights (Main.factor_library): name -> weight
+    # (e.g. {"roc20": 0.10, "rsi14": 0.05}). Default empty keeps the
+    # evidence-gated production score unchanged.
+    extra_factor_weights: Dict[str, float] = field(default_factory=dict)
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -120,6 +124,30 @@ class RotationParams:
     vol_scale_floor: float = 0.25            # lower clamp on vol-target exposure scale
     hedge_etf: str = ""                      # short this symbol as market hedge (market-neutral)
     borrow_cost: float = 0.04                # annual financing cost on the short leg
+    # ---- controlled short sleeve (A-share honest subset) ----
+    # Default off. When enabled, shorts are ONLY opened in a high-conviction
+    # bear state (regime BEAR after the ML overlay AND ML P(up) at or below
+    # ``short_conviction_prob`` AND benchmark 20d return at/below
+    # ``short_confirmation_mom20``), the gross short is capped at
+    # ``max_short_exposure``,
+    # and per-name short exposure at ``short_per_name_cap``. A-shares cannot
+    # short most individual names, so ``short_etf_only=True`` (default) shorts
+    # only broad index ETFs (510300/510500) - the honest instrument set.
+    enable_short_sleeve: bool = False
+    max_short_exposure: float = 0.10         # cap on gross short (fraction of capital)
+    short_etf_only: bool = True              # honest A-share: only broad ETFs
+    short_etf_pool: Tuple[str, ...] = ("510300.SH", "510500.SH")
+    short_conviction_prob: float = 0.35      # ML P(up) <= this to open shorts
+    # Extra confirmation (optional, default off): the benchmark 20d return
+    # must be at/below this to open shorts. The PIT evidence showed P(up)<=0.35
+    # and trend-BEAR almost never co-occur (the ML learns mean reversion in
+    # extended downtrends), so the default gate is regime-overlay BEAR + the
+    # calibrated ML conviction alone; a stricter user can re-enable this.
+    short_confirmation_mom20: float = 0.0
+    short_per_name_cap: float = 0.05         # per-name short cap when !etf_only
+    short_top_k: int = 2                     # weakest names to short when !etf_only
+    short_holding_cap_days: int = 42         # force-close shorts after N trading days
+    short_stop_loss_pct: float = 0.08        # close short if asset rises this much
     trend_risk_scaler: bool = False          # scale exposure by benchmark/MA20 distance
     trend_risk_floor: float = 0.10           # minimum exposure when trend scaler active
     trend_risk_band: float = 0.10            # ratio distance over which exposure fades to floor
@@ -240,6 +268,17 @@ def composite_factor_scores(
         illiq_row = panel.illiquidity.loc[date]
         if illiq_row.notna().sum() >= 5:
             factors["illiq"] = illiq_row
+    if params.extra_factor_weights:
+        # Pluggable open-source factors (Main.factor_library), PIT by
+        # construction; only rows with enough cross-section are mounted.
+        from Main.factor_library import compute_factors
+
+        for name, w in params.extra_factor_weights.items():
+            if float(w) <= 0 or name in factors:
+                continue
+            row = compute_factors(panel, date, [name]).get(name)
+            if row is not None:
+                factors[name] = row
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
@@ -289,6 +328,9 @@ def composite_factor_scores(
         extra_weights["maxret"] = float(np.clip(params.max_ret_weight, 0.0, 1.0))
     if "illiq" in z:
         extra_weights["illiq"] = float(np.clip(params.illiquidity_weight, 0.0, 1.0))
+    for name, w in (params.extra_factor_weights or {}).items():
+        if name in z and float(w) > 0:
+            extra_weights[name] = float(np.clip(float(w), 0.0, 1.0))
     if extra_weights:
         extra_total = float(sum(extra_weights.values()))
         if extra_total > 1.0:
@@ -766,7 +808,9 @@ def weekly_rotation_backtest(
     weights = {symbol: 0.0 for symbol in symbols}
     short_weights: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     entry_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
+    short_entry_prices: Dict[str, float] = {}
     holding_days: Dict[str, int] = {symbol: 0 for symbol in symbols}
+    short_holding_days: Dict[str, int] = {}
     closed_trades: List[dict] = []
     pending: Optional[dict] = None
     regime_rows: List[dict] = []
@@ -870,11 +914,48 @@ def weekly_rotation_backtest(
                     fee = explicit_order_fees(notional, side, symbol)["total"]
                     fee += notional * params.slippage_rate
                     cost += fee / account_value
+            # ---- short book execution (hedge_etf full hedge or controlled
+            # short sleeve): open = sell fees, close = buy fees ----
+            short_target: Optional[Dict[str, float]] = None
             if params.hedge_etf and params.hedge_etf in symbols:
-                target_short = -sum(desired.values())
-                short_turnover = abs(target_short - short_weights.get(params.hedge_etf, 0.0))
-                turnover += short_turnover
-                short_weights[params.hedge_etf] = target_short
+                short_target = {params.hedge_etf: -sum(desired.values())}
+            elif pending is not None and pending.get("short_target") is not None:
+                short_target = pending["short_target"]
+            if short_target:
+                for sym, tw in short_target.items():
+                    if sym not in symbols:
+                        continue
+                    cur = short_weights.get(sym, 0.0)
+                    delta = tw - cur
+                    if abs(delta) > 1e-12:
+                        turnover += abs(delta)
+                        if params.capital_base > 0:
+                            notional = abs(delta) * account_value
+                            side = "sell" if delta < 0 else "buy"
+                            fee = explicit_order_fees(notional, side, sym)["total"]
+                            fee += notional * params.slippage_rate
+                            cost += fee / account_value
+                    short_weights[sym] = tw
+                    exec_open = eff_open.get(sym, np.nan)
+                    if abs(tw) > 1e-12 and abs(cur) <= 1e-12 and np.isfinite(exec_open):
+                        short_entry_prices[sym] = float(exec_open)
+                        short_holding_days[sym] = 0
+                    elif abs(tw) <= 1e-12:
+                        short_entry_prices.pop(sym, None)
+                        short_holding_days.pop(sym, None)
+            else:
+                # no short target this cycle: close any open shorts
+                if any(abs(v) > 1e-12 for v in short_weights.values()):
+                    for sym, cur in list(short_weights.items()):
+                        if abs(cur) > 1e-12 and params.capital_base > 0:
+                            notional = abs(cur) * account_value
+                            fee = explicit_order_fees(notional, "buy", sym)["total"]
+                            fee += notional * params.slippage_rate
+                            cost += fee / account_value
+                            turnover += abs(cur)
+                        short_weights[sym] = 0.0
+                    short_entry_prices.clear()
+                    short_holding_days.clear()
             if params.capital_base <= 0:
                 # legacy flat-fee fallback when no capital assumption is given
                 cost = turnover * params.fee_rate
@@ -913,6 +994,20 @@ def weekly_rotation_backtest(
                     stop_pct, take_pct = params.stop_loss_pct, params.take_profit_pct
                 if pnl <= -stop_pct or pnl >= take_pct:
                     stopped_symbols.add(symbol)
+        # short-sleeve reverse stop: close a short when the asset has risen
+        # beyond ``short_stop_loss_pct`` (realized at today's close)
+        stopped_shorts: set = set()
+        if params.enable_short_sleeve and params.short_stop_loss_pct > 0:
+            for sym in list(short_weights):
+                sw = short_weights[sym]
+                if abs(sw) <= 1e-12:
+                    continue
+                entry = short_entry_prices.get(sym, 0.0)
+                close_now = close_matrix.at[date, sym] if pd.notna(close_matrix.at[date, sym]) else np.nan
+                if not np.isfinite(close_now) or entry <= 0:
+                    continue
+                if close_now / entry - 1.0 >= params.short_stop_loss_pct:
+                    stopped_shorts.add(sym)
 
         ret_row = returns_matrix.loc[date]
         asset_returns = {}
@@ -935,10 +1030,16 @@ def weekly_rotation_backtest(
                     fee = explicit_order_fees(notional, "sell", symbol)["total"]
                     fee += notional * params.slippage_rate
                     cost += fee / account_value
-        if params.hedge_etf and params.hedge_etf in symbols:
-            hedge_ret = asset_returns.get(params.hedge_etf, 0.0)
-            short_notional = short_weights.get(params.hedge_etf, 0.0)
-            gross += (-short_notional) * hedge_ret - abs(short_notional) * params.borrow_cost / 252.0
+        # short book P&L (hedge_etf or controlled short sleeve), net of borrow
+        for sym, short_notional in short_weights.items():
+            if abs(short_notional) > 1e-12:
+                if sym in stopped_shorts:
+                    open_now = open_matrix.at[date, sym] if pd.notna(open_matrix.at[date, sym]) else np.nan
+                    close_now = close_matrix.at[date, sym] if pd.notna(close_matrix.at[date, sym]) else np.nan
+                    sret = float(close_now / open_now - 1.0) if np.isfinite(open_now) and np.isfinite(close_now) and open_now > 0 else 0.0
+                else:
+                    sret = asset_returns.get(sym, 0.0)
+                gross += (-short_notional) * sret - abs(short_notional) * params.borrow_cost / 252.0
         strategy_return = gross - cost
         # financing cost on leveraged capital (margin)
         leverage_drag = max(0.0, sum(weights.values()) - 1.0) * params.leverage_annual_cost / 252.0
@@ -951,7 +1052,9 @@ def weekly_rotation_backtest(
         benchmark_return = float(np.mean([asset_returns[s] for s in eligible])) if eligible else 0.0
         rows.append({
             "date": date, "strategy_return": strategy_return, "benchmark_return": benchmark_return,
-            "gross_exposure": sum(weights.values()), "turnover": turnover, "cost": cost,
+            "gross_exposure": sum(weights.values()) + (sum(abs(v) for v in short_weights.values()) if params.enable_short_sleeve else 0.0),
+            "short_exposure": sum(abs(v) for v in short_weights.values()) if params.enable_short_sleeve else 0.0,
+            "turnover": turnover, "cost": cost,
             "regime": current_regime,
         })
         equity *= 1.0 + strategy_return
@@ -972,8 +1075,23 @@ def weekly_rotation_backtest(
                 if np.isfinite(bench_now) and np.isfinite(bench_ma) and bench_now > bench_ma:
                     dd_guard_active = False
         weights = {symbol: weights[symbol] * (1.0 + asset_returns[symbol]) / (1.0 + strategy_return) for symbol in symbols}
-        if params.hedge_etf and params.hedge_etf in symbols:
-            short_weights[params.hedge_etf] = short_weights.get(params.hedge_etf, 0.0) * (1.0 + asset_returns.get(params.hedge_etf, 0.0)) / (1.0 + strategy_return)
+        for sym in list(short_weights):
+            sw = short_weights[sym]
+            if abs(sw) > 1e-12:
+                short_weights[sym] = sw * (1.0 + asset_returns.get(sym, 0.0)) / (1.0 + strategy_return)
+                short_holding_days[sym] = short_holding_days.get(sym, 0) + 1
+            else:
+                short_weights[sym] = 0.0
+        for sym in stopped_shorts:
+            if params.capital_base > 0 and abs(short_weights.get(sym, 0.0)) > 1e-12:
+                account_value = max(float(equity) * float(params.capital_base), 1.0)
+                notional = abs(short_weights[sym]) * account_value
+                fee = explicit_order_fees(notional, "buy", sym)["total"]
+                fee += notional * params.slippage_rate
+                cost += fee / account_value
+            short_weights[sym] = 0.0
+            short_entry_prices.pop(sym, None)
+            short_holding_days.pop(sym, None)
         for symbol in stopped_symbols:
             weights[symbol] = 0.0
             entry_prices[symbol] = 0.0
@@ -984,9 +1102,19 @@ def weekly_rotation_backtest(
         # daily forced deleveraging: drift in down markets can otherwise push
         # gross exposure above the ceiling (margin-call behaviour)
         gross_now = sum(weights.values())
+        if params.enable_short_sleeve:
+            gross_now += sum(abs(v) for v in short_weights.values())
         if gross_now > gross_ceiling:
             scale = gross_ceiling / gross_now
             weights = {s: w * scale for s, w in weights.items()}
+            short_weights = {s: v * scale for s, v in short_weights.items()}
+        # hard short-quota clamp: drift must never push gross short beyond the
+        # configured cap (额度控制)
+        if params.enable_short_sleeve:
+            short_gross = sum(abs(v) for v in short_weights.values())
+            if short_gross > params.max_short_exposure:
+                s_scale = params.max_short_exposure / short_gross
+                short_weights = {s: v * s_scale for s, v in short_weights.items()}
 
         if params.rebalance_weekday is not None:
             is_rebalance_day = (date.dayofweek == params.rebalance_weekday)
@@ -1158,7 +1286,42 @@ def weekly_rotation_backtest(
                 for s in symbols:
                     if weights[s] > 1e-9 and holding_days[s] >= params.max_holding_days:
                         target[s] = 0.0
-            pending = {"signal_date": date, "execution_date": next_date, "target": target}
+            # ---- controlled short sleeve: open only in a high-conviction
+            # bear state (regime BEAR + ML P(up) at/below the conviction
+            # threshold + benchmark under the long confirmation MA), capped at
+            # ``max_short_exposure`` ----
+            short_target: Optional[Dict[str, float]] = None
+            if params.enable_short_sleeve:
+                p_up = _ml_prob_up(ml_res) if regime_detector is not None else None
+                conviction = regime.regime == "BEAR" and (p_up is None or p_up <= params.short_conviction_prob)
+                if conviction and params.short_confirmation_mom20 != 0:
+                    # additional confirmation: the benchmark's 20d return must
+                    # be at/below the threshold (established downtrend, not a
+                    # V-shaped crash bottom where price is still above MA200)
+                    mom20 = panel.bench_return_20d.loc[date] if pd.notna(panel.bench_return_20d.loc[date]) else np.nan
+                    if not (np.isfinite(mom20) and mom20 <= params.short_confirmation_mom20):
+                        conviction = False
+                if conviction:
+                    short_target = {}
+                    if params.short_etf_only:
+                        pool = [s for s in params.short_etf_pool if s in symbols]
+                        if pool:
+                            per = min(params.max_short_exposure / len(pool), params.max_short_exposure)
+                            for s in pool:
+                                if short_holding_days.get(s, 0) < params.short_holding_cap_days:
+                                    short_target[s] = -per
+                    elif ranked:
+                        weak = ranked[-params.short_top_k:] if len(ranked) >= params.short_top_k else ranked
+                        remaining = params.max_short_exposure
+                        for sym, _, _ in weak:
+                            if short_holding_days.get(sym, 0) >= params.short_holding_cap_days:
+                                continue
+                            w = min(params.short_per_name_cap, remaining)
+                            if w <= 1e-9:
+                                break
+                            short_target[sym] = -w
+                            remaining -= w
+            pending = {"signal_date": date, "execution_date": next_date, "target": target, "short_target": short_target}
 
     returns = pd.DataFrame(rows).set_index("date")
     regimes = pd.DataFrame(regime_rows).set_index("date") if regime_rows else pd.DataFrame()
