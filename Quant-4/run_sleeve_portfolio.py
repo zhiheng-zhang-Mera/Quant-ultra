@@ -87,6 +87,8 @@ def main() -> int:
     parser.add_argument("--balanced-roc20", type=float, default=0.10,
                         help="qlib Alpha158 ROC20 factor weight on the balanced "
                              "sleeve (0.10 = PIT-gate-validated default; 0 = off)")
+    parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
+                        help="sector-momentum tilt weight on every sleeve (0 = off)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
@@ -180,6 +182,8 @@ def main() -> int:
                 break
         if not matched:
             raise SystemExit(f"unknown sleeve {sleeve_name!r} in --sleeve-factor")
+    if args.sector_momentum_weight > 0:
+        params.sector_momentum_weight = args.sector_momentum_weight
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,

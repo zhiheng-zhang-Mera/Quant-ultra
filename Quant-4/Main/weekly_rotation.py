@@ -91,6 +91,10 @@ class RotationParams:
     # (e.g. {"roc20": 0.10, "rsi14": 0.05}). Default empty keeps the
     # evidence-gated production score unchanged.
     extra_factor_weights: Dict[str, float] = field(default_factory=dict)
+    # Sector-momentum tilt (Main.sector_rotation): weight on the z-scored
+    # industry 20d momentum from the CSRC map (Data_Cache/sector_map_full.json).
+    # Default 0 keeps the evidence-gated production score unchanged.
+    sector_momentum_weight: float = 0.0
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -279,6 +283,18 @@ def composite_factor_scores(
             row = compute_factors(panel, date, [name]).get(name)
             if row is not None:
                 factors[name] = row
+    if params.sector_momentum_weight > 0:
+        # Sector-momentum tilt (Main.sector_rotation); the CSRC map is loaded
+        # once per backtest and cached on the panel.
+        from Main.sector_rotation import industry_momentum_series, load_sector_map
+
+        smap = getattr(panel, "_sector_map", None)
+        if smap is None:
+            smap = load_sector_map()
+            panel._sector_map = smap
+        sec_row = industry_momentum_series(panel, date, smap)
+        if sec_row is not None:
+            factors["sector_mom"] = sec_row
 
     z = {name: _zscore(ser) for name, ser in factors.items()}
     vol_bench = panel.bench_close.pct_change(fill_method=None).loc[:date].tail(60).std(ddof=0) * np.sqrt(252)
@@ -331,6 +347,8 @@ def composite_factor_scores(
     for name, w in (params.extra_factor_weights or {}).items():
         if name in z and float(w) > 0:
             extra_weights[name] = float(np.clip(float(w), 0.0, 1.0))
+    if "sector_mom" in z and params.sector_momentum_weight > 0:
+        extra_weights["sector_mom"] = float(np.clip(params.sector_momentum_weight, 0.0, 1.0))
     if extra_weights:
         extra_total = float(sum(extra_weights.values()))
         if extra_total > 1.0:
