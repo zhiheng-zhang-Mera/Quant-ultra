@@ -90,8 +90,10 @@ def main() -> int:
                              "pass 8 to match the single-book production base)")
     parser.add_argument("--sleeve-sprint-min-adv", type=float, default=None,
                         help="min_adv override for the sprint sleeve (e.g. 50000000)")
-    parser.add_argument("--enable-short-sleeve", action="store_true",
-                        help="controlled short sleeve (ETF-only, conviction-gated, capped)")
+    parser.add_argument("--disable-short-sleeve", action="store_true",
+                        help="turn off the sleeve-layer short overlay "
+                             "(default on = PIT-gate-validated; engine "
+                             "single-book default stays off)")
     parser.add_argument("--max-short-exposure", type=float, default=0.10)
     args = parser.parse_args()
 
@@ -114,7 +116,7 @@ def main() -> int:
     params = default_params()
     params.start_date = args.start or params.start_date
     params.persist_rank_floor = args.persist_rank_floor
-    if args.enable_short_sleeve:
+    if not args.disable_short_sleeve:
         params.enable_short_sleeve = True
         params.max_short_exposure = args.max_short_exposure
     if args.dynamic_stops:
