@@ -60,7 +60,10 @@ def load_all_fundamentals(
 ) -> Dict[str, list]:
     """Merge the profit/growth and balance/operation caches by symbol+period."""
     root = Path(__file__).resolve().parents[1] / "Data_Cache"
-    profit = load_fundamentals(profit_path or (root / "fundamentals_annual.json"), top_n=top_n)
+    if profit_path is None:
+        quarterly = root / "fundamentals_quarterly.json"
+        profit_path = quarterly if quarterly.exists() else root / "fundamentals_annual.json"
+    profit = load_fundamentals(profit_path, top_n=top_n)
     balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"), top_n=top_n)
     out: Dict[str, list] = {}
     for sym in set(profit) | set(balance):

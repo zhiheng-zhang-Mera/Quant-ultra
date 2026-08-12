@@ -88,19 +88,52 @@ def fetch_annual(bs, code: str, start_year: int, end_year: int) -> list:
     return records
 
 
+def fetch_quarterly(bs, code: str, start_year: int, end_year: int) -> list:
+    """Profit/growth for every quarter (1-4) of each year, PIT pubDate kept."""
+    records = []
+    for year in range(start_year, end_year + 1):
+        for quarter in (1, 2, 3, 4):
+            rs = bs.query_profit_data(code=code, year=year, quarter=quarter)
+            profit = None
+            while rs.error_code == "0" and rs.next():
+                profit = rs.get_row_data()
+            if profit:
+                rs2 = bs.query_growth_data(code=code, year=year, quarter=quarter)
+                growth = None
+                while rs2.error_code == "0" and rs2.next():
+                    growth = rs2.get_row_data()
+                records.append({
+                    "pub_date": profit[1],
+                    "stat_date": profit[2],
+                    "roeAvg": float(profit[3]) if profit[3] else None,
+                    "npMargin": float(profit[4]) if profit[4] else None,
+                    "gpMargin": float(profit[5]) if profit[5] else None,
+                    "epsTTM": float(profit[7]) if profit[7] else None,
+                    "yoyNI": float(growth[3]) if growth and growth[3] else None,
+                    "yoyPNI": float(growth[5]) if growth and growth[5] else None,
+                })
+    return records
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch annual fundamentals for liquid PIT names")
     parser.add_argument("--top-n", type=int, default=600)
     parser.add_argument("--start-year", type=int, default=2016)
     parser.add_argument("--sleep", type=float, default=0.05)
     parser.add_argument("--limit", type=int, default=0, help="fetch only this many symbols (test)")
+    parser.add_argument("--quarterly", action="store_true",
+                        help="fetch all four quarters (fresh timeliness) into "
+                             "fundamentals_quarterly.json")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
     symbols = top_liquid_symbols(args.top_n)
     if args.limit:
         symbols = symbols[: args.limit]
-    print(f"target symbols: {len(symbols)}, years {args.start_year}..2025, annual Q4")
+    if args.quarterly:
+        args.out = args.out.parent / "fundamentals_quarterly.json"
+    print(f"target symbols: {len(symbols)}, years {args.start_year}..2025, "
+          f"{'quarterly' if args.quarterly else 'annual Q4'}")
 
     cache: dict = {}
     if args.out.exists():
@@ -119,7 +152,8 @@ def main() -> int:
         for i, sym in enumerate(symbols):
             if sym in cache and cache[sym]:
                 continue
-            records = fetch_annual(bs, to_baostock_code(sym), args.start_year, 2025)
+            fetch = fetch_quarterly if args.quarterly else fetch_annual
+            records = fetch(bs, to_baostock_code(sym), args.start_year, 2025)
             if records:
                 cache[sym] = records
                 done += 1
