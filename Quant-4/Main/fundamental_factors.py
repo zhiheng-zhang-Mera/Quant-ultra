@@ -31,6 +31,7 @@ FUNDAMENTAL_FIELDS: Dict[str, str] = {
     "np_margin": "npMargin",
     "yoy_ni": "yoyNI",
     "yoy_pni": "yoyPNI",
+    "eps_ttm": "epsTTM",
 }
 
 
