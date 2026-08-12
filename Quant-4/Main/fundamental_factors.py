@@ -32,6 +32,10 @@ FUNDAMENTAL_FIELDS: Dict[str, str] = {
     "yoy_ni": "yoyNI",
     "yoy_pni": "yoyPNI",
     "eps_ttm": "epsTTM",
+    # balance-sheet / operation fields (tools/fetch_balance.py)
+    "debt_ratio": "debt_ratio",
+    "current_ratio": "current_ratio",
+    "asset_turn": "asset_turn",
 }
 
 
@@ -42,6 +46,25 @@ def load_fundamentals(path: Optional[Path] = None) -> Dict[str, list]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_all_fundamentals(
+    profit_path: Optional[Path] = None,
+    balance_path: Optional[Path] = None,
+) -> Dict[str, list]:
+    """Merge the profit/growth and balance/operation caches by symbol+period."""
+    root = Path(__file__).resolve().parents[1] / "Data_Cache"
+    profit = load_fundamentals(profit_path or (root / "fundamentals_annual.json"))
+    balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"))
+    out: Dict[str, list] = {}
+    for sym in set(profit) | set(balance):
+        merged: dict = {}
+        for rec in profit.get(sym, []) + balance.get(sym, []):
+            key = (rec.get("pub_date"), rec.get("stat_date"))
+            bucket = merged.setdefault(key, {})
+            bucket.update(rec)
+        out[sym] = list(merged.values())
+    return out
 
 
 def build_fundamental_panels(

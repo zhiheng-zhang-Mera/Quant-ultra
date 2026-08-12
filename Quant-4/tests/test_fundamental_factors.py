@@ -10,7 +10,12 @@ import pandas as pd
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
-from Main.fundamental_factors import build_fundamental_panels, load_fundamentals  # noqa: E402
+from Main.fundamental_factors import (  # noqa: E402
+    FUNDAMENTAL_FIELDS,
+    build_fundamental_panels,
+    load_all_fundamentals,
+    load_fundamentals,
+)
 from Main.weekly_rotation import RotationParams, precompute_panels, weekly_rotation_backtest  # noqa: E402
 
 
@@ -61,6 +66,25 @@ def test_fundamental_panels_are_point_in_time():
     assert np.isclose(float(gp.iloc[-1]), 0.60)
 
 
+def test_load_all_fundamentals_merges_by_period():
+    import json
+    from pathlib import Path
+    import tempfile
+
+    profit = {"600000.SH": [{"pub_date": "2024-04-03", "stat_date": "2023-12-31", "gpMargin": 0.50}]}
+    balance = {"600000.SH": [{"pub_date": "2024-04-03", "stat_date": "2023-12-31", "debt_ratio": 0.20}]}
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "profit.json"
+        b = Path(tmp) / "balance.json"
+        p.write_text(json.dumps(profit), encoding="utf-8")
+        b.write_text(json.dumps(balance), encoding="utf-8")
+        merged = load_all_fundamentals(p, b)
+        rec = merged["600000.SH"][0]
+        assert rec["gpMargin"] == 0.50
+        assert rec["debt_ratio"] == 0.20
+    assert "debt_ratio" in FUNDAMENTAL_FIELDS
+
+
 def test_fundamental_factors_engine_integration(monkeypatch):
     frames = _synthetic_frames()
     funds = {
@@ -69,7 +93,7 @@ def test_fundamental_factors_engine_integration(monkeypatch):
         "600036.SH": [{"pub_date": "2023-01-01", "stat_date": "2022-12-31", "gpMargin": 0.4, "roeAvg": 0.09, "npMargin": 0.045, "yoyNI": 0.15, "yoyPNI": 0.25}],
     }
     import Main.fundamental_factors as ff
-    monkeypatch.setattr(ff, "load_fundamentals", lambda: funds)
+    monkeypatch.setattr(ff, "load_all_fundamentals", lambda *a, **k: funds)
 
     base = RotationParams(
         rebalance_weekday=None,

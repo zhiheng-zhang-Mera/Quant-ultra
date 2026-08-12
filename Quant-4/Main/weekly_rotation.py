@@ -478,9 +478,9 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         illiquidity = np.log(amihud + 1e-12)
     fundamental_panels = None
     if params.fundamental_factors:
-        from Main.fundamental_factors import build_fundamental_panels, load_fundamentals
+        from Main.fundamental_factors import build_fundamental_panels, load_all_fundamentals
 
-        fundamentals = load_fundamentals()
+        fundamentals = load_all_fundamentals()
         if fundamentals:
             fundamental_panels = build_fundamental_panels(fundamentals, common, symbols)
     if params.dividend_cash is not None and len(params.dividend_cash):
