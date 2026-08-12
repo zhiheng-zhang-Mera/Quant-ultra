@@ -87,6 +87,9 @@ def main() -> int:
     parser.add_argument("--balanced-roc20", type=float, default=0.10,
                         help="qlib Alpha158 ROC20 factor weight on the balanced "
                              "sleeve (0.10 = PIT-gate-validated default; 0 = off)")
+    parser.add_argument("--balanced-sector-mom", type=float, default=0.15,
+                        help="sector-momentum weight on the balanced sleeve "
+                             "(0.15 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
@@ -152,6 +155,14 @@ def main() -> int:
                 extra = dict(overrides.get("extra_factor_weights", {}))
                 extra["roc20"] = args.balanced_roc20
                 overrides["extra_factor_weights"] = extra
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                break
+    if args.balanced_sector_mom > 0:
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.archetype == "balanced":
+                overrides = dict(sleeve.overrides)
+                overrides["sector_momentum_weight"] = args.balanced_sector_mom
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 break
