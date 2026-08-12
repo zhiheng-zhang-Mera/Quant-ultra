@@ -98,10 +98,11 @@ def main() -> int:
                              "(0.25 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
-    parser.add_argument("--fundamental-factors", default="",
+    parser.add_argument("--fundamental-factors", default="gp_margin:0.10,yoy_ni:0.05",
                         help="comma-separated NAME:WEIGHT pairs, e.g. "
                              "'gp_margin:0.10,yoy_ni:0.05' (PIT fundamentals, "
-                             "uncovered names fall back to the median)")
+                             "uncovered names fall back to the median; "
+                             "default = PIT-gate-validated; '' disables)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
