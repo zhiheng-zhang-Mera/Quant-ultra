@@ -84,6 +84,9 @@ def main() -> int:
     parser.add_argument("--stops-atr-tp-mult", type=float, default=None)
     parser.add_argument("--balanced-max-ret", type=float, default=0.0,
                         help="MAX-effect factor weight on the balanced sleeve (0 = off)")
+    parser.add_argument("--balanced-roc20", type=float, default=0.10,
+                        help="qlib Alpha158 ROC20 factor weight on the balanced "
+                             "sleeve (0.10 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
@@ -94,6 +97,10 @@ def main() -> int:
                         help="turn off the sleeve-layer short overlay "
                              "(default on = PIT-gate-validated; engine "
                              "single-book default stays off)")
+    parser.add_argument("--sleeve-factor", action="append", default=[],
+                        metavar="SLEEVE=FACTOR=WEIGHT",
+                        help="mount an open-source factor on a sleeve, repeatable, "
+                             "e.g. --sleeve-factor balanced=roc20=0.10")
     parser.add_argument("--max-short-exposure", type=float, default=0.10)
     args = parser.parse_args()
 
@@ -136,6 +143,16 @@ def main() -> int:
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 break
+    if args.balanced_roc20 > 0:
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.archetype == "balanced":
+                overrides = dict(sleeve.overrides)
+                extra = dict(overrides.get("extra_factor_weights", {}))
+                extra["roc20"] = args.balanced_roc20
+                overrides["extra_factor_weights"] = extra
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                break
     if args.sleeve_sprint_min_adv is not None:
         for i, sleeve in enumerate(sleeves):
             if sleeve.archetype == "sprint":
@@ -144,6 +161,25 @@ def main() -> int:
                 sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
                                         archetype=sleeve.archetype, overrides=overrides)
                 break
+    for spec in args.sleeve_factor:
+        parts = spec.split("=")
+        if len(parts) != 3:
+            raise SystemExit(f"--sleeve-factor must be SLEEVE=FACTOR=WEIGHT, got {spec!r}")
+        sleeve_name, factor_name, weight_text = parts
+        factor_weight = float(weight_text)
+        matched = False
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.name == sleeve_name:
+                overrides = dict(sleeve.overrides)
+                extra = dict(overrides.get("extra_factor_weights", {}))
+                extra[factor_name] = factor_weight
+                overrides["extra_factor_weights"] = extra
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                matched = True
+                break
+        if not matched:
+            raise SystemExit(f"unknown sleeve {sleeve_name!r} in --sleeve-factor")
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,
