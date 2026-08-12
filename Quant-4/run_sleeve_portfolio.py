@@ -112,7 +112,7 @@ def main() -> int:
                         metavar="SLEEVE=FACTOR=WEIGHT",
                         help="mount an open-source factor on a sleeve, repeatable, "
                              "e.g. --sleeve-factor balanced=roc20=0.10")
-    parser.add_argument("--max-short-exposure", type=float, default=0.10)
+    parser.add_argument("--max-short-exposure", type=float, default=0.15)
     args = parser.parse_args()
 
     alive_mask = None
