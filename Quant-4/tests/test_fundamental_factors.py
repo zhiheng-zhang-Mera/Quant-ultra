@@ -85,6 +85,18 @@ def test_load_all_fundamentals_merges_by_period():
     assert "debt_ratio" in FUNDAMENTAL_FIELDS
 
 
+def test_load_fundamentals_top_n_filters_by_ranked_order():
+    import json
+    import tempfile
+
+    data = {"A": [1], "B": [2], "C": [3]}
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "fund.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        assert set(load_fundamentals(p, top_n=2)) == {"A", "B"}
+        assert set(load_fundamentals(p, top_n=None)) == {"A", "B", "C"}
+
+
 def test_fundamental_factors_engine_integration(monkeypatch):
     frames = _synthetic_frames()
     funds = {

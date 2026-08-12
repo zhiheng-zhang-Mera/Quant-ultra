@@ -100,6 +100,10 @@ class RotationParams:
     # publication dates and uncovered names fall back to the cross-sectional
     # median. Default empty keeps the production score unchanged.
     fundamental_factors: Dict[str, float] = field(default_factory=dict)
+    # PIT-validated fundamentals coverage: the top ``fundamental_top_n`` most
+    # liquid names (the 600-name coverage was validated by PIT gate #18; wider
+    # coverage was rejected by gates #20/#21 - more names dilute the factor).
+    fundamental_top_n: int = 600
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -483,7 +487,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     if params.fundamental_factors:
         from Main.fundamental_factors import build_fundamental_panels, load_all_fundamentals
 
-        fundamentals = load_all_fundamentals()
+        fundamentals = load_all_fundamentals(top_n=params.fundamental_top_n)
         if fundamentals:
             fundamental_panels = build_fundamental_panels(fundamentals, common, symbols)
     if params.dividend_cash is not None and len(params.dividend_cash):

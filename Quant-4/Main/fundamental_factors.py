@@ -39,23 +39,29 @@ FUNDAMENTAL_FIELDS: Dict[str, str] = {
 }
 
 
-def load_fundamentals(path: Optional[Path] = None) -> Dict[str, list]:
+def load_fundamentals(path: Optional[Path] = None, top_n: Optional[int] = None) -> Dict[str, list]:
     """Load the cached {symbol: [annual report records]} map (empty when missing)."""
     if path is None:
         path = Path(__file__).resolve().parents[1] / "Data_Cache" / "fundamentals_annual.json"
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if top_n is not None:
+        # the cache is written in amount-ranked order, so the first ``top_n``
+        # keys are the most liquid names (the PIT-validated coverage)
+        data = dict(list(data.items())[: max(0, int(top_n))])
+    return data
 
 
 def load_all_fundamentals(
     profit_path: Optional[Path] = None,
     balance_path: Optional[Path] = None,
+    top_n: Optional[int] = None,
 ) -> Dict[str, list]:
     """Merge the profit/growth and balance/operation caches by symbol+period."""
     root = Path(__file__).resolve().parents[1] / "Data_Cache"
-    profit = load_fundamentals(profit_path or (root / "fundamentals_annual.json"))
-    balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"))
+    profit = load_fundamentals(profit_path or (root / "fundamentals_annual.json"), top_n=top_n)
+    balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"), top_n=top_n)
     out: Dict[str, list] = {}
     for sym in set(profit) | set(balance):
         merged: dict = {}

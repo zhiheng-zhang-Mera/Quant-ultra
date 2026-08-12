@@ -103,6 +103,10 @@ def main() -> int:
                              "'gp_margin:0.10,yoy_ni:0.05' (PIT fundamentals, "
                              "uncovered names fall back to the median; "
                              "default = PIT-gate-validated; '' disables)")
+    parser.add_argument("--fundamental-top-n", type=int, default=600,
+                        help="fundamentals coverage: most-liquid N names "
+                             "(600 = PIT-validated; wider coverage was "
+                             "rejected by gates #20/#21)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
@@ -231,6 +235,7 @@ def main() -> int:
             name, _, weight = pair.partition(":")
             fund[name.strip()] = float(weight)
         params.fundamental_factors = fund
+    params.fundamental_top_n = args.fundamental_top_n
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,
