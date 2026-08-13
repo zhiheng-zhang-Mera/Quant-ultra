@@ -121,6 +121,10 @@ def main() -> int:
                         metavar="SLEEVE=FACTOR=WEIGHT",
                         help="mount an open-source factor on a sleeve, repeatable, "
                              "e.g. --sleeve-factor balanced=roc20=0.10")
+    parser.add_argument("--sleeve-fundamental", action="append", default=[],
+                        metavar="SLEEVE=FACTOR=WEIGHT",
+                        help="mount a fundamental factor on a sleeve, repeatable, "
+                             "e.g. --sleeve-fundamental sprint=yoy_ni=0.10")
     parser.add_argument("--max-short-exposure", type=float, default=0.20)
     args = parser.parse_args()
 
@@ -227,6 +231,25 @@ def main() -> int:
                 break
         if not matched:
             raise SystemExit(f"unknown sleeve {sleeve_name!r} in --sleeve-factor")
+    for spec in args.sleeve_fundamental:
+        parts = spec.split("=")
+        if len(parts) != 3:
+            raise SystemExit(f"--sleeve-fundamental must be SLEEVE=FACTOR=WEIGHT, got {spec!r}")
+        sleeve_name, factor_name, weight_text = parts
+        factor_weight = float(weight_text)
+        matched = False
+        for i, sleeve in enumerate(sleeves):
+            if sleeve.name == sleeve_name:
+                overrides = dict(sleeve.overrides)
+                fund = dict(overrides.get("fundamental_factors", {}))
+                fund[factor_name] = factor_weight
+                overrides["fundamental_factors"] = fund
+                sleeves[i] = SleeveSpec(name=sleeve.name, weight=sleeve.weight,
+                                        archetype=sleeve.archetype, overrides=overrides)
+                matched = True
+                break
+        if not matched:
+            raise SystemExit(f"unknown sleeve {sleeve_name!r} in --sleeve-fundamental")
     if args.sector_momentum_weight > 0:
         params.sector_momentum_weight = args.sector_momentum_weight
     if args.fundamental_factors:
