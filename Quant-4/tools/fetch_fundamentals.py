@@ -179,7 +179,7 @@ def main() -> int:
                 done += 1
             if args.sleep > 0:
                 time.sleep(args.sleep)
-            if done % 10 == 0 and done:
+            if done % 5 == 0 and done:
                 args.out.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
                 rate = done / max(time.time() - t0, 1e-6)
                 eta = (len(symbols) - i - 1) / max(rate, 1e-6) / 60
