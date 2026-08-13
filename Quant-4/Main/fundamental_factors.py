@@ -97,6 +97,9 @@ def build_fundamental_panels(
         records = records.dropna(subset=["pub_date"]).sort_values("pub_date")
         records["pub_date"] = pd.to_datetime(records["pub_date"], errors="coerce")
         records = records.dropna(subset=["pub_date"])
+        # some symbols publish multiple reports on the same day (e.g. a
+        # correction alongside a regular report); keep the latest stat_date
+        records = records.sort_values("stat_date").drop_duplicates(subset=["pub_date"], keep="last")
         for fname, col in fields.items():
             if col not in records:
                 continue
