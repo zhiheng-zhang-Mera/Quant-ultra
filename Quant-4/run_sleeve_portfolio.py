@@ -107,9 +107,10 @@ def main() -> int:
                         help="fundamentals coverage: most-liquid N names "
                              "(600 = PIT-validated; wider coverage was "
                              "rejected by gates #20/#21)")
-    parser.add_argument("--fundamental-source", default="auto",
+    parser.add_argument("--fundamental-source", default="annual",
                         choices=["auto", "annual", "quarterly"],
-                        help="fundamentals cache to use (auto prefers quarterly)")
+                        help="fundamentals cache to use (annual = PIT-gate-validated "
+                             "default; auto prefers quarterly when complete)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
