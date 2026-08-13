@@ -14,6 +14,7 @@ naive ``pd.Timestamp`` dates, exactly what ``FreeDataSourceManager`` produces.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -104,6 +105,9 @@ class RotationParams:
     # liquid names (the 600-name coverage was validated by PIT gate #18; wider
     # coverage was rejected by gates #20/#21 - more names dilute the factor).
     fundamental_top_n: int = 600
+    # Fundamentals source: "auto" prefers the quarterly cache when present,
+    # "annual" / "quarterly" force a specific cache (clean A/B comparisons).
+    fundamental_source: str = "auto"
     fee_rate: float = 0.0013           # round-trip cost fraction (approx)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -487,7 +491,21 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
     if params.fundamental_factors:
         from Main.fundamental_factors import build_fundamental_panels, load_all_fundamentals
 
-        fundamentals = load_all_fundamentals(top_n=params.fundamental_top_n)
+        source = getattr(params, "fundamental_source", "auto")
+        if source == "annual":
+            root = Path(__file__).resolve().parents[1] / "Data_Cache"
+            fundamentals = load_all_fundamentals(
+                profit_path=root / "fundamentals_annual.json",
+                top_n=params.fundamental_top_n,
+            )
+        elif source == "quarterly":
+            root = Path(__file__).resolve().parents[1] / "Data_Cache"
+            fundamentals = load_all_fundamentals(
+                profit_path=root / "fundamentals_quarterly.json",
+                top_n=params.fundamental_top_n,
+            )
+        else:
+            fundamentals = load_all_fundamentals(top_n=params.fundamental_top_n)
         if fundamentals:
             fundamental_panels = build_fundamental_panels(fundamentals, common, symbols)
     if params.dividend_cash is not None and len(params.dividend_cash):

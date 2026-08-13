@@ -107,6 +107,9 @@ def main() -> int:
                         help="fundamentals coverage: most-liquid N names "
                              "(600 = PIT-validated; wider coverage was "
                              "rejected by gates #20/#21)")
+    parser.add_argument("--fundamental-source", default="auto",
+                        choices=["auto", "annual", "quarterly"],
+                        help="fundamentals cache to use (auto prefers quarterly)")
     parser.add_argument("--persist-rank-floor", type=int, default=12,
                         help="hold_persistent rank floor for every sleeve "
                              "(sleeve-layer default 12 = PIT-gate-validated; "
@@ -259,6 +262,7 @@ def main() -> int:
             fund[name.strip()] = float(weight)
         params.fundamental_factors = fund
     params.fundamental_top_n = args.fundamental_top_n
+    params.fundamental_source = args.fundamental_source
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,
