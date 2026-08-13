@@ -170,6 +170,8 @@ def main() -> int:
         for i, sym in enumerate(symbols):
             if sym in cache and cache[sym]:
                 continue
+            if i % 10 == 0:
+                print(f"  progress: {i}/{len(symbols)} symbols, cache={len(cache)}", flush=True)
             fetch = fetch_quarterly if args.quarterly else fetch_annual
             records = _fetch_symbol(bs, to_baostock_code(sym), fetch, args.start_year, 2025)
             if records:
@@ -177,7 +179,7 @@ def main() -> int:
                 done += 1
             if args.sleep > 0:
                 time.sleep(args.sleep)
-            if done % 50 == 0 and done:
+            if done % 10 == 0 and done:
                 args.out.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
                 rate = done / max(time.time() - t0, 1e-6)
                 eta = (len(symbols) - i - 1) / max(rate, 1e-6) / 60
