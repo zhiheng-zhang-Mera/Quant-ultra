@@ -8,8 +8,13 @@ import urllib.error
 import numpy as np
 import pandas as pd
 
+from Phase_3.alternative_data_contract import RAW_TEXT_CONTRACT_VERSION, load_contract_text
+
 POSITIVE = {"利好", "增长", "增持", "突破", "回购", "盈利", "beat", "growth", "upgrade", "buyback", "bullish"}
 NEGATIVE = {"利空", "下跌", "减持", "亏损", "处罚", "违约", "风险", "miss", "loss", "downgrade", "default", "bearish"}
+
+LLM_PROMPT_VERSION = "financial-sentiment-json/v1"
+
 
 class OllamaClient:
     def __init__(self, base_url="http://127.0.0.1:11434", timeout=20.0):
@@ -34,21 +39,23 @@ def score_text(text):
     negative = sum(any(term in token for term in NEGATIVE) for token in tokens)
     return float((positive - negative) / max(positive + negative, 1))
 
-def load_timed_text(path, assets, as_of):
+def load_timed_text(path, assets, as_of, config=None):
     required = {"published_at", "symbol", "text"}
-    if not path or not Path(path).exists():
-        return pd.DataFrame(columns=[*required, "sentiment"]), {"status": "MISSING_OPTIONAL_SOURCE", "path": path}
-    source = Path(path)
-    frame = pd.read_json(source, lines=True) if source.suffix.lower() == ".jsonl" else pd.read_csv(source)
-    missing = required - set(frame.columns)
-    if missing:
-        raise ValueError(f"Alternative-data file {source} missing columns: {sorted(missing)}")
-    frame["published_at"] = pd.to_datetime(frame["published_at"], utc=True, errors="coerce")
-    cutoff = pd.Timestamp(as_of)
-    cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
-    frame = frame[frame["published_at"].notna() & (frame["published_at"] <= cutoff) & frame["symbol"].isin(set(assets))].copy()
+    if not path:
+        return pd.DataFrame(columns=[*required, "sentiment"]), {
+            "status": "MISSING_OPTIONAL_SOURCE", "path": path,
+            "contract_version": RAW_TEXT_CONTRACT_VERSION,
+        }
+    config = config or {}
+    cache_dir = config.get("alternative_data_cache_dir") or (
+        Path(__file__).resolve().parents[1] / "Data_Cache" / "alternative_raw"
+    )
+    frame, evidence = load_contract_text(
+        Path(path), assets, as_of, Path(cache_dir),
+        require_real_source=bool(config.get("alternative_data_require_real_source", True)),
+    )
     frame["sentiment"] = frame["text"].map(score_text)
-    return frame, {"status": "LOADED", "path": str(source), "records": len(frame), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "as_of": cutoff.isoformat()}
+    return frame, evidence
 
 def capital_flow(asset_ohlcv):
     rows = []
@@ -62,7 +69,8 @@ def capital_flow(asset_ohlcv):
     return pd.DataFrame(rows, columns=["symbol", "turnover_5d", "turnover_20d", "capital_pool_change_5v20"])
 
 def enhance_sentiment_with_local_llm(frames, config, client=None):
-    evidence = {"status": "DISABLED", "analyzed_records": 0, "fallback_used": True}
+    evidence = {"status": "DISABLED", "analyzed_records": 0, "fallback_used": True,
+                "prompt_version": LLM_PROMPT_VERSION}
     if not config.get("local_llm_sentiment_enabled", True): return frames, evidence
     model = str(config.get("local_llm_model", "qwen3-coder:30b"))
     timeout = float(config.get("local_llm_timeout_seconds", 20))
@@ -84,6 +92,7 @@ def enhance_sentiment_with_local_llm(frames, config, client=None):
         if not candidates:
             return frames, {**evidence, "status": "NO_TEXT_RECORDS", "model": model}
         prompt = "Analyze financial sentiment. Return JSON object with key results, an array of objects: id, score (-1 to 1), confidence (0 to 1). No prose.\n" + json.dumps([{"id": x["id"], "symbol": x["symbol"], "text": x["text"]} for x in candidates], ensure_ascii=False)
+        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         raw = client.generate(model, prompt); parsed = json.loads(raw)
         scores = {item["id"]: float(np.clip(item["score"], -1, 1)) for item in parsed.get("results", []) if "id" in item and "score" in item}
         updated = {name: frame.copy() for name, frame in frames.items()}
@@ -93,7 +102,13 @@ def enhance_sentiment_with_local_llm(frames, config, client=None):
         for frame in updated.values():
             if "llm_sentiment" not in frame.columns: frame["llm_sentiment"] = np.nan
             frame["effective_sentiment"] = frame["llm_sentiment"].where(frame["llm_sentiment"].notna(), frame["sentiment"])
-        return updated, {"status": "ANALYZED", "model": model, "analyzed_records": len(scores), "requested_records": len(candidates), "fallback_used": len(scores) < len(candidates), "timeout_seconds": timeout}
+        return updated, {"status": "ANALYZED", "model": model,
+                         "prompt_version": LLM_PROMPT_VERSION,
+                         "prompt_sha256": prompt_sha256,
+                         "response_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                         "temperature": 0, "num_predict": 256, "response_format": "json",
+                         "analyzed_records": len(scores), "requested_records": len(candidates),
+                         "fallback_used": len(scores) < len(candidates), "timeout_seconds": timeout}
     except (OSError, ValueError, KeyError, json.JSONDecodeError, urllib.error.URLError) as exc:
         return frames, {**evidence, "status": "FALLBACK_ON_ERROR", "model": model, "error": type(exc).__name__}
 
@@ -118,8 +133,8 @@ def build_alternative_signals(context, as_of=None):
     as_of_source = "EXPLICIT" if as_of is not None else "LIVE_MAX_FALLBACK"
     if as_of is None:
         as_of = max(pd.Timestamp(x).tz_localize(None) for x in context.get("trading_days_dt", [pd.Timestamp.now("UTC")]))
-    news, news_evidence = load_timed_text(config.get("news_input_path"), assets, as_of)
-    forum, forum_evidence = load_timed_text(config.get("forum_input_path"), assets, as_of)
+    news, news_evidence = load_timed_text(config.get("news_input_path"), assets, as_of, config)
+    forum, forum_evidence = load_timed_text(config.get("forum_input_path"), assets, as_of, config)
     enhanced, llm_evidence = enhance_sentiment_with_local_llm({"news": news, "forum": forum}, config)
     news, forum = enhanced["news"], enhanced["forum"]
     result = pd.DataFrame({"symbol": assets})

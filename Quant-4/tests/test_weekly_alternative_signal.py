@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from Main.sleeve_allocation import SleevePortfolioConfig, SleeveSpec, run_sleeve_portfolio
 from Main.weekly_rotation import RotationParams, detect_regime, precompute_panels, rank_candidates, weekly_rotation_backtest
 from run_weekly_rotation import load_alternative_signal_panel
+from Phase_3.alternative_data_contract import SIGNAL_CONTRACT_VERSION
 
 
 def _frames(n=190, symbols=6):
@@ -45,8 +46,10 @@ def test_signal_loader_and_weekly_rank_use_exact_asof(tmp_path):
     date = next(reversed(frames["000001.SZ"].index[:-1]))
     source = tmp_path / "signals.csv"
     pd.DataFrame([
-        {"as_of": date, "symbol": "000001.sz", "alternative_signal": 1.0},
-        {"as_of": date, "symbol": "000006.SZ", "alternative_signal": -1.0},
+        {"as_of": date, "symbol": "000001.sz", "alternative_signal": 1.0,
+         "source_sha256": "a" * 64, "contract_version": SIGNAL_CONTRACT_VERSION},
+        {"as_of": date, "symbol": "000006.SZ", "alternative_signal": -1.0,
+         "source_sha256": "a" * 64, "contract_version": SIGNAL_CONTRACT_VERSION},
     ]).to_csv(source, index=False)
     signal = load_alternative_signal_panel(source)
     params = _params(alternative_signal_weight=1.0, alternative_signal_panel=signal)
@@ -55,6 +58,7 @@ def test_signal_loader_and_weekly_rank_use_exact_asof(tmp_path):
     ranked = rank_candidates(panel, date, params, regime=regime)
     assert ranked[0][0] == "000001.SZ"
     assert panel.alternative_signal.loc[date, "000006.SZ"] == -1.0
+    assert signal.attrs["provenance"]["source_sha256"] == ["a" * 64]
     prior = panel.common[panel.common.get_loc(date) - 1]
     assert pd.isna(panel.alternative_signal.loc[prior, "000001.SZ"]), "engine must not backfill a future signal"
 

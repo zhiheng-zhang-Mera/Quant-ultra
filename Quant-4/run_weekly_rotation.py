@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from Main.weekly_rotation import RotationParams, build_reports, weekly_rotation_backtest
+from Phase_3.alternative_data_contract import validate_signal_provenance
 
 PROJECT_ROOT = Path(__file__).parent
 DATA_CACHE = PROJECT_ROOT / "data_cache"
@@ -70,17 +71,20 @@ def load_alternative_signal_panel(path: Path) -> pd.DataFrame:
         frame = pd.read_json(path)
     else:
         frame = pd.read_csv(path)
-    required = {"as_of", "symbol", "alternative_signal"}
+    required = {"as_of", "symbol", "alternative_signal", "source_sha256", "contract_version"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"alternative signal file missing columns: {sorted(missing)}")
+    provenance = validate_signal_provenance(frame)
     frame = frame.loc[:, ["as_of", "symbol", "alternative_signal"]].copy()
     frame["as_of"] = pd.to_datetime(frame["as_of"], utc=True, errors="coerce").dt.tz_localize(None)
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
     frame["alternative_signal"] = pd.to_numeric(frame["alternative_signal"], errors="coerce")
     frame = frame.dropna(subset=["as_of", "symbol", "alternative_signal"])
     frame = frame.sort_values("as_of").drop_duplicates(["as_of", "symbol"], keep="last")
-    return frame.pivot(index="as_of", columns="symbol", values="alternative_signal").sort_index()
+    panel = frame.pivot(index="as_of", columns="symbol", values="alternative_signal").sort_index()
+    panel.attrs["provenance"] = provenance
+    return panel
 
 
 def default_params() -> RotationParams:

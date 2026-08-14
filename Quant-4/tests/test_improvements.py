@@ -128,6 +128,9 @@ def test_local_llm_sentiment_is_bounded_and_optional():
     frame = pd.DataFrame([{"published_at": pd.Timestamp("2026-08-01", tz="UTC"), "symbol": "600519.SH", "text": "增长", "sentiment": 1.0}])
     enhanced, evidence = enhance_sentiment_with_local_llm({"news": frame, "forum": frame.iloc[:0]}, {"local_llm_model": "local-test", "local_llm_max_records_total": 1}, client=FakeClient())
     assert evidence["status"] == "ANALYZED"
+    assert len(evidence["prompt_sha256"]) == 64
+    assert len(evidence["response_sha256"]) == 64
+    assert evidence["prompt_version"] == "financial-sentiment-json/v1"
     assert enhanced["news"].loc[0, "effective_sentiment"] == 0.8
 
 def test_local_llm_missing_model_falls_back_without_failure():

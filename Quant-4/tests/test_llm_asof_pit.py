@@ -14,7 +14,17 @@ from Main.advice_portfolio_backtest import UniverseDecision, run_advice_portfoli
 
 
 def _write_records(path, records):
-    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in records), encoding="utf-8")
+    enriched = []
+    for index, record in enumerate(records):
+        item = dict(record)
+        item.setdefault("record_id", f"record-{index}")
+        item.setdefault("source", "licensed-test-feed")
+        item.setdefault("source_type", "news")
+        item.setdefault("license", "test-research-license")
+        item.setdefault("ingested_at", item["published_at"])
+        item.setdefault("is_synthetic", False)
+        enriched.append(item)
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in enriched), encoding="utf-8")
 
 
 def _ohlcv_frame(n=170, start="2024-01-02", seed=7):
@@ -38,7 +48,8 @@ def test_explicit_asof_excludes_future_records(tmp_path):
         {"published_at": "2026-01-01T09:30:00Z", "symbol": "600519.SH", "text": "FUTURE_LEAK future message"},
     ])
     ctx = {
-        "config": {"news_input_path": str(news), "forum_input_path": None, "local_llm_sentiment_enabled": False},
+        "config": {"news_input_path": str(news), "forum_input_path": None, "local_llm_sentiment_enabled": False,
+                   "alternative_data_cache_dir": str(tmp_path / "raw-cache")},
         "assets": ["600519.SH"],
         "trading_days_dt": [pd.Timestamp("2025-12-31")],
         "asset_ohlcv": {},
@@ -58,7 +69,8 @@ def test_live_fallback_uses_max_and_is_labeled(tmp_path):
         {"published_at": "2025-12-01T09:30:00Z", "symbol": "600519.SH", "text": "利空"},
     ])
     ctx = {
-        "config": {"news_input_path": str(news), "forum_input_path": None, "local_llm_sentiment_enabled": False},
+        "config": {"news_input_path": str(news), "forum_input_path": None, "local_llm_sentiment_enabled": False,
+                   "alternative_data_cache_dir": str(tmp_path / "raw-cache")},
         "assets": ["600519.SH"],
         "trading_days_dt": [pd.Timestamp("2025-06-15")],
         "asset_ohlcv": {},
