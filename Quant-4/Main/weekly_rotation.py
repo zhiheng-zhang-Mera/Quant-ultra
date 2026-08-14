@@ -96,6 +96,12 @@ class RotationParams:
     # industry 20d momentum from the CSRC map (Data_Cache/sector_map_full.json).
     # Default 0 keeps the evidence-gated production score unchanged.
     sector_momentum_weight: float = 0.0
+    # Point-in-time alternative signal (date x symbol, values in [-1, 1]).
+    # The panel is read only at the current signal date; no forward fill is
+    # performed inside the engine. Default weight 0 keeps production behavior
+    # unchanged until the signal passes the full-PIT evidence gate.
+    alternative_signal_weight: float = 0.0
+    alternative_signal_panel: Optional[pd.DataFrame] = None
     # Fundamental factors (Main.fundamental_factors): name -> weight, e.g.
     # {"gp_margin": 0.10, "yoy_ni": 0.05}. Values are PIT-aligned to report
     # publication dates and uncovered names fall back to the cross-sectional
@@ -308,6 +314,12 @@ def composite_factor_scores(
         sec_row = industry_momentum_series(panel, date, smap)
         if sec_row is not None:
             factors["sector_mom"] = sec_row
+    if params.alternative_signal_weight > 0 and panel.alternative_signal is not None:
+        if date in panel.alternative_signal.index:
+            alt_row = panel.alternative_signal.loc[date].reindex(symbols).astype(float)
+            alt_row = alt_row.replace([np.inf, -np.inf], np.nan)
+            if alt_row.notna().sum() >= 2:
+                factors["alternative_signal"] = alt_row
     if params.fundamental_factors and getattr(panel, "fundamental_panels", None):
         # PIT fundamentals (Main.fundamental_factors): uncovered names fall
         # back to the cross-sectional median so they are neither boosted nor
@@ -379,6 +391,8 @@ def composite_factor_scores(
             extra_weights[name] = float(np.clip(float(w), 0.0, 1.0))
     if "sector_mom" in z and params.sector_momentum_weight > 0:
         extra_weights["sector_mom"] = float(np.clip(params.sector_momentum_weight, 0.0, 1.0))
+    if "alternative_signal" in z and params.alternative_signal_weight > 0:
+        extra_weights["alternative_signal"] = float(np.clip(params.alternative_signal_weight, 0.0, 1.0))
     for name, w in (params.fundamental_factors or {}).items():
         if name in z and float(w) > 0:
             extra_weights[name] = float(np.clip(float(w), 0.0, 1.0))
@@ -434,6 +448,7 @@ class FeaturePanel:
     max_ret: Optional[pd.DataFrame] = None    # rolling max daily return (PIT)
     illiquidity: Optional[pd.DataFrame] = None  # log Amihud |ret|/amount (PIT)
     fundamental_panels: Optional[Dict[str, pd.DataFrame]] = None  # PIT fundamentals
+    alternative_signal: Optional[pd.DataFrame] = None  # exact-date PIT signal; never backfilled here
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -508,6 +523,13 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
             fundamentals = load_all_fundamentals(top_n=params.fundamental_top_n)
         if fundamentals:
             fundamental_panels = build_fundamental_panels(fundamentals, common, symbols)
+    alternative_signal = None
+    if params.alternative_signal_weight > 0 and params.alternative_signal_panel is not None:
+        source = params.alternative_signal_panel.copy()
+        source.index = pd.to_datetime(source.index, errors="coerce").tz_localize(None)
+        source = source.loc[source.index.notna()]
+        source = source[~source.index.duplicated(keep="last")].sort_index()
+        alternative_signal = source.apply(pd.to_numeric, errors="coerce").reindex(index=common, columns=symbols)
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
         # passed enter the trailing window (see pit_dividends.trailing_dividend_yield).
@@ -536,7 +558,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels, alternative_signal=alternative_signal)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:

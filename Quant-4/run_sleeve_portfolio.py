@@ -36,6 +36,7 @@ from run_weekly_rotation import (
     build_pit_universe,
     default_params,
     load_cached_dividends,
+    load_alternative_signal_panel,
     load_frames,
     load_pit_dividends,
 )
@@ -130,6 +131,10 @@ def main() -> int:
                         help="mount a fundamental factor on a sleeve, repeatable, "
                              "e.g. --sleeve-fundamental sprint=yoy_ni=0.10")
     parser.add_argument("--max-short-exposure", type=float, default=0.20)
+    parser.add_argument("--alternative-signal-path", type=Path, default=None,
+                        help="PIT signal table: as_of,symbol,alternative_signal")
+    parser.add_argument("--alternative-signal-weight", type=float, default=0.0,
+                        help="alternative-signal weight applied to every sleeve (0 = off)")
     args = parser.parse_args()
 
     alive_mask = None
@@ -264,6 +269,11 @@ def main() -> int:
         params.fundamental_factors = fund
     params.fundamental_top_n = args.fundamental_top_n
     params.fundamental_source = args.fundamental_source
+    if args.alternative_signal_weight > 0 and args.alternative_signal_path is None:
+        parser.error("--alternative-signal-weight requires --alternative-signal-path")
+    if args.alternative_signal_path is not None:
+        params.alternative_signal_panel = load_alternative_signal_panel(args.alternative_signal_path)
+        params.alternative_signal_weight = args.alternative_signal_weight
     config = SleevePortfolioConfig(
         rebalance_days=args.rebalance_days,
         threshold=args.threshold,

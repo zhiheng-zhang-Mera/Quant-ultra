@@ -59,6 +59,30 @@ def load_frames(cache_dir: Path, symbols: list[str]) -> dict[str, pd.DataFrame]:
     return frames
 
 
+def load_alternative_signal_panel(path: Path) -> pd.DataFrame:
+    """Load precomputed PIT signals with columns as_of, symbol, alternative_signal."""
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        frame = pd.read_parquet(path)
+    elif suffix == ".jsonl":
+        frame = pd.read_json(path, lines=True)
+    elif suffix == ".json":
+        frame = pd.read_json(path)
+    else:
+        frame = pd.read_csv(path)
+    required = {"as_of", "symbol", "alternative_signal"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"alternative signal file missing columns: {sorted(missing)}")
+    frame = frame.loc[:, ["as_of", "symbol", "alternative_signal"]].copy()
+    frame["as_of"] = pd.to_datetime(frame["as_of"], utc=True, errors="coerce").dt.tz_localize(None)
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    frame["alternative_signal"] = pd.to_numeric(frame["alternative_signal"], errors="coerce")
+    frame = frame.dropna(subset=["as_of", "symbol", "alternative_signal"])
+    frame = frame.sort_values("as_of").drop_duplicates(["as_of", "symbol"], keep="last")
+    return frame.pivot(index="as_of", columns="symbol", values="alternative_signal").sort_index()
+
+
 def default_params() -> RotationParams:
     return RotationParams(
         start_date="2016-01-01",
@@ -192,6 +216,10 @@ def main() -> int:
     parser.add_argument("--universe", nargs="*", default=None)
     parser.add_argument("--pit", action="store_true", help="survivorship-free PIT universe (ever-alive A-shares + ETFs)")
     parser.add_argument("--signal-mode", choices=["rule", "composite"], default="composite")
+    parser.add_argument("--alternative-signal-path", type=Path, default=None,
+                        help="PIT signal table: as_of,symbol,alternative_signal")
+    parser.add_argument("--alternative-signal-weight", type=float, default=0.0,
+                        help="cross-sectional alternative-signal weight (0 = disabled)")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -216,6 +244,11 @@ def main() -> int:
     params = default_params()
     params.start_date = args.start
     params.signal_mode = args.signal_mode
+    if args.alternative_signal_weight > 0 and args.alternative_signal_path is None:
+        parser.error("--alternative-signal-weight requires --alternative-signal-path")
+    if args.alternative_signal_path is not None:
+        params.alternative_signal_panel = load_alternative_signal_panel(args.alternative_signal_path)
+        params.alternative_signal_weight = args.alternative_signal_weight
     params.alive_mask = alive_mask
     if benchmark_exclude:
         params.benchmark_exclude = tuple(benchmark_exclude)
