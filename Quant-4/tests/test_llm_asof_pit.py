@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from Phase_3.alternative_data import build_alternative_signals
@@ -67,6 +68,32 @@ def test_live_fallback_uses_max_and_is_labeled(tmp_path):
     assert ev["as_of_source"] == "LIVE_MAX_FALLBACK"
     assert ev["news"]["records"] == 1
     assert ev["as_of"] == "2025-06-15 00:00:00"
+
+
+@pytest.mark.parametrize("mode", ["historical", "backtest", "replay"])
+def test_historical_modes_fail_closed_without_explicit_asof(mode):
+    ctx = {
+        "config": {"alternative_data_mode": mode, "local_llm_sentiment_enabled": False},
+        "assets": ["600519.SH"],
+        "trading_days_dt": [pd.Timestamp("2025-12-31")],
+        "asset_ohlcv": {},
+    }
+    with pytest.raises(ValueError, match="require explicit as_of"):
+        build_alternative_signals(ctx)
+
+
+def test_historical_context_asof_is_accepted_and_audited():
+    ctx = {
+        "config": {"alternative_data_mode": "backtest", "local_llm_sentiment_enabled": False},
+        "assets": ["600519.SH"],
+        "as_of_dt": pd.Timestamp("2025-06-30"),
+        "trading_days_dt": [pd.Timestamp("2025-12-31")],
+        "asset_ohlcv": {},
+    }
+    evidence = build_alternative_signals(ctx)["alternative_data_evidence"]
+    assert evidence["mode"] == "backtest"
+    assert evidence["pit_cutoff_explicit"] is True
+    assert evidence["as_of"] == "2025-06-30 00:00:00"
 
 
 def test_advice_backtest_alternative_hook_recorded():

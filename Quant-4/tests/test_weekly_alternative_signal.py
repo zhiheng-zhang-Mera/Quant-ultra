@@ -70,6 +70,22 @@ def test_zero_weight_is_byte_compatible_with_baseline():
     pd.testing.assert_frame_equal(r0, r1)
 
 
+def test_future_signal_mutation_cannot_change_prior_engine_results():
+    frames = _frames(n=230)
+    dates = frames["000001.SZ"].index
+    cutoff = dates[175]
+    base_signal = pd.DataFrame(0.0, index=dates, columns=frames)
+    base_signal.loc[:cutoff, "000001.SZ"] = 1.0
+    mutated_signal = base_signal.copy()
+    mutated_signal.loc[mutated_signal.index > cutoff, :] = -1.0
+    mutated_signal.loc[mutated_signal.index > cutoff, "000006.SZ"] = 1.0
+    params = _params(alternative_signal_panel=base_signal, alternative_signal_weight=0.3)
+    mutated = replace(params, alternative_signal_panel=mutated_signal)
+    first = weekly_rotation_backtest(frames, params)["returns"]
+    second = weekly_rotation_backtest(frames, mutated)["returns"]
+    pd.testing.assert_frame_equal(first.loc[:cutoff], second.loc[:cutoff])
+
+
 def test_sleeve_orchestrator_preserves_signal_config(monkeypatch):
     frames = _frames()
     dates = frames["000001.SZ"].index
