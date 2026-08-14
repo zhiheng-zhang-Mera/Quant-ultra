@@ -216,7 +216,14 @@ def run_advice_portfolio_backtest(
     min_assets: int = 2, max_positions: int = 5, min_exposure: float = 0.15,
     max_exposure: float = 0.90, max_holding_days: int = 20, harvest_cooldown_days: int = 3,
     min_trade_weight: float = 0.02, max_daily_turnover: float = 0.25,
+    alternative_signal_fn=None,
+    alternative_signal_rank_weight: float = 0.0,
 ) -> dict:
+    # alternative_signal_fn: Optional[Callable[[pd.Timestamp, str], float]]
+    # PIT hook: given the rebalance signal date and symbol, returns an
+    # alternative-data sentiment in [-1, 1]; None keeps legacy behavior.
+    # alternative_signal_rank_weight: share of the PIT alternative signal that
+    # enters the rank score directly (0.0 = legacy behavior); bounded tilt.
     if len(frames) < min_assets:
         raise ValueError(f"at least {min_assets} eligible real assets are required; found {len(frames)}")
     if years < 1 or lookback < 60 or rebalance_every < 1 or fee_rate < 0 or max_positions < 1 or max_holding_days < 2:
@@ -275,7 +282,7 @@ def run_advice_portfolio_backtest(
                     if meta.get("exit_reason") in {"TAKE_PROFIT", "STOP_LOSS", "TIME_HARVEST"}:
                         cooldown[symbol] = harvest_cooldown_days
                     entry_prices[symbol], holding_days[symbol] = 0.0, 0
-                signal_rows.append({"signal_date": pending["signal_date"], "execution_date": date, "symbol": symbol, "historically_eligible": bool(meta.get("eligible", False)), "qualified": bool(meta.get("qualified", False)), "score": meta.get("score"), "dynamic_exposure": pending["dynamic_exposure"], "suggested_weight": meta.get("suggested_weight", 0.0), "executed_target_weight": desired[symbol], "execution_gap": gap, "execution_status": status, "exit_reason": meta.get("exit_reason", ""), "dominant_selection_method": meta.get("dominant_selection_method", "")})
+                signal_rows.append({"signal_date": pending["signal_date"], "execution_date": date, "symbol": symbol, "historically_eligible": bool(meta.get("eligible", False)), "qualified": bool(meta.get("qualified", False)), "score": meta.get("score"), "dynamic_exposure": pending["dynamic_exposure"], "suggested_weight": meta.get("suggested_weight", 0.0), "executed_target_weight": desired[symbol], "execution_gap": gap, "execution_status": status, "exit_reason": meta.get("exit_reason", ""), "dominant_selection_method": meta.get("dominant_selection_method", ""), "alternative_signal": meta.get("alternative_signal", 0.0)})
             weights = desired
             pending = None
         as_of_universe = eligible_as_of(frames, date, lookback)
@@ -303,7 +310,8 @@ def run_advice_portfolio_backtest(
             candidates, metadata, engine_qualified_count = [], {}, 0
             for symbol in as_of_universe:
                 history = frames[symbol].loc[:date].tail(max(lookback, 252)).reset_index()
-                rec = recommendation(history, asset_type=asset_type_for_symbol(symbol))
+                alt = alternative_signal_fn(date, symbol) if alternative_signal_fn is not None else 0.0
+                rec = recommendation(history, asset_type=asset_type_for_symbol(symbol), alternative_signal=float(alt))
                 close = float(frames[symbol].at[date, "close"])
                 pnl = close / entry_prices[symbol] - 1 if entry_prices[symbol] > 0 else 0.0
                 exit_reason = ""
@@ -317,8 +325,9 @@ def run_advice_portfolio_backtest(
                 tradable_candidate = bool((rec["qualified"] or held) and cooldown[symbol] == 0 and not exit_reason)
                 engine_qualified_count += int(bool(rec["qualified"]))
                 annual_vol = max(float(rec.get("annual_volatility", 0.0)), 0.05)
-                rank_score = float(rec["score"] + rec["decision_chain"]["selection"]["nonlinear_score"] - 0.25 * annual_vol)
-                metadata[symbol] = {"eligible": True, "qualified": bool(rec["qualified"]), "selectable": tradable_candidate, "score": rank_score, "suggested_weight": float(rec["suggested_weight"]), "exit_reason": exit_reason, "annual_volatility": annual_vol, "dominant_selection_method": rec["dominant_selection_method"]}
+                rank_score = float(rec["score"] + rec["decision_chain"]["selection"]["nonlinear_score"] - 0.25 * annual_vol
+                                  + float(np.clip(alternative_signal_rank_weight, 0.0, 1.0)) * alt)
+                metadata[symbol] = {"eligible": True, "qualified": bool(rec["qualified"]), "selectable": tradable_candidate, "score": rank_score, "suggested_weight": float(rec["suggested_weight"]), "exit_reason": exit_reason, "annual_volatility": annual_vol, "dominant_selection_method": rec["dominant_selection_method"], "alternative_signal": float(alt)}
                 if tradable_candidate:
                     candidates.append((symbol, rank_score, annual_vol, close > float(rec["ma60"])))
             selected = sorted(candidates, key=lambda item: item[1], reverse=True)[:max_positions]

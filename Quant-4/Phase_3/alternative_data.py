@@ -97,9 +97,20 @@ def enhance_sentiment_with_local_llm(frames, config, client=None):
     except (OSError, ValueError, KeyError, json.JSONDecodeError, urllib.error.URLError) as exc:
         return frames, {**evidence, "status": "FALLBACK_ON_ERROR", "model": model, "error": type(exc).__name__}
 
-def build_alternative_signals(context):
+def build_alternative_signals(context, as_of=None):
+    """Compile PIT alternative signals.
+
+    ``as_of`` must be the current decision date. Explicit ``as_of`` (or
+    ``context["as_of_dt"]``) is required for historical re-runs/backtests:
+    falling back to ``max(trading_days_dt)`` is only correct for a live
+    same-day run and is reported as ``as_of_source=LIVE_MAX_FALLBACK``.
+    """
     config, assets = context.get("config", {}), context.get("assets", [])
-    as_of = max(pd.Timestamp(x).tz_localize(None) for x in context.get("trading_days_dt", [pd.Timestamp.now("UTC")]))
+    if as_of is None:
+        as_of = context.get("as_of_dt")
+    as_of_source = "EXPLICIT" if as_of is not None else "LIVE_MAX_FALLBACK"
+    if as_of is None:
+        as_of = max(pd.Timestamp(x).tz_localize(None) for x in context.get("trading_days_dt", [pd.Timestamp.now("UTC")]))
     news, news_evidence = load_timed_text(config.get("news_input_path"), assets, as_of)
     forum, forum_evidence = load_timed_text(config.get("forum_input_path"), assets, as_of)
     enhanced, llm_evidence = enhance_sentiment_with_local_llm({"news": news, "forum": forum}, config)
@@ -114,4 +125,4 @@ def build_alternative_signals(context):
     for col in ("news_sentiment", "forum_sentiment"): result[col] = result[col].fillna(0.0).clip(-1, 1)
     for col in ("news_record_count", "forum_record_count"): result[col] = result[col].fillna(0).astype(int)
     result["alternative_signal"] = (0.35 * result["news_sentiment"] + 0.25 * result["forum_sentiment"] + 0.40 * result["capital_pool_change_5v20"].fillna(0).clip(-1, 1)).clip(-1, 1)
-    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "method": "PIT lexical sentiment, optional bounded local-LLM enhancement, and 5-day/20-day turnover pool change", "future_records_excluded": True}}
+    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "as_of": str(pd.Timestamp(as_of).tz_localize(None)), "as_of_source": as_of_source, "method": "PIT lexical sentiment, optional bounded local-LLM enhancement, and 5-day/20-day turnover pool change", "future_records_excluded": True}}
