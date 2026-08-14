@@ -47,6 +47,7 @@ def test_dual_timestamp_filter_and_content_addressed_cache(tmp_path):
     assert selected["record_id"].tolist() == ["known"]
     assert evidence["contract_version"] == RAW_TEXT_CONTRACT_VERSION
     assert evidence["dual_timestamp_filter"] is True
+    assert evidence["max_source_latency_hours"] == pytest.approx(24.0 * 30)
     cached = Path(evidence["immutable_cache_path"])
     assert cached.is_file() and cached.stem == evidence["sha256"]
     assert sha256_file(cached) == sha256_file(source)

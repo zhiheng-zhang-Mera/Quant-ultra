@@ -179,6 +179,7 @@ def run_sleeve_portfolio(
             "returns": result["returns"],
             "regimes": result["regimes"],
             "closed_trades": result.get("closed_trades", pd.DataFrame()),
+            "alternative_signal_governance": result.get("alternative_signal_governance"),
         }
         trades = result.get("closed_trades")
         if trades is not None and len(trades):

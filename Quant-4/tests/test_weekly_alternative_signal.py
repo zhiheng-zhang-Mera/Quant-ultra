@@ -41,16 +41,27 @@ def _params(**kwargs):
     return replace(base, **kwargs)
 
 
+def _governed(panel, latency=1.0, fallback=False):
+    panel.attrs["provenance"] = {
+        "contract_version": SIGNAL_CONTRACT_VERSION,
+        "source_sha256": ["a" * 64],
+        "max_source_latency_hours": latency,
+        "fallback_used": fallback,
+    }
+    return panel
+
+
 def test_signal_loader_and_weekly_rank_use_exact_asof(tmp_path):
     frames = _frames()
     date = next(reversed(frames["000001.SZ"].index[:-1]))
     source = tmp_path / "signals.csv"
-    pd.DataFrame([
-        {"as_of": date, "symbol": "000001.sz", "alternative_signal": 1.0,
-         "source_sha256": "a" * 64, "contract_version": SIGNAL_CONTRACT_VERSION},
-        {"as_of": date, "symbol": "000006.SZ", "alternative_signal": -1.0,
-         "source_sha256": "a" * 64, "contract_version": SIGNAL_CONTRACT_VERSION},
-    ]).to_csv(source, index=False)
+    rows = []
+    for symbol in frames:
+        value = 1.0 if symbol == "000001.SZ" else (-1.0 if symbol == "000006.SZ" else 0.0)
+        rows.append({"as_of": date, "symbol": symbol.lower(), "alternative_signal": value,
+                     "source_sha256": "a" * 64, "contract_version": SIGNAL_CONTRACT_VERSION,
+                     "source_latency_hours": 1.0, "fallback_used": False})
+    pd.DataFrame(rows).to_csv(source, index=False)
     signal = load_alternative_signal_panel(source)
     params = _params(alternative_signal_weight=1.0, alternative_signal_panel=signal)
     panel = precompute_panels(frames, params)
@@ -66,7 +77,7 @@ def test_signal_loader_and_weekly_rank_use_exact_asof(tmp_path):
 def test_zero_weight_is_byte_compatible_with_baseline():
     frames = _frames()
     dates = frames["000001.SZ"].index
-    signal = pd.DataFrame(1.0, index=dates, columns=frames)
+    signal = _governed(pd.DataFrame(1.0, index=dates, columns=frames))
     base = _params()
     with_disabled_signal = replace(base, alternative_signal_panel=signal, alternative_signal_weight=0.0)
     r0 = weekly_rotation_backtest(frames, base)["returns"]
@@ -78,9 +89,10 @@ def test_future_signal_mutation_cannot_change_prior_engine_results():
     frames = _frames(n=230)
     dates = frames["000001.SZ"].index
     cutoff = dates[175]
-    base_signal = pd.DataFrame(0.0, index=dates, columns=frames)
+    base_signal = _governed(pd.DataFrame(0.0, index=dates, columns=frames))
     base_signal.loc[:cutoff, "000001.SZ"] = 1.0
     mutated_signal = base_signal.copy()
+    mutated_signal.attrs = dict(base_signal.attrs)
     mutated_signal.loc[mutated_signal.index > cutoff, :] = -1.0
     mutated_signal.loc[mutated_signal.index > cutoff, "000006.SZ"] = 1.0
     params = _params(alternative_signal_panel=base_signal, alternative_signal_weight=0.3)
@@ -93,7 +105,7 @@ def test_future_signal_mutation_cannot_change_prior_engine_results():
 def test_sleeve_orchestrator_preserves_signal_config(monkeypatch):
     frames = _frames()
     dates = frames["000001.SZ"].index
-    signal = pd.DataFrame(0.2, index=dates, columns=frames)
+    signal = _governed(pd.DataFrame(0.2, index=dates, columns=frames))
     seen = []
 
     def fake_engine(_frames, params, regime_detector_kwargs=None):
@@ -118,3 +130,26 @@ def test_sleeve_orchestrator_preserves_signal_config(monkeypatch):
     assert len(seen) == 1
     assert seen[0].alternative_signal_weight == pytest.approx(0.2)
     pd.testing.assert_frame_equal(seen[0].alternative_signal_panel, signal)
+
+
+@pytest.mark.parametrize(
+    "panel,provenance,reason",
+    [
+        (pd.DataFrame([[0.1, np.nan]], columns=["000001.SZ", "000002.SZ"]),
+         {"max_source_latency_hours": 1.0, "fallback_used": False}, "finite_values"),
+        (pd.DataFrame([[0.1, 2.0]], columns=["000001.SZ", "000002.SZ"]),
+         {"max_source_latency_hours": 1.0, "fallback_used": False}, "bounded_values"),
+        (pd.DataFrame([[0.1, 0.2]], columns=["000001.SZ", "000002.SZ"]),
+         {"max_source_latency_hours": 48.0, "fallback_used": False}, "source_latency"),
+        (pd.DataFrame([[0.1, 0.2]], columns=["000001.SZ", "000002.SZ"]),
+         {"max_source_latency_hours": 1.0, "fallback_used": True}, "fallback_policy"),
+    ],
+)
+def test_signal_governance_rejects_unsafe_evidence(panel, provenance, reason):
+    from Main.alternative_signal_governance import evaluate_signal_panel
+
+    panel.attrs["provenance"] = provenance
+    result = evaluate_signal_panel(panel, ["000001.SZ", "000002.SZ"], provenance)
+    assert result["status"] == "HOLD_FOR_REVIEW"
+    assert result["action"] == "OBSERVATION_ONLY"
+    assert reason in result["reasons"]

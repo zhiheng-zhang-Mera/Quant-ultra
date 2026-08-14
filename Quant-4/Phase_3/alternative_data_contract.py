@@ -112,6 +112,7 @@ def load_contract_text(
         & frame["symbol"].isin({str(asset).upper() for asset in assets})
     )
     selected = frame.loc[eligible].copy()
+    latency_hours = (frame["ingested_at"] - frame["published_at"]).dt.total_seconds() / 3600.0
     evidence = {
         "status": "LOADED",
         "contract_version": RAW_TEXT_CONTRACT_VERSION,
@@ -124,6 +125,9 @@ def load_contract_text(
         "source_types": sorted(frame["source_type"].unique().tolist()),
         "licenses": sorted(frame["license"].unique().tolist()),
         "synthetic_records": int(frame["is_synthetic"].sum()),
+        "covered_symbols": sorted(selected["symbol"].unique().tolist()),
+        "max_source_latency_hours": float(latency_hours.max()) if len(latency_hours) else None,
+        "median_source_latency_hours": float(latency_hours.median()) if len(latency_hours) else None,
         "published_at_max": frame["published_at"].max().isoformat() if len(frame) else None,
         "ingested_at_max": frame["ingested_at"].max().isoformat() if len(frame) else None,
         "as_of": cutoff.isoformat(),
@@ -134,7 +138,7 @@ def load_contract_text(
 
 def validate_signal_provenance(frame: pd.DataFrame) -> dict:
     """Validate provenance columns on a derived PIT signal table."""
-    required = {"source_sha256", "contract_version"}
+    required = {"source_sha256", "contract_version", "source_latency_hours", "fallback_used"}
     missing = required - set(frame.columns)
     if missing:
         raise AlternativeDataContractError(f"signal file missing provenance columns: {sorted(missing)}")
@@ -146,4 +150,13 @@ def validate_signal_provenance(frame: pd.DataFrame) -> dict:
         raise AlternativeDataContractError(
             f"contract_version must be {SIGNAL_CONTRACT_VERSION!r}; found {versions}"
         )
-    return {"contract_version": SIGNAL_CONTRACT_VERSION, "source_sha256": hashes}
+    latency = pd.to_numeric(frame["source_latency_hours"], errors="coerce")
+    if latency.isna().any() or (latency < 0).any():
+        raise AlternativeDataContractError("source_latency_hours must be finite and non-negative")
+    fallback = _as_bool(frame["fallback_used"])
+    return {
+        "contract_version": SIGNAL_CONTRACT_VERSION,
+        "source_sha256": hashes,
+        "max_source_latency_hours": float(latency.max()),
+        "fallback_used": bool(fallback.any()),
+    }

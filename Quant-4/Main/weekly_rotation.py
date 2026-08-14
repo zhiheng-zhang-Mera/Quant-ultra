@@ -22,6 +22,7 @@ import pandas as pd
 
 from Main.trading_costs import explicit_order_fees, is_etf
 from Main.pit_dividends import trailing_dividend_yield
+from Main.alternative_signal_governance import evaluate_signal_panel
 
 
 @dataclass
@@ -102,6 +103,10 @@ class RotationParams:
     # unchanged until the signal passes the full-PIT evidence gate.
     alternative_signal_weight: float = 0.0
     alternative_signal_panel: Optional[pd.DataFrame] = None
+    alternative_signal_min_coverage: float = 0.80
+    alternative_signal_max_missing_rate: float = 0.20
+    alternative_signal_max_latency_hours: float = 24.0
+    alternative_signal_allow_fallback: bool = False
     # Fundamental factors (Main.fundamental_factors): name -> weight, e.g.
     # {"gp_margin": 0.10, "yoy_ni": 0.05}. Values are PIT-aligned to report
     # publication dates and uncovered names fall back to the cross-sectional
@@ -449,6 +454,7 @@ class FeaturePanel:
     illiquidity: Optional[pd.DataFrame] = None  # log Amihud |ret|/amount (PIT)
     fundamental_panels: Optional[Dict[str, pd.DataFrame]] = None  # PIT fundamentals
     alternative_signal: Optional[pd.DataFrame] = None  # exact-date PIT signal; never backfilled here
+    alternative_signal_governance: Optional[dict] = None
 
 
 def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -> FeaturePanel:
@@ -524,11 +530,26 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         if fundamentals:
             fundamental_panels = build_fundamental_panels(fundamentals, common, symbols)
     alternative_signal = None
+    alternative_signal_governance = None
     if params.alternative_signal_weight > 0 and params.alternative_signal_panel is not None:
         source = params.alternative_signal_panel.copy()
         source.index = pd.to_datetime(source.index, errors="coerce").tz_localize(None)
         source = source.loc[source.index.notna()]
         source = source[~source.index.duplicated(keep="last")].sort_index()
+        alternative_signal_governance = evaluate_signal_panel(
+            source,
+            symbols,
+            source.attrs.get("provenance"),
+            min_symbol_coverage=params.alternative_signal_min_coverage,
+            max_missing_rate=params.alternative_signal_max_missing_rate,
+            max_source_latency_hours=params.alternative_signal_max_latency_hours,
+            allow_fallback=params.alternative_signal_allow_fallback,
+        )
+        if not alternative_signal_governance["passed"]:
+            raise ValueError(
+                "alternative signal governance failed: "
+                + ", ".join(alternative_signal_governance["reasons"])
+            )
         alternative_signal = source.apply(pd.to_numeric, errors="coerce").reindex(index=common, columns=symbols)
     if params.dividend_cash is not None and len(params.dividend_cash):
         # PIT trailing dividend yield: only dividends whose ex-date has already
@@ -558,7 +579,7 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels, alternative_signal=alternative_signal)
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels, alternative_signal=alternative_signal, alternative_signal_governance=alternative_signal_governance)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
@@ -1425,7 +1446,9 @@ def weekly_rotation_backtest(
         index_close = frames["510300.SH"]["close"].reindex(common).ffill()
         index_returns = index_close.pct_change(fill_method=None)
     summary = summarize(returns, regimes, params, closed_trades, index_returns)
-    return {"returns": returns, "regimes": regimes, "summary": summary, "params": params, "closed_trades": pd.DataFrame(closed_trades)}
+    return {"returns": returns, "regimes": regimes, "summary": summary, "params": params,
+            "closed_trades": pd.DataFrame(closed_trades),
+            "alternative_signal_governance": panel.alternative_signal_governance}
 
 
 def _execution_snapshot(frame: pd.DataFrame, date: pd.Timestamp) -> Tuple[float, float, float]:

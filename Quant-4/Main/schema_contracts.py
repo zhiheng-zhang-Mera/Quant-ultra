@@ -34,7 +34,7 @@ PHASE_INPUT_SCHEMA: Dict[str, Set[str]] = {
 PHASE_OUTPUT_SCHEMA: Dict[str, Set[str]] = {
     "Phase_1.step1_data_foundation": {"assets", "adv_data", "theoretical_aum_limit"},
     "Phase_2.step2_data_slicing": {"slices", "embargo_window"},
-    "Phase_3.step3_pit_setup": {"feature_panel_shared", "feature_panel_private_a", "feature_panel_private_us", "online_regime_state", "alternative_signals", "alternative_data_evidence"},
+    "Phase_3.step3_pit_setup": {"feature_panel_shared", "feature_panel_private_a", "feature_panel_private_us", "online_regime_state", "alternative_signals", "alternative_data_evidence", "alternative_signal_governance"},
     "Phase_4.step4_labeling_weighting": {"y_clf_all", "y_reg_all", "sample_weights"},
     "Phase_5.step5_model_training_calibration": {"direction_classifier", "quantile_models", "gamma_star", "q_error_threshold_dict", "selected_features", "fractional_features_cube", "num_trials", "trial_evidence"},
     "Phase_6.step6_position_sizing": {"daily_weights", "daily_intervals", "daily_adv20"},

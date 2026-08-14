@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from Phase_3.alternative_data_contract import RAW_TEXT_CONTRACT_VERSION, load_contract_text
+from Main.alternative_signal_governance import evaluate_phase3_signal
 
 POSITIVE = {"利好", "增长", "增持", "突破", "回购", "盈利", "beat", "growth", "upgrade", "buyback", "bullish"}
 NEGATIVE = {"利空", "下跌", "减持", "亏损", "处罚", "违约", "风险", "miss", "loss", "downgrade", "default", "bearish"}
@@ -147,4 +148,7 @@ def build_alternative_signals(context, as_of=None):
     for col in ("news_sentiment", "forum_sentiment"): result[col] = result[col].fillna(0.0).clip(-1, 1)
     for col in ("news_record_count", "forum_record_count"): result[col] = result[col].fillna(0).astype(int)
     result["alternative_signal"] = (0.35 * result["news_sentiment"] + 0.25 * result["forum_sentiment"] + 0.40 * result["capital_pool_change_5v20"].fillna(0).clip(-1, 1)).clip(-1, 1)
-    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "mode": mode, "as_of": str(pd.Timestamp(as_of).tz_localize(None)), "as_of_source": as_of_source, "pit_cutoff_explicit": as_of_source == "EXPLICIT", "method": "PIT lexical sentiment, optional bounded local-LLM enhancement, and 5-day/20-day turnover pool change", "future_records_excluded": True}}
+    governance = evaluate_phase3_signal(
+        result, assets, [news_evidence, forum_evidence], llm_evidence, config
+    )
+    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "mode": mode, "as_of": str(pd.Timestamp(as_of).tz_localize(None)), "as_of_source": as_of_source, "pit_cutoff_explicit": as_of_source == "EXPLICIT", "method": "PIT lexical sentiment, optional bounded local-LLM enhancement, and 5-day/20-day turnover pool change", "future_records_excluded": True}, "alternative_signal_governance": governance}

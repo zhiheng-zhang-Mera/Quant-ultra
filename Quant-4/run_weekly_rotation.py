@@ -71,7 +71,8 @@ def load_alternative_signal_panel(path: Path) -> pd.DataFrame:
         frame = pd.read_json(path)
     else:
         frame = pd.read_csv(path)
-    required = {"as_of", "symbol", "alternative_signal", "source_sha256", "contract_version"}
+    required = {"as_of", "symbol", "alternative_signal", "source_sha256", "contract_version",
+                "source_latency_hours", "fallback_used"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"alternative signal file missing columns: {sorted(missing)}")
@@ -80,8 +81,15 @@ def load_alternative_signal_panel(path: Path) -> pd.DataFrame:
     frame["as_of"] = pd.to_datetime(frame["as_of"], utc=True, errors="coerce").dt.tz_localize(None)
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
     frame["alternative_signal"] = pd.to_numeric(frame["alternative_signal"], errors="coerce")
-    frame = frame.dropna(subset=["as_of", "symbol", "alternative_signal"])
-    frame = frame.sort_values("as_of").drop_duplicates(["as_of", "symbol"], keep="last")
+    if frame[["as_of", "symbol", "alternative_signal"]].isna().any().any():
+        raise ValueError("alternative signal file contains invalid required values")
+    if not np.isfinite(frame["alternative_signal"].to_numpy(dtype=float)).all():
+        raise ValueError("alternative signal values must be finite")
+    if not frame["alternative_signal"].between(-1.0, 1.0).all():
+        raise ValueError("alternative signal values must be within [-1, 1]")
+    if frame.duplicated(["as_of", "symbol"]).any():
+        raise ValueError("alternative signal rows must be unique by as_of and symbol")
+    frame = frame.sort_values("as_of")
     panel = frame.pivot(index="as_of", columns="symbol", values="alternative_signal").sort_index()
     panel.attrs["provenance"] = provenance
     return panel

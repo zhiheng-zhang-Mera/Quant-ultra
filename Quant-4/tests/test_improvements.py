@@ -117,6 +117,8 @@ def test_alternative_data_is_pit_and_reports_missing_optional_sources(tmp_path):
     result = build_alternative_signals(context)
     assert result["alternative_data_evidence"]["future_records_excluded"]
     assert result["alternative_data_evidence"]["news"]["status"] == "MISSING_OPTIONAL_SOURCE"
+    assert result["alternative_signal_governance"]["status"] == "HOLD_FOR_REVIEW"
+    assert result["alternative_signal_governance"]["action"] == "OBSERVATION_ONLY"
     assert np.isfinite(result["alternative_signals"].loc[0, "alternative_signal"])
 
 def test_local_llm_sentiment_is_bounded_and_optional():
