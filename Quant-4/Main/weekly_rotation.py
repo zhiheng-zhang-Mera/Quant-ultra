@@ -23,6 +23,7 @@ import pandas as pd
 from Main.trading_costs import explicit_order_fees, is_etf
 from Main.pit_dividends import trailing_dividend_yield
 from Main.alternative_signal_governance import evaluate_signal_panel
+from Main.research_evidence_gate import evaluate_research_gate
 
 
 @dataclass
@@ -107,6 +108,9 @@ class RotationParams:
     alternative_signal_max_missing_rate: float = 0.20
     alternative_signal_max_latency_hours: float = 24.0
     alternative_signal_allow_fallback: bool = False
+    # Actual number of parameter/model variants examined for this result.
+    # Missing evidence deliberately keeps the research gate on HOLD.
+    research_num_trials: Optional[int] = None
     # Fundamental factors (Main.fundamental_factors): name -> weight, e.g.
     # {"gp_margin": 0.10, "yoy_ni": 0.05}. Values are PIT-aligned to report
     # publication dates and uncovered names fall back to the cross-sectional
@@ -1446,9 +1450,16 @@ def weekly_rotation_backtest(
         index_close = frames["510300.SH"]["close"].reindex(common).ffill()
         index_returns = index_close.pct_change(fill_method=None)
     summary = summarize(returns, regimes, params, closed_trades, index_returns)
+    research_gate = evaluate_research_gate(returns, summary, params.research_num_trials)
+    summary["research_gate_status"] = research_gate["status"]
+    summary["research_action"] = research_gate["action"]
+    summary["research_gate_version"] = research_gate["spec"]["version"]
+    summary["research_gate_spec_sha256"] = research_gate["spec_sha256"]
+    summary["research_evidence_gate"] = research_gate
     return {"returns": returns, "regimes": regimes, "summary": summary, "params": params,
             "closed_trades": pd.DataFrame(closed_trades),
-            "alternative_signal_governance": panel.alternative_signal_governance}
+            "alternative_signal_governance": panel.alternative_signal_governance,
+            "research_evidence_gate": research_gate}
 
 
 def _execution_snapshot(frame: pd.DataFrame, date: pd.Timestamp) -> Tuple[float, float, float]:
@@ -1680,6 +1691,12 @@ def build_reports(result: dict, output_dir) -> dict:
     advice_lines.append(f"- 季度超等权基准胜率: {summary.get('quarterly_win_vs_benchmark', 0):.1%} (目标 ≥50%)")
     advice_lines.append(f"- 单次调仓换手率: {summary.get('avg_rebalance_turnover', 0):.1%} (目标 <30%~50%) | 杠杆: 禁用")
     advice_lines.append(f"- 操作胜率(有仓位周): {summary.get('operation_win_rate', 0):.1%} | 持仓胜率: {summary.get('position_win_rate', 0):.1%} | 平仓次数: {summary.get('closed_trades_count', 0)}")
+    gate = summary.get("research_evidence_gate", {})
+    if gate:
+        advice_lines.append(
+            f"- Research gate: **{gate['status']} / {gate['action']}** | "
+            f"spec={gate['spec']['version']} | failed={','.join(gate['reasons']) or 'none'}"
+        )
     cov = result.get("universe_coverage")
     if cov:
         advice_lines += [

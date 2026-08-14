@@ -232,6 +232,8 @@ def main() -> int:
                         help="PIT signal table: as_of,symbol,alternative_signal")
     parser.add_argument("--alternative-signal-weight", type=float, default=0.0,
                         help="cross-sectional alternative-signal weight (0 = disabled)")
+    parser.add_argument("--num-trials", type=int, default=None,
+                        help="actual number of examined variants; required for DSR gate passage")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -256,6 +258,7 @@ def main() -> int:
     params = default_params()
     params.start_date = args.start
     params.signal_mode = args.signal_mode
+    params.research_num_trials = args.num_trials
     if args.alternative_signal_weight > 0 and args.alternative_signal_path is None:
         parser.error("--alternative-signal-weight requires --alternative-signal-path")
     if args.alternative_signal_path is not None:
@@ -272,6 +275,8 @@ def main() -> int:
         params.dividend_cash = load_pit_dividends(universe)
     result = weekly_rotation_backtest(frames, params, regime_detector_kwargs={"bull_threshold": 0.55})
     summary = result["summary"]
+    print("Research evidence gate:")
+    print(json.dumps(result["research_evidence_gate"], ensure_ascii=False, indent=2))
     if args.pit:
         from Main.pit_universe import universe_coverage
         pit_coverage = universe_coverage(frames, pit["master"], "2016-01-01", str(summary.get("end")))

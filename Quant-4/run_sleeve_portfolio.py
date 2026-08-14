@@ -135,6 +135,8 @@ def main() -> int:
                         help="PIT signal table: as_of,symbol,alternative_signal")
     parser.add_argument("--alternative-signal-weight", type=float, default=0.0,
                         help="alternative-signal weight applied to every sleeve (0 = off)")
+    parser.add_argument("--num-trials", type=int, default=None,
+                        help="actual number of examined variants; required for DSR gate passage")
     args = parser.parse_args()
 
     alive_mask = None
@@ -154,6 +156,7 @@ def main() -> int:
         return 1
 
     params = default_params()
+    params.research_num_trials = args.num_trials
     params.start_date = args.start or params.start_date
     params.persist_rank_floor = args.persist_rank_floor
     if not args.disable_short_sleeve:
@@ -309,10 +312,13 @@ def main() -> int:
         print(f"  {name:>9s}: ann={ss['annual_return']:.2%} sharpe={ss['sharpe']:.2f} "
               f"calmar={ss['calmar']:.2f} mdd={ss['max_drawdown']:.2%} cost={ss['total_cost_fraction']:.2%}")
     print(f"\nFinal sleeve weights: {result['meta']['final_weights']}")
+    print("\nResearch evidence gate:")
+    print(json.dumps(result["research_evidence_gate"], ensure_ascii=False, indent=2))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "sleeve_portfolio_summary.json").write_text(
-        json.dumps({"summary": s, "meta": result["meta"], "sleeves": {
+        json.dumps({"summary": s, "meta": result["meta"],
+                    "research_evidence_gate": result["research_evidence_gate"], "sleeves": {
             name: {k: v for k, v in res["summary"].items() if k in (
                 "annual_return", "sharpe", "calmar", "max_drawdown",
                 "total_cost_fraction", "average_exposure", "regime_breakdown",

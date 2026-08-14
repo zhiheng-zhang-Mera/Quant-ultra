@@ -85,6 +85,15 @@ def test_zero_weight_is_byte_compatible_with_baseline():
     pd.testing.assert_frame_equal(r0, r1)
 
 
+def test_weekly_engine_holds_without_registered_trial_evidence():
+    result = weekly_rotation_backtest(_frames(), _params())
+    gate = result["research_evidence_gate"]
+    assert gate["status"] == "HOLD_FOR_REVIEW"
+    assert gate["action"] == "OBSERVATION_ONLY"
+    assert "num_trials" in gate["reasons"]
+    assert result["summary"]["research_gate_status"] == "HOLD_FOR_REVIEW"
+
+
 def test_future_signal_mutation_cannot_change_prior_engine_results():
     frames = _frames(n=230)
     dates = frames["000001.SZ"].index

@@ -33,6 +33,7 @@ import pandas as pd
 
 from Main.strategy_selector import build_archetype_params
 from Main.weekly_rotation import RotationParams, summarize, weekly_rotation_backtest
+from Main.research_evidence_gate import evaluate_research_gate
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,12 @@ def run_sleeve_portfolio(
     summary = summarize(combined_frame, sleeve_results[first_name]["regimes"], base_params, closed_trades, index_returns)
     summary["sleeve_rebalance_cost"] = meta["rebalance_cost"]
     summary["sleeve_rebalances"] = meta["rebalances"]
+    research_gate = evaluate_research_gate(combined_frame, summary, base_params.research_num_trials)
+    summary["research_gate_status"] = research_gate["status"]
+    summary["research_action"] = research_gate["action"]
+    summary["research_gate_version"] = research_gate["spec"]["version"]
+    summary["research_gate_spec_sha256"] = research_gate["spec_sha256"]
+    summary["research_evidence_gate"] = research_gate
     return {
         "returns": combined_frame,
         "summary": summary,
@@ -224,4 +231,5 @@ def run_sleeve_portfolio(
         "weights_history": w_hist,
         "sleeves": sleeve_results,
         "params": base_params,
+        "research_evidence_gate": research_gate,
     }
