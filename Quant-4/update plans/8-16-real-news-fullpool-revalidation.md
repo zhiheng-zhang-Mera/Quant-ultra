@@ -78,3 +78,19 @@ python Quant-4/reports/_iter/_real_news_ab.py                  # 真实信号 A/
 - 研究 A/B 使用放宽治理阈值（研究用途标注），生产启用门槛仍为默认严格阈值。
 - 本结论与 R4/R11 一致：另类信号通路正确，但新闻情绪信号无 alpha；真实数据复验的增量价值
   在于确认真实文本（非合成）下结论不变。
+
+## 7. 附加验证：LLM vs 词典情绪（8-13 遗留，受硬件约束）
+
+8-13 计划假设"真实语料才会让 LLM 产生差异化价值"（合成文本上 LLM 与词典相关性 0.97）。
+真实语料已就位（R16）、本地 Ollama 可用，但**LLM 评分受 GPU 显存约束阻塞**：
+
+| 模型 | 大小 | 状态 |
+|---|---|---|
+| qwen3-coder:30b / qwen3.6:latest | ~20GB | 无法加载：`CUDA_Host buffer` 分配失败（GPU 8GB 且已占用 6.6GB） |
+| gpt-oss:20b | 14.1GB | 可加载但输出**持续为空**（CPU offload 后推理截断；`/api/generate` 与 `/api/chat`、多种 format/think/num_predict 组合实测 0/5 稳定率） |
+
+**结论（诚实）**：LLM 差异化验证的**唯一缺口是硬件**（无可用模型完成稳定评分），非代码问题；
+8-13 假设在真实语料上的验证仍待 GPU 显存充足环境（或云端 API）。词典情绪在真实语料上的
+结论已由 R16 完成（无 alpha）。生产契约 `require_real_source=True` 拒绝合成文本，故本地
+Ollama 在无可用模型时不会影响生产路径（LLM 增强默认在模型不可用时回退词典，且 `llm_evidence`
+如实记录 `MODEL_NOT_FOUND`/`FALLBACK_ON_ERROR`）。
