@@ -110,7 +110,7 @@ flowchart TD
 
 - 引擎已拆解并插入可选**策略决策层**（`Quant-4/Main/strategy_selector.py`：balanced / momentum / defensive / safe / sprint 五个原型 + 滞回切换），用样本外证据门控。**2026-08-15 在采纳档（生产默认）上重跑全池证据门**：选择器 OOS 夏普 1.28 低于最优固定原型 momentum 1.37（OOS 年化 8.20% vs 8.64%），**生产默认保持禁用**（`strategy_selector=""`），避免“为自适应而自适应”的过拟合。诚实披露：选择器全窗口卡玛 0.75 / 回撤 -8.57% 为全部原型中**最优**（滞回切换确实平滑了风险曲线），但按预注册的 OOS 证据门（须同时胜过最优固定原型）仍不通过——已如实记录，未改门放行。
 - 2026-08-11 参数网格（月频+持仓延续+止盈带）将诚实成绩提升到 **6.35%/0.99**；早期“safe 7.71%”等数字被证实为稀疏股息面板导致的候选池坍缩伪影，已撤销。
-- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`）：全窗口综合百分位 **0.86**、OOS **0.92**（≥0.70 = 前 30% ✅）；回撤百分位 1.00（参考集最优）。
+- 与 16 个开源非高频量化策略对比（`Quant-4/benchmark/open_source_comparison.py`，2026-08-15 采纳档复算）：全窗口综合百分位 **0.74**、OOS **0.85**（≥0.70 = 前 30% ✅，采纳档口径；2026-08-10 的 0.86/0.92 为旧生产默认口径，已随采纳档复算更正）；回撤百分位 0.85。
 
 ### ✦ 快速开始
 
@@ -177,10 +177,13 @@ git diff --check
 ### ✦ 相关文档
 
 - [UserGuide.md](UserGuide.md) — 双语用户指南（安装、配置、运行、解读报告、故障排查）
-- [docs/ENGINE_EVALUATION.md](docs/ENGINE_EVALUATION.md) — 引擎评估报告：结构/逻辑检查、盈利能力、综合评分与七轮迭代证据链（2026-08-14）
+- [docs/ENGINE_EVALUATION.md](docs/ENGINE_EVALUATION.md) — 引擎评估报告：结构/逻辑检查、盈利能力、综合评分与多轮迭代证据链（2026-08-15 更新至 R11）
 - `Quant-4/update plans/8-8-adaptive-model-frontier.md` — 自适应模型修正与四目标可行性证据档案
 - `Quant-4/update plans/8-9-update-plan.md` — 投产前迭代计划与诚实化减法记录
 - `Quant-4/update plans/8-11-sleeve-dynamic-stops.md` — 四层资金配置 + 动态止盈止损的解耦模块化设计与证据门控
+- `Quant-4/update plans/8-14-offline-evaluation-round1.md` — 离线评估轮 R1-R9（含全池复验与生产采纳证据链）
+- `Quant-4/update plans/8-15-selector-gate-rerun-recovery-iteration.md` — R10：采纳档上策略选择器证据门重跑 + 回撤修复机制迭代
+- `Quant-4/update plans/8-15-alt-signal-fullpool-wiring.md` — R11：全池另类信号通路接线复验
 - `Quant-4/benchmark/open_source_comparison.py` — 开源对比排名脚本（排名见其生成的 JSON）
 
 ---
@@ -274,7 +277,7 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 
 - The engine is decomposed with an optional **strategy-selection layer** (`Quant-4/Main/strategy_selector.py`: balanced / momentum / defensive / safe / sprint archetypes + hysteresis), gated on out-of-sample evidence. **Re-run on the full PIT pool under the adopted production defaults (2026-08-15)**: the selector's OOS Sharpe 1.28 is below the best fixed archetype (momentum 1.37; OOS ann 8.20% vs 8.64%), so **production keeps it disabled** (`strategy_selector=""`) to avoid overfitting for adaptation's sake. Honest disclosure: the selector's full-window Calmar 0.75 / MDD -8.57% is the best of all archetypes (hysteresis does smooth the risk curve), but the pre-registered OOS gate (must beat the best fixed archetype on both OOS Sharpe and OOS ann) still fails — recorded, gate not relaxed.
 - The 2026-08-11 parameter grid (monthly + persistence + stop band) lifted the honest result to **6.35%/0.99**; earlier "safe 7.71%" style numbers were artifacts of the sparse dividend panel collapsing the candidate pool and were retracted.
-- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`): composite percentile **0.86** full-window / **0.92** OOS (≥0.70 = top 30% ✅); drawdown percentile 1.00 (best in set).
+- Versus 16 open-source non-HFT quant strategies (`Quant-4/benchmark/open_source_comparison.py`, recomputed on the adopted defaults 2026-08-15): composite percentile **0.74** full-window / **0.85** OOS (≥0.70 = top 30% ✅; the 2026-08-10 0.86/0.92 figures were on the old production defaults and were corrected after the adoption recomputation); drawdown percentile 0.85.
 
 ### ✦ Quick Start
 
