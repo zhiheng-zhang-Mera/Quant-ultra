@@ -129,6 +129,25 @@ def test_legacy_profile_preserves_old_defaults():
     assert q.confirm_leverage == 1.0 and q.max_gross_exposure <= 1.0
 
 
+def test_sweep_harness_baseline_matches_adopted_defaults():
+    """The dev sweep harness (reports/_iter/run_sweep.py) must baseline on the
+    adopted production profile, not the legacy bake (R13 loader-consistency
+    fix: a harness baseline that silently used stop 7% / fixed 2.5% shock /
+    no z-score would make every future sweep compare against the
+    pre-2026-08-15 profile)."""
+    from reports._iter.run_sweep import default_params as sweep_defaults
+    from run_weekly_rotation import default_params as prod_defaults
+
+    s = sweep_defaults()
+    p = prod_defaults()
+    assert s.event_shock_threshold == p.event_shock_threshold == 0.03
+    assert s.event_shock_zscore == p.event_shock_zscore == 3.0
+    assert s.stop_loss_pct == p.stop_loss_pct == 0.08
+    assert s.take_profit_pct == p.take_profit_pct == 0.12
+    assert s.defensive_hold_safe_frac == p.defensive_hold_safe_frac == 0.75
+    assert s.confirm_leverage == 1.0 and s.max_gross_exposure <= 1.0
+
+
 def test_defensive_filter_uses_strict_positive_dividend():
     """A dense dividend panel where most names pay nothing must not make the
     defensive filter pass the whole universe: outside BULL only dividend
