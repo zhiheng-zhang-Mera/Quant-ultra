@@ -73,6 +73,8 @@ D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\Main\main.py --force-recomp
 D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_weekly_rotation.py
 # 自定义起点
 D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_weekly_rotation.py --start 2020-01-01
+# 稳健风险档（2026-08-14 离线推荐：固定 3% + z-score 3.0 冲击检测、8% 止损带；全池复验后采纳）
+D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_weekly_rotation.py --pit --profile robust --num-trials 81
 ```
 
 输出到 `Quant-4/reports/weekly_rotation/`：

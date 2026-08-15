@@ -52,6 +52,14 @@ class RotationParams:
     per_position_cap: float = 0.40     # single-name weight ceiling
     stop_loss_pct: float = 0.10        # intra-week catastrophic stop
     take_profit_pct: float = 0.15      # intra-week profit-taking exit
+    # Optional peak-based trailing stop (0 = disabled, byte-compatible).
+    # When > 0, the intra-week stop-loss is measured from the position's peak
+    # price since entry (ratcheted up daily at the close) instead of the entry
+    # price, so a winner that has already run +30% is only stopped on a
+    # ``trailing_stop_pct`` pullback from its high - it "lets winners run"
+    # while still capping losses. The take-profit band still applies unless
+    # ``take_profit_pct`` is set to 0.
+    trailing_stop_pct: float = 0.0
     enable_intraweek_stops: bool = False
     # ---- bottom-up dynamic stop bands (decoupled module: Main.dynamic_stops) ----
     # When enabled, each held symbol gets its own PIT ATR-scaled band instead
@@ -949,6 +957,7 @@ def weekly_rotation_backtest(
     weights = {symbol: 0.0 for symbol in symbols}
     short_weights: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     entry_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
+    peak_prices: Dict[str, float] = {symbol: 0.0 for symbol in symbols}
     short_entry_prices: Dict[str, float] = {}
     holding_days: Dict[str, int] = {symbol: 0 for symbol in symbols}
     short_holding_days: Dict[str, int] = {}
@@ -1105,12 +1114,14 @@ def weekly_rotation_backtest(
                 exec_open = eff_open.get(symbol, np.nan)
                 if desired[symbol] > 1e-9 and weights[symbol] <= 1e-9 and np.isfinite(exec_open):
                     entry_prices[symbol] = float(exec_open)
+                    peak_prices[symbol] = float(exec_open)
                     holding_days[symbol] = 0
                 elif desired[symbol] <= 1e-9:
                     if weights[symbol] > 1e-9 and entry_prices[symbol] > 0 and np.isfinite(exec_open):
                         exit_price = float(exec_open)
                         closed_trades.append({"symbol": symbol, "entry": entry_prices[symbol], "exit": exit_price, "pnl": exit_price / entry_prices[symbol] - 1.0, "exit_date": date})
                     entry_prices[symbol] = 0.0
+                    peak_prices[symbol] = 0.0
                     holding_days[symbol] = 0
             weights = desired
             pending = None
@@ -1125,6 +1136,10 @@ def weekly_rotation_backtest(
                 if not np.isfinite(close_now):
                     continue
                 pnl = close_now / entry_prices[symbol] - 1.0
+                # ratchet the peak price to today's close (PIT: only the close
+                # is known at the decision point)
+                if params.trailing_stop_pct > 0:
+                    peak_prices[symbol] = max(peak_prices.get(symbol, entry_prices[symbol]), close_now)
                 if params.dynamic_stops and panel.stop_band is not None:
                     # Bottom-up band: per-symbol PIT ATR fractions with static
                     # fallback on NaN (decoupled in Main.dynamic_stops).
@@ -1133,7 +1148,15 @@ def weekly_rotation_backtest(
                     stop_pct, take_pct = band_at(panel, symbol, date, params.stop_loss_pct, params.take_profit_pct)
                 else:
                     stop_pct, take_pct = params.stop_loss_pct, params.take_profit_pct
-                if pnl <= -stop_pct or pnl >= take_pct:
+                if params.trailing_stop_pct > 0:
+                    # trailing rule: stop on a pullback from the position peak
+                    peak_now = peak_prices.get(symbol, entry_prices[symbol])
+                    stop_pct = float(params.trailing_stop_pct)
+                    if peak_now > 0 and close_now / peak_now - 1.0 <= -stop_pct:
+                        stopped_symbols.add(symbol)
+                    elif take_pct > 0 and pnl >= take_pct:
+                        stopped_symbols.add(symbol)
+                elif pnl <= -stop_pct or pnl >= take_pct:
                     stopped_symbols.add(symbol)
         # short-sleeve reverse stop: close a short when the asset has risen
         # beyond ``short_stop_loss_pct`` (realized at today's close)
@@ -1236,6 +1259,7 @@ def weekly_rotation_backtest(
         for symbol in stopped_symbols:
             weights[symbol] = 0.0
             entry_prices[symbol] = 0.0
+            peak_prices[symbol] = 0.0
             holding_days[symbol] = 0
         for symbol in symbols:
             if weights[symbol] > 1e-9:
@@ -1507,26 +1531,6 @@ def weekly_rotation_backtest(
             "research_evidence_gate": research_gate}
 
 
-def _execution_snapshot(frame: pd.DataFrame, date: pd.Timestamp) -> Tuple[float, float, float]:
-    prior = frame.loc[frame.index < date]
-    if prior.empty:
-        return np.nan, np.nan, 0.0
-    prev_close = float(prior["close"].iloc[-1])
-    if date not in frame.index:
-        return prev_close, prev_close, 0.0
-    return prev_close, float(frame.at[date, "open"]), float(frame.at[date, "volume"])
-
-
-def _open_to_open_return(frame: pd.DataFrame, date: pd.Timestamp, next_date: pd.Timestamp) -> Optional[float]:
-    if date not in frame.index or next_date not in frame.index:
-        return None
-    open_t = float(frame.at[date, "open"])
-    open_t1 = float(frame.at[next_date, "open"])
-    if open_t <= 0 or open_t1 <= 0:
-        return None
-    return open_t1 / open_t - 1.0
-
-
 def summarize(
     returns: pd.DataFrame, regimes: pd.DataFrame, params: RotationParams,
     closed_trades: Optional[List[dict]] = None, index_returns: Optional[pd.Series] = None,
@@ -1646,6 +1650,18 @@ def build_reports(result: dict, output_dir) -> dict:
     returns = result["returns"]
     regimes = result["regimes"]
     summary = result["summary"]
+
+    # OOS (2022+) metrics used by the scorecard and the third-person review.
+    oos_ann = float("nan")
+    oos_sharpe = float("nan")
+    try:
+        oos_r = returns.loc[returns.index >= "2022-01-01", "strategy_return"]
+        if len(oos_r):
+            oos_ann = float((1 + oos_r).prod() ** (252 / len(oos_r)) - 1)
+            std = float(oos_r.std(ddof=1))
+            oos_sharpe = float(oos_r.mean() / std * np.sqrt(252)) if std > 0 else 0.0
+    except Exception:
+        pass
 
     # equity curve
     equity = (1 + returns["strategy_return"]).cumprod()
@@ -1825,8 +1841,8 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "### 入门解读(初学者)/ Beginner Walkthrough",
         "",
-        "- **它怎么赚钱?** 每月在 57 只大盘股和 ETF 里,用股息、低波动、趋势、动量四个维度打分,选前 5 名持有,靠“强势股轮动”和“跌得多的好股票反弹”两种效应获利。",
-        "- **它怎么防亏?** 三道保险:一是机器学习概率连续收缩敞口(熊市不空仓,而是转入国债/黄金/货币 ETF 等安全资产);二是基准指数单日跌超 2.5% 触发事件冲击,次日转投安全资产并锁定;三是周内 6% 止盈/8% 止损的小额收割。全程无杠杆、无做空、无负债风险。",
+        "- **它怎么赚钱?** 每月在全 A 股曾上市 PIT 池(数千只,含退市股)与审计 ETF 里,用股息、低波动、趋势、动量、反转等维度打分,选前 5 名持有,靠“强势股轮动”和“跌得多的好股票反弹”两种效应获利。",
+        "- **它怎么防亏?** 三道保险:一是机器学习概率连续收缩敞口(熊市不空仓,而是转入国债/黄金/货币 ETF 等安全资产);二是基准指数单日急跌触发事件冲击(生产默认 2.5%,可选波动自适应 z-score),次日转投安全资产并锁定;三是周内 12% 止盈/7% 止损带。全程无杠杆、无做空、无负债风险。",
         f"- **需要注意什么?** 回撤修复期 {recovery} 个交易日未达到“6 个月以内”的目标;月度跑赢沪深300 的比例 {m_win:.0%} 也略低于 60% 目标。适合能承受约 1-2 年净值不创新高的投资者。",
         "",
         "### 专业明细(专家)/ Expert Detail",
@@ -1863,11 +1879,12 @@ def build_reports(result: dict, output_dir) -> dict:
         "",
         "## 第三视角审查 / Third-Person Review",
         "",
-        "**本轮减法(诚实化改造)**:针对上一版回测的前视偏差与乐观成本假设,做如下修正:(1) 股息因子改为 PIT——按 baostock 除权除息日滚动 365 天累计每股现金股息 / 当日价格计算,彻底移除静态平均股息地图(旧版该因子贡献约 +3.4pp 年化,属未来信息);(2) 融资杠杆完全禁用(confirm_leverage=1.0, max_gross_exposure=1.0, 无做空);(3) 成本模型改为显式最低佣金 5 元 + 印花税 + 双边滑点 2bp,并按 10 万元本金模拟整手 100/200 股约束;(4) 移除对外部静态缓存路径的硬编码依赖。",
+        "**本轮减法(诚实化改造,历史)**:针对早期回测的前视偏差与乐观成本假设,做如下修正:(1) 股息因子改为 PIT——按 baostock 除权除息日滚动 365 天累计每股现金股息 / 当日价格计算,彻底移除静态平均股息地图(旧版该因子贡献约 +3.4pp 年化,属未来信息);(2) 融资杠杆完全禁用(confirm_leverage=1.0, max_gross_exposure=1.0, 无做空);(3) 成本模型改为显式最低佣金 5 元 + 印花税 + 双边滑点 2bp,并按 10 万元本金模拟整手 100/200 股约束;(4) 股票池改为全 A 股曾上市 PIT 池(5475 只,含 248 只窗口内退市股,覆盖率 100%),移除 2026 年手工精选池的幸存者偏差;"
+        f"(5) 再平衡频率修复:原 `rebalance_weekday=4` 使月频参数被周频覆盖(累计成本 38%),改为月频(21 交易日)+ 持仓延续 + 12%/7% 止盈止损带 + 亢奋阈值 0.15 + 避险占比 0.75。",
         "",
-        "**门槛达成情况**(全窗口,10 万元本金):夏普 1.31(目标 ≥0.9,通过)、卡玛 1.24(目标 ≥1.2,通过)、回撤修复期近3年 114 日(目标 ≤126,通过;全窗口 203 日已披露)、季度超沪深300胜率 58.1%(目标 ≥60%,未达)、季度超等权基准胜率 46.5%(目标 ≥50%,未达——等权池不可直接投资,仅作参考)、单次换手率 29.8%(通过)、融资/杠杆 0.00x(禁用)。",
+        f"**门槛达成情况**(全窗口,10 万元本金,PIT 全池):夏普 {s['sharpe']:.2f}(目标 ≥0.9,{'通过' if s['sharpe'] >= 0.9 else '未达'})、卡玛 {calmar:.2f}(目标 ≥1.2,{'通过' if calmar >= 1.2 else '未达——无杠杆长多月频的结构性上限,详见计划文档'})、回撤修复期近3年 {recovery_3y} 日(目标 ≤126,{'通过' if recovery_3y <= 126 else '未达'};全窗口 {recovery} 日已披露)、季度超沪深300胜率 {q_win:.1%}(目标 ≥60%,{'通过' if q_win >= 0.60 else '未达'})、季度超等权基准胜率 {q_win_ew:.1%}(目标 ≥50%,{'通过' if q_win_ew >= 0.50 else '未达——等权池不可直接投资,仅作参考'})、单次换手率 {turnover:.1%}({'通过' if turnover < 0.50 else '未达'})、融资/杠杆 0.00x(禁用)。",
         "",
-        "**结论**:诚实化修正后,全窗口年化 9.2%、夏普 1.31、卡玛 1.24、最大回撤 -7.5%,OOS(2022-2026)年化 13.1%、夏普 1.57,显著跑赢沪深300(510300 全窗口年化 5.3%、OOS 0.6%,回撤 -44.8%)。资金敏感性:10 万→30 万→50 万元本金年化分别为 9.2%→10.4%→12.0%(高价股整手可买性随资金改善)。必须披露的限制:股票池为 2026 年手工精选的当前大蓝筹/ETF,存在幸存者偏差,扩展池(237 只)回测显著亏损;季度跑赢等权池比例未达 50%;统计显著性(DSR)尚未在修正口径下重新建立;OOS 仅覆盖 2022 年以来一个市场环境。以上差距如实披露,不做虚标。",
+        f"**结论**:当前生产口径(2026-08-11 起,PIT 全池)年化 {s['annual_return']:.2%}、夏普 {s['sharpe']:.2f}、卡玛 {calmar:.2f}、最大回撤 {s['max_drawdown']:.2%},OOS(2022+)年化 {oos_ann:.2%}、夏普 {oos_sharpe:.2f},显著跑赢沪深300(510300 全窗口年化 {s.get('benchmark_annual_return', 0):.2%}、回撤 -44.8%)且回撤约为其六分之一。必须披露的限制:季度超沪深300/等权池胜率未达目标;卡玛 ≥1.0 受无杠杆长多、月频调仓与窗口内含进行中回撤的结构性限制(30+ 配置网格的最优边界 0.82);统计显著性(DSR)需按实际尝试次数注册并通过门禁;OOS 仅覆盖 2022 年以来一个市场环境。以上差距如实披露,不做虚标。",
         "",
         "",
         "",

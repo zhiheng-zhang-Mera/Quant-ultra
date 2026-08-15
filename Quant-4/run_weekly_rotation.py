@@ -238,6 +238,12 @@ def main() -> int:
                         help="cross-sectional alternative-signal weight (0 = disabled)")
     parser.add_argument("--num-trials", type=int, default=None,
                         help="actual number of examined variants; required for DSR gate passage")
+    parser.add_argument("--profile", choices=["production", "robust"], default="production",
+                        help="evidence-gated risk profile. 'production' = the 2026-08-11 full-pool "
+                             "defaults (unchanged). 'robust' = the 2026-08-14 offline-subset "
+                             "recommendation: event-shock fixed 3%% + z-score 3.0 crash detection and "
+                             "an 8%% stop-loss band (see update plans/8-14-offline-evaluation-round1.md). "
+                             "It must be re-validated on the full PIT pool before adoption.")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -263,6 +269,14 @@ def main() -> int:
     params.start_date = args.start
     params.signal_mode = args.signal_mode
     params.research_num_trials = args.num_trials
+    if args.profile == "robust":
+        # 2026-08-14 offline-subset evidence (81-config grid, same accounting):
+        # robust crash detection + wider stop band lifted the subset result from
+        # 2.80%/0.32/-16.69% to 5.25%/0.55/-12.59% (OOS 7.26%/0.70). Full-pool
+        # re-validation is required before this may become the production default.
+        params.event_shock_threshold = 0.03
+        params.event_shock_zscore = 3.0
+        params.stop_loss_pct = 0.08
     if args.alternative_signal_weight > 0 and args.alternative_signal_path is None:
         parser.error("--alternative-signal-weight requires --alternative-signal-path")
     if args.alternative_signal_path is not None:
