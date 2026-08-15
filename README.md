@@ -97,6 +97,8 @@ flowchart TD
 
 > **2026-08-11 里程碑**：股票池已改为"全 A 股曾上市 + 退市股"的 PIT 池（5475 只，含 248 只窗口内退市股，覆盖率 100%）。关键修复：原生产配置的 `rebalance_weekday=4` 使再平衡实际为每周五（`rebalance_days=21` 被覆盖），累计成本高达 38%；改为月频 + 持仓延续 + 12%/7% 止盈止损带 + 亢奋阈值 0.15 + 避险占比 0.75 后，诚实全池成绩提升到 **6.25%/1.00/-7.65%**（OOS 6.95%/1.07），卡玛 0.82（30+ 配置网格后的最优，≥1.0 受无杠杆长多月频的结构性限制，详见计划文档）。
 
+> **2026-08-14 离线评估轮**（详见 `Quant-4/update plans/8-14-offline-evaluation-round1.md`）：在 421 只离线缓存池上完成引擎评估与风险控制修复——(1) 修复真实缺陷：**再平衡日的事件冲击风险处置曾被常规再平衡覆盖**（风险优先序，默认即生效）；(2) 新增两个默认关闭的机制：`rebalance_min_turnover`（最小换手再平衡门槛）与 `event_shock_zscore`（波动自适应 z-score 事件冲击检测，固定 2.5% 阈值在小盘高波动池上实测误触发 158 次）；(3) 清除 `rank_candidates` 中从未被使用的死代码（字节兼容）；(4) 测试套件环境加固后 **162/162 全绿**（原 121 通过/3 失败/32 环境性错误）。同一缓存池口径下，基线（含缺陷修复）2.80%/0.32/-16.69%，最优配置（固定 3% 冲击 + z3.0）3.52%/0.40/-14.74%、OOS 6.35%/0.65；35 次尝试注册下 DSR 门诚实返回 HOLD（子集 OOS 不足），生产默认参数保持不变，参数级推荐待全池复验。
+
 ![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
 
 ![月度收益热力图](docs/images/weekly_rotation_monthly_heatmap.png)
@@ -256,6 +258,8 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 | Average gross exposure | ~70% | — |
 
 > **2026-08-11 milestone**: the universe is the full ever-listed A-share PIT pool (5,475 names incl. 248 delisted, 100% coverage). Key fix: the old `rebalance_weekday=4` silently made rebalancing weekly (costing ~26pp cumulative fees); monthly rebalancing + persistence + a 12%/7% stop band + euphoria 0.15 + 75% safe-asset share lifted the honest all-pool result to **6.25%/1.00/-7.65%** (OOS 6.95%/1.07), Calmar 0.82 (best of a 30+-config grid; ≥1.0 is structurally capped for a no-leverage long-only monthly strategy). See `Quant-4/update plans/8-10-pit-universe-plan.md`.
+
+> **2026-08-14 offline evaluation round** (see `Quant-4/update plans/8-14-offline-evaluation-round1.md`): engine evaluation and risk-control fixes on the 421-name offline cache subset — (1) fixed a real defect: an event-shock risk-off pending was overwritten by the regular rebalance on rebalance days (risk precedence, active by default); (2) added two default-off mechanisms: `rebalance_min_turnover` (minimum-turnover rebalance band) and `event_shock_zscore` (volatility-adaptive z-score crash detection; the fixed 2.5% threshold fired 158 times on the volatile small-cap subset); (3) removed dead code in `rank_candidates` (byte-compatible); (4) hardened the test environment — **162/162 tests green** (was 121 passed / 3 failed / 32 environmental errors). On the same subset: baseline incl. the fix 2.80%/0.32/-16.69%; best config (fixed 3% + z3.0) 3.52%/0.40/-14.74%, OOS 6.35%/0.65; DSR honestly returns HOLD at 35 registered trials on this subset; production defaults stay unchanged until full-pool revalidation.
 
 ![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
 

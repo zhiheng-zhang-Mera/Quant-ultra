@@ -194,6 +194,13 @@ class RotationParams:
     bull_benchmark_hold: bool = False        # hold broad ETF in BULL (index participation)
     bull_benchmark_symbol: str = "510300.SH"
     rebalance_weekday: Optional[int] = 4     # align rebalances to Fridays (0=Mon..4=Fri)
+    # Minimum requested turnover (sum of |target - current| over all symbols)
+    # required for a regular rebalance to fire. Below the threshold the current
+    # book is kept as-is, cutting micro-rebalancing cost and turnover. Default
+    # 0.0 keeps the evidence-gated production behavior byte-identical; only
+    # regular (non-defensive) rebalances are skippable - risk-state transitions
+    # (bear/euphoria/event-shock/drawdown-guard) always execute.
+    rebalance_min_turnover: float = 0.0
     regime_benchmark_symbols: Optional[Tuple[str, ...]] = None  # subset for regime
     hold_persistent: bool = True             # keep a name while still top-2K or trend intact
     persist_rank_floor: int = 6              # keep if rank <= floor
@@ -201,12 +208,27 @@ class RotationParams:
     confirm_leverage: float = 1.0            # small leverage ONLY in 100%-confirmed bull states (1.0 disables)
     confirm_ml_prob: float = 0.65            # ML P(up) required for confirmed-bull leverage
     confirm_equity_proximity: float = 0.97   # strategy equity must be within this ratio of its peak
-    reversal_1d_weight: float = 0.0          # reward recent 1-day weakness (A-share reversal)
+    # Legacy no-op: the old local z-scoring path that consumed this weight was
+    # dead code (the ranking uses ``composite_factor_scores``, where the 1-day
+    # reversal tilt enters through the fixed regime weights on ``rev1``).
+    # Retained for API compatibility; changing it has no effect.
+    reversal_1d_weight: float = 0.0
     reversal_window: int = 1                 # reversal lookback days (1 or 2)
     trend_filter_long: int = 60              # candidate trend MA (0 disables)
     trend_filter_short: int = 0              # optional short MA (0 disables)
     daily_regime_monitoring: bool = False    # intra-week exposure adaptation
     event_shock_threshold: float = 0.0       # benchmark 1-day crash -> cut exposure
+    # Robust alternative to the fixed ``event_shock_threshold``: trigger the
+    # risk-off path when the benchmark's daily return falls ``event_shock_zscore``
+    # standard deviations below its trailing mean (rolling window
+    # ``event_shock_z_window``). A fixed threshold calibrated on a calm large-cap
+    # benchmark fires constantly on volatile mid/small-cap universes (measured:
+    # 158 triggers on the 421-name subset vs a z-score rule that adapts to the
+    # prevailing volatility). 0.0 disables the z-score rule (fixed threshold
+    # governs). When both are set, either rule can trigger.
+    event_shock_zscore: float = 0.0
+    event_shock_z_window: int = 60
+    event_shock_z_min_obs: int = 30
     event_shock_exposure: float = 0.10       # exposure level after an event shock
     event_shock_latch: bool = False          # stay de-risked until short MA reclaimed
     event_shock_recovery_ma: int = 5         # benchmark MA that releases the risk-off latch
@@ -449,6 +471,7 @@ class FeaturePanel:
     bench_ma_slow: pd.Series
     bench_ma_confirmation: pd.Series
     bench_ma_trend: pd.Series
+    bench_shock_z: Optional[pd.Series] = None  # rolling z-score of benchmark daily returns (event-shock detection)
     ma20: Optional[pd.DataFrame] = None     # close.rolling(20).mean(), precomputed
     ma60: Optional[pd.DataFrame] = None     # close.rolling(60).mean(), precomputed
     stop_band: Optional[pd.DataFrame] = None  # PIT ATR stop-loss fractions
@@ -583,7 +606,12 @@ def precompute_panels(frames: Dict[str, pd.DataFrame], params: RotationParams) -
         panel_conf_ma = pd.Series(np.nan, index=bench_close.index)
     trend_ma_win = max(5, int(getattr(params, "trend_risk_ma", 20)))
     panel_ma_trend = bench_close.rolling(trend_ma_win, min_periods=min(trend_ma_win, 10)).mean()
-    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels, alternative_signal=alternative_signal, alternative_signal_governance=alternative_signal_governance)
+    z_win = max(10, int(getattr(params, "event_shock_z_window", 60)))
+    z_min = max(5, int(getattr(params, "event_shock_z_min_obs", 30)))
+    bench_rets = bench_close.pct_change(fill_method=None)
+    bench_shock_z = ((bench_rets - bench_rets.rolling(z_win, min_periods=z_min).mean())
+                     / bench_rets.rolling(z_win, min_periods=z_min).std(ddof=0))
+    return FeaturePanel(common=common, symbols=symbols, close=close, volume=volume, amount=amount, momentum=momentum, volatility=volatility, trend=trend, volume_ratio=volume_ratio, adv20=adv20, div_yield=div_yield, ma20=ma20_panel, ma60=ma60_panel, bench_return_20d=bench_return_20d, bench_close=bench_close, bench_ma_fast=bench_ma_fast, bench_ma_slow=bench_ma_slow, bench_ma_confirmation=panel_conf_ma, bench_ma_trend=panel_ma_trend, bench_shock_z=bench_shock_z, stop_band=stop_band, take_band=take_band, breakout=breakout, max_ret=max_ret, illiquidity=illiquidity, fundamental_panels=fundamental_panels, alternative_signal=alternative_signal, alternative_signal_governance=alternative_signal_governance)
 
 
 def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams, win_probs: Optional[Dict[str, float]] = None, regime: Optional[RegimeState] = None) -> List[Tuple[str, float, float]]:
@@ -645,19 +673,12 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
         raw20 = mom20.loc[date]
         rel_ok = raw20[valid_symbols] > bench_20
 
-    z_rows: Dict[int, pd.Series] = {}
-    for window in params.momentum_windows:
-        mrow = panel.momentum[window].loc[date]
-        mrow = mrow[valid_symbols].astype(float).replace([np.inf, -np.inf], np.nan)
-        if mrow.notna().sum() >= 5:
-            z_rows[window] = _zscore(mrow)
-    rev_window = params.reversal_window if params.reversal_window > 0 else 1
-    if params.reversal_1d_weight and rev_window in panel.momentum:
-        rev = panel.momentum[rev_window].loc[date]
-        rev = rev[valid_symbols].astype(float).replace([np.inf, -np.inf], np.nan)
-        if rev.notna().sum() >= 5:
-            z_rows["rev1"] = -_zscore(rev)  # reward bigger 1-day drops
-
+    # NOTE: the actual ranking score is produced by ``composite_factor_scores``
+    # below (regime-adaptive z-scored factor blend). The former local z-scoring
+    # block (``z_rows`` / ``reversal_1d_weight``) was dead code: its outputs
+    # were never consumed by the ranking, so ``reversal_1d_weight`` had no
+    # effect on production results (documented in update plans/8-11). The 1-day
+    # reversal tilt lives inside the composite via its fixed regime weights.
     if regime is None:
         return []
     comp = composite_factor_scores(panel, date, valid_symbols, regime, params)
@@ -1275,26 +1296,33 @@ def weekly_rotation_backtest(
                     pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
 
         # ---- event shock filter: a benchmark crash day cuts exposure at next open ----
-        if params.event_shock_threshold > 0 and pending is None:
+        shock_fixed = params.event_shock_threshold > 0
+        shock_z = params.event_shock_zscore > 0 and getattr(panel, "bench_shock_z", None) is not None
+        if (shock_fixed or shock_z) and pending is None:
             bench_now = panel.bench_close.loc[date] if pd.notna(panel.bench_close.loc[date]) else np.nan
             prev_idx = panel.common.get_loc(date) - 1
             bench_prev = panel.bench_close.iloc[prev_idx] if prev_idx >= 0 and pd.notna(panel.bench_close.iloc[prev_idx]) else np.nan
-            if np.isfinite(bench_now) and np.isfinite(bench_prev) and bench_prev > 0:
-                shock = bench_now / bench_prev - 1.0
-                if shock <= -params.event_shock_threshold:
-                    current_gross = sum(weights.values())
-                    if current_gross > 1e-9:
-                        if params.event_shock_latch:
-                            risk_off = True
-                        safe_symbol = _pick_safe_asset(panel, date, symbols, params)
-                        if safe_symbol is not None:
-                            safe_target = {symbol: 0.0 for symbol in symbols}
-                            safe_target[safe_symbol] = min(params.event_shock_exposure, params.max_gross_exposure)
-                            pending = {"signal_date": date, "execution_date": next_date, "target": safe_target}
-                        else:
-                            scale = params.event_shock_exposure / current_gross
-                            adjusted = {s: min(w * scale, params.per_position_cap) for s, w in weights.items()}
-                            pending = {"signal_date": date, "execution_date": next_date, "target": adjusted}
+            shock = (bench_now / bench_prev - 1.0) if (np.isfinite(bench_now) and np.isfinite(bench_prev) and bench_prev > 0) else np.nan
+            trigger = bool(
+                (shock_fixed and np.isfinite(shock) and shock <= -params.event_shock_threshold)
+                or (shock_z and date in panel.bench_shock_z.index
+                    and np.isfinite(panel.bench_shock_z.loc[date])
+                    and float(panel.bench_shock_z.loc[date]) <= -params.event_shock_zscore)
+            )
+            if trigger:
+                current_gross = sum(weights.values())
+                if current_gross > 1e-9:
+                    if params.event_shock_latch:
+                        risk_off = True
+                    safe_symbol = _pick_safe_asset(panel, date, symbols, params)
+                    if safe_symbol is not None:
+                        safe_target = {symbol: 0.0 for symbol in symbols}
+                        safe_target[safe_symbol] = min(params.event_shock_exposure, params.max_gross_exposure)
+                        pending = {"signal_date": date, "execution_date": next_date, "target": safe_target, "risk_off": True}
+                    else:
+                        scale = params.event_shock_exposure / current_gross
+                        adjusted = {s: min(w * scale, params.per_position_cap) for s, w in weights.items()}
+                        pending = {"signal_date": date, "execution_date": next_date, "target": adjusted, "risk_off": True}
 
         if is_rebalance_day:
             if params.strategy_selector:
@@ -1361,12 +1389,16 @@ def weekly_rotation_backtest(
                 gross_ceiling = float(params.max_gross_exposure)
             params.max_gross_exposure = gross_ceiling
             regime_rows.append({"date": date, **vars(regime)})
-            if params.neutral_benchmark_hold and regime.regime == "NEUTRAL" and params.neutral_benchmark_symbol in symbols:
+            # A risk-off pending (event shock) set earlier today takes
+            # precedence: the regular rebalance must not overwrite it with a
+            # full-risk book one day after a benchmark crash.
+            risk_off_pending = pending is not None and bool(pending.get("risk_off", False))
+            if params.neutral_benchmark_hold and regime.regime == "NEUTRAL" and params.neutral_benchmark_symbol in symbols and not risk_off_pending:
                 neutral_target = {symbol: 0.0 for symbol in symbols}
                 neutral_target[params.neutral_benchmark_symbol] = min(regime.exposure, 1.0)
                 pending = {"signal_date": date, "execution_date": next_date, "target": neutral_target}
                 continue
-            if params.bull_benchmark_hold and regime.regime == "BULL" and params.bull_benchmark_symbol in symbols:
+            if params.bull_benchmark_hold and regime.regime == "BULL" and params.bull_benchmark_symbol in symbols and not risk_off_pending:
                 # Index participation in confirmed bull regimes: hold the broad
                 # ETF instead of concentrated single-name momentum picks, which
                 # historically lagged the rally (BULL +7% vs market +25%+).
@@ -1406,6 +1438,18 @@ def weekly_rotation_backtest(
                 for s in symbols:
                     if weights[s] > 1e-9 and holding_days[s] >= params.max_holding_days:
                         target[s] = 0.0
+            # ---- minimum-turnover rebalance skip: keep the current book when
+            # the target only drifted marginally. Risk-state transitions
+            # (defensive hold, euphoria, drawdown guard, event shock) always
+            # execute, and the very first position open is never skipped - this
+            # gate applies to regular rebalances of an already-holding book,
+            # and is disabled (0.0) in the production defaults.
+            if (params.rebalance_min_turnover > 0 and not defensive_state
+                    and params.max_holding_days <= 0
+                    and any(weights[s] > 1e-9 for s in symbols)):
+                req_turnover = sum(abs(target.get(s, 0.0) - weights.get(s, 0.0)) for s in symbols)
+                if req_turnover < params.rebalance_min_turnover:
+                    target = {s: float(weights.get(s, 0.0)) for s in symbols}
             # ---- controlled short sleeve: open only in a high-conviction
             # bear state (regime BEAR + ML P(up) at/below the conviction
             # threshold + benchmark under the long confirmation MA), capped at
@@ -1441,7 +1485,8 @@ def weekly_rotation_backtest(
                                 break
                             short_target[sym] = -w
                             remaining -= w
-            pending = {"signal_date": date, "execution_date": next_date, "target": target, "short_target": short_target}
+            if not risk_off_pending:
+                pending = {"signal_date": date, "execution_date": next_date, "target": target, "short_target": short_target}
 
     returns = pd.DataFrame(rows).set_index("date")
     regimes = pd.DataFrame(regime_rows).set_index("date") if regime_rows else pd.DataFrame()

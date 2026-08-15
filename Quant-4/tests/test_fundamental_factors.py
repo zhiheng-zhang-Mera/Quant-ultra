@@ -1,7 +1,9 @@
 """Tests for PIT fundamental factors (Main.fundamental_factors)."""
 from __future__ import annotations
 
+import shutil
 import sys
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,24 @@ from Main.fundamental_factors import (  # noqa: E402
     load_fundamentals,
 )
 from Main.weekly_rotation import RotationParams, precompute_panels, weekly_rotation_backtest  # noqa: E402
+
+
+def _workspace_tmpdir() -> Path:
+    """Temporary directory under the test tree with default permissions.
+
+    ``tempfile.TemporaryDirectory`` is avoided because some sandboxes map its
+    POSIX 0o700 mode to a DACL that denies even the creator file access;
+    a plain ``os.mkdir`` (default mode) is accessible everywhere.
+    """
+    base = Path(__file__).parent / ".tmp_fundamentals"
+    base.mkdir(exist_ok=True)
+    path = base / uuid.uuid4().hex
+    path.mkdir()
+    return path
+
+
+def _cleanup_tmpdir(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _synthetic_frames() -> dict:
@@ -68,33 +88,36 @@ def test_fundamental_panels_are_point_in_time():
 
 def test_load_all_fundamentals_merges_by_period():
     import json
-    from pathlib import Path
-    import tempfile
 
     profit = {"600000.SH": [{"pub_date": "2024-04-03", "stat_date": "2023-12-31", "gpMargin": 0.50}]}
     balance = {"600000.SH": [{"pub_date": "2024-04-03", "stat_date": "2023-12-31", "debt_ratio": 0.20}]}
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "profit.json"
-        b = Path(tmp) / "balance.json"
+    tmp = _workspace_tmpdir()
+    try:
+        p = tmp / "profit.json"
+        b = tmp / "balance.json"
         p.write_text(json.dumps(profit), encoding="utf-8")
         b.write_text(json.dumps(balance), encoding="utf-8")
         merged = load_all_fundamentals(p, b)
         rec = merged["600000.SH"][0]
         assert rec["gpMargin"] == 0.50
         assert rec["debt_ratio"] == 0.20
+    finally:
+        _cleanup_tmpdir(tmp)
     assert "debt_ratio" in FUNDAMENTAL_FIELDS
 
 
 def test_load_fundamentals_top_n_filters_by_ranked_order():
     import json
-    import tempfile
 
     data = {"A": [1], "B": [2], "C": [3]}
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "fund.json"
+    tmp = _workspace_tmpdir()
+    try:
+        p = tmp / "fund.json"
         p.write_text(json.dumps(data), encoding="utf-8")
         assert set(load_fundamentals(p, top_n=2)) == {"A", "B"}
         assert set(load_fundamentals(p, top_n=None)) == {"A", "B", "C"}
+    finally:
+        _cleanup_tmpdir(tmp)
 
 
 def test_fundamental_factors_engine_integration(monkeypatch):

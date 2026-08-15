@@ -1,14 +1,18 @@
 """CLI: run the Quant-4 weekly-rotation backtest and write readable reports.
 
-Strategy semantics:
-- Signals are computed at the close of each rebalance day (weekly / every 5
-  trading days, aligned to Fridays).
+Strategy semantics (evidence-gated production defaults, 2026-08-11+):
+- Signals are computed at the close of each rebalance day (monthly cadence,
+  every 21 trading days; ``rebalance_weekday`` is None so the cadence is not
+  overridden by a weekday alignment).
 - Orders execute at the NEXT trading day's open (close[t] -> open[t+1]).
-- Holdings are marked open-to-open between rebalances.
-- A market-regime overlay (equal-weight benchmark vs 40/10-day MAs) scales
-  exposure: bull = up to 1.5x financed, neutral = ~55%, bear = ~10%.
-- Selection blends 5-day momentum (continuation) with 1-day reversal
-  (A-share mean reversion) among liquid, trend-holding large caps.
+- Holdings are marked open-to-open between rebalances, with intra-week
+  take-profit/stop-loss realized at the close.
+- A market-regime overlay (equal-weight benchmark vs 10/40-day MAs plus a
+  walk-forward logistic P(up) model) continuously scales exposure: bull = 1.0x
+  (no leverage), defensive states rotate into safe assets (bonds/gold/money
+  ETFs), and a benchmark event-shock latch de-risks after single-day crashes.
+- Selection is a regime-adaptive multi-factor composite (momentum/trend/
+  reversal/low-vol/dividend) over liquid, trend-holding names.
 """
 from __future__ import annotations
 
