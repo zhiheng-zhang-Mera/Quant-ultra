@@ -176,6 +176,7 @@ git diff --check
 ### ✦ 相关文档
 
 - [UserGuide.md](UserGuide.md) — 双语用户指南（安装、配置、运行、解读报告、故障排查）
+- [docs/ENGINE_EVALUATION.md](docs/ENGINE_EVALUATION.md) — 引擎评估报告：结构/逻辑检查、盈利能力、综合评分与七轮迭代证据链（2026-08-14）
 - `Quant-4/update plans/8-8-adaptive-model-frontier.md` — 自适应模型修正与四目标可行性证据档案
 - `Quant-4/update plans/8-9-update-plan.md` — 投产前迭代计划与诚实化减法记录
 - `Quant-4/update plans/8-11-sleeve-dynamic-stops.md` — 四层资金配置 + 动态止盈止损的解耦模块化设计与证据门控
