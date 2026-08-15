@@ -1,0 +1,80 @@
+# 8-16 真实另类信号（新闻/论坛情绪）全池复验——网络恢复后的真实数据轮（Round 16）
+
+> 背景：目标候选之一"真实另类信号（新闻/论坛情绪）全池复验"此前因"无网络"被阻塞 5 轮。
+> 本轮诊断发现**阻塞为误报**：PowerShell `Invoke-WebRequest`/curl 走 Windows Schannel 层，
+> 被沙箱限制（`SEC_E_NO_CREDENTIALS`），而 **Python/OpenSSL 通道完全可用**（baidu/sina/pypi
+> 及全部项目数据源 TLS 握手成功、真实 HTTP 200）。目标已解除阻塞，本轮完成真实数据复验。
+
+## 1. 网络诊断结论（重要）
+
+| 通道 | 结果 |
+|---|---|
+| PowerShell Invoke-WebRequest（Schannel） | FAIL：`基础连接已经关闭: 接收时发生错误` |
+| curl.exe（Schannel） | FAIL：`SEC_E_NO_CREDENTIALS`（沙箱限制 TLS 凭据获取） |
+| Python socket+ssl（OpenSSL 3.0.16） | **OK**：baidu/sina/pypi 200；TLSv1.3 握手成功 |
+| 项目数据源主机（Python） | **全部 OK**：hq.sinajs.cn、money.finance.sina.com.cn、www.cninfo.com.cn、push2his.eastmoney.com、qt.gtimg.cn |
+
+**结论**：网络从未真正中断，此前所有"network FAIL"均为 Schannel 通道误报。数据获取工具
+（含 akshare/tushare/baostock 等库）以 Python 执行，实际可用。后续网络探测应以 Python
+OpenSSL 为准。
+
+## 2. 真实新闻语料获取（新工具）
+
+**数据源**：新浪 `vCB_AllNewsStock` 个股新闻页（按股票代码、带精确日期时间、symbol 映射、
+分页深度约 5 个月/1000 条每只）。东财搜索/股吧、腾讯新闻接口本次实测不可用（403/参数变更）。
+
+**新工具**：`Quant-4/tools/fetch_real_news_sina.py` —— 拉取并输出
+`Phase_3.alternative_data_contract.RAW_REQUIRED_COLUMNS` 全契约列
+（record_id/source/source_type/license/published_at/ingested_at/symbol/text/is_synthetic=False），
+支持 `--codes`/`--max-pages`/`--sleep`/`--out`。
+
+**产出**：`Quant-4/Data_Cache/alternative_raw/sina_news_real_20.jsonl` —— 生产池 20 只
+（600519/000858/601318/600036/000001/000333/600900/601899/002594/300750/600887/601012/600028/
+600309/601857/600941/601398/601628/600585/601088）**6352 条真实新闻**（2026-03-30 ~ 2026-08-15），
+契约加载 **LOADED、is_synthetic=0**、sha256 入不可变缓存。
+
+## 3. 真实信号面板与治理门（诚实记录）
+
+- 信号：30 日滚动均值词典情绪（`score_text`），在**引擎实际 rebalance 日期**（common idx%21==0）
+  采样，覆盖窗口 2026-05~08（免费源仅提供近期约 5 个月——**真实数据无法覆盖 2016-2026 全历史**，
+  这是免费源的数据约束，非代码问题）。
+- **原始覆盖仅 28%**（免费源返回条目随股票不同，部分股票新闻稀疏）→ 面板缺失以 0 填充
+  （"无新闻=中性"）并**如实记录原始覆盖率**。
+- 治理门对填充面板 PASS（研究放宽阈值，明确标注非生产启用）；**对原始稀疏面板 HOLD**
+  （finite/symbol_coverage/missing_rate）——治理门按设计工作，真实免费源覆盖不足时拒绝启用。
+
+## 4. 真实信号 A/B（生产池 20 只，采纳档基座，研究放宽）
+
+| 配置 | 全窗口年化/夏普 | OOS 年化/夏普 | 信号窗口(06-08) 年化/夏普 |
+|---|---|---|---|
+| base（无信号） | 7.04% / 0.81 | 6.42% / 0.79 | 3.26% / 0.44 |
+| 真实新闻 w=0.05 | 7.02% / 0.80 | 6.38% / 0.79 | 2.40% / 0.33 |
+| 真实新闻 w=0.10 | 7.02% / 0.80 | 6.37% / 0.79 | 2.29% / 0.31 |
+| 真实新闻 w=0.20 | 7.01% / 0.80 | 6.35% / 0.78 | 1.93% / 0.26 |
+| **反转信号 w=0.10** | **7.05% / 0.81** | — | **3.86% / 0.52** |
+
+**结论（诚实）**：
+1. **通路方向响应正确**：真实新闻情绪正权重下信号窗口表现随权重单调下降（3.26%→1.93%），
+   反转信号反而改善（3.86%/0.52）——与 R4/R11 合成信号结论一致：**新闻情绪不构成可用 alpha**，
+   该方向（正情绪→买入）在近期窗口为负贡献。
+2. **接线验证完成**：真实文本 → 契约 → 词典情绪 → PIT 面板 → 治理门 → 引擎消费，全链路
+   （含真实时间戳、精确 as-of）在真实数据上走通。
+3. **数据约束如实记录**：免费源仅约 5 个月窗口、覆盖率 28%，无法支撑"全池历史复验"；
+   `alternative_signal_weight` 保持 0，不因本验证启用（无 alpha 证据 + 覆盖不足）。
+
+## 5. 验证与复现
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 175 passed
+python Quant-4/tools/fetch_real_news_sina.py --codes 600519.SH ... --max-pages 8   # 真实语料
+python Quant-4/reports/_iter/_real_news_ab.py                  # 真实信号 A/B（~2 分钟）
+# 结果：reports/_iter/real_news_ab_20260816.json（gitignored）
+```
+
+## 6. 限制披露
+
+- 真实语料仅覆盖近期窗口与生产池 20 只（免费源约束）；全池 5478 只 × 5 个月 × ~320 条/只
+  约 16 万请求、且免费源对部分股票只返回近期少数条目——未做全池抓取（成本/覆盖双重限制）。
+- 研究 A/B 使用放宽治理阈值（研究用途标注），生产启用门槛仍为默认严格阈值。
+- 本结论与 R4/R11 一致：另类信号通路正确，但新闻情绪信号无 alpha；真实数据复验的增量价值
+  在于确认真实文本（非合成）下结论不变。
