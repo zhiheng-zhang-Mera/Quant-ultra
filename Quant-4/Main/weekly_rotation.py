@@ -1186,7 +1186,10 @@ def weekly_rotation_backtest(
         gross = sum(weights[symbol] * asset_returns[symbol] for symbol in symbols)
         if stopped_symbols and params.capital_base > 0:
             # charge sell-side fees (commission + stamp + slippage) on stops,
-            # which are realized at today's close outside the rebalance path
+            # which are realized at today's close outside the rebalance path.
+            # NOTE: stop exits are deliberately NOT added to ``turnover`` - the
+            # turnover column measures rebalance activity for the turnover gate
+            # (avg_rebalance_turnover); stop notional only appears in ``cost``.
             account_value = max(float(equity) * float(params.capital_base), 1.0)
             for symbol in stopped_symbols:
                 if weights[symbol] > 1e-9:

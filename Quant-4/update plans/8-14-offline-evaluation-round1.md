@@ -137,3 +137,58 @@ python Quant-4/run_weekly_rotation.py --pit --profile robust --num-trials 81
 
 - 生产默认参数仍保持字节不变（`--profile production`）；`robust` 档为文档化推荐，需全池 PIT 复验后采纳。
 - 测试套件 **165/165 全绿**（新增追踪止损 3 项 + robust 档 1 项）。
+
+---
+
+# 第三轮（Round 3，2026-08-14）：账务自洽审计、因子库负结果与套筒组合评估
+
+## R3.1 账务自洽审计（核心逻辑验证，新增 4 项永久测试）
+
+对回测会计恒等式做了运行时审计（`tests/test_accounting_consistency.py`）：
+
+| 恒等式 | 结果 |
+|---|---|
+| 净值复利 eq[t]=eq[t-1]·(1+r) | **精确**（偏差 0） |
+| 无杠杆：敞口 ∈ [0,1] | **通过**（最大 0.967） |
+| 换手/成本非负 | **通过** |
+| 无执行日敞口漂移界 \|Δexpo\| ≤ expo·20% | **精确 0 违规**（关闭日内止损时） |
+| 止损退出计入成本但不计换手 | **确认**（330 天"有成本无换手"全部来自止损路径；设计合理——换手列度量再平衡活动，止损费用已入成本列） |
+
+结论：**引擎会计完全自洽**；止损路径的"成本计入、换手不计"已在代码注释中明确记录。
+
+## R3.2 因子库负结果（诚实记录，不采纳）
+
+在 `robust` 基座上挂载开放因子（qlib Alpha158 子集）：
+
+| 因子 | 全窗口 vs z3s8 (5.25%/0.55/0.42) | OOS |
+|---|---|---|
+| rsi14 0.10 | 4.79%/0.51/0.37（更差） | 6.71%/0.65 |
+| idll20 0.10 | 3.46%/0.39/0.20（更差） | 6.90%/0.69 |
+| rsi14+idll20 | 4.01%/0.44/0.29（更差） | 7.00%/0.69 |
+| max_ret 0.10 | 4.48%/0.49/0.28（更差） | 7.66%/0.74 |
+| illiquidity 0.10 | 3.33%/0.37/0.22（更差） | 7.14%/0.69 |
+
+结论：现有复合因子组合在本池上已近最优；额外因子稀释分数（因子间共线性 + 本池特征），全部拒绝。行业轮动因子因缓存无完整行业映射（仅 3 只）无法评估。
+
+## R3.3 套筒组合（40/30/20/10）评估
+
+| 基准参数 | 年化 | 夏普 | 卡玛 | 回撤 |
+|---|---|---|---|---|
+| production | 1.14% | 0.21 | 0.10 | -11.69% |
+| **robust** | **1.90%** | **0.32** | **0.15** | -12.56% |
+
+`robust` 机制在套筒层同样生效（年化 +67%）；套筒组合回撤整体优于单书（分散化）。`run_sleeve_portfolio.py` 已同步增加 `--profile {production,robust}`。
+
+## R3.4 结构验证
+
+- 全部 6 个 CLI 入口（run_weekly_rotation / run_sleeve_portfolio / run_strategy_selector /
+  run_adaptive_backtest / run_advice_portfolio_backtest / ab_llm_text_analysis）import 冒烟通过。
+- 测试套件 **170/170 全绿**（新增账务审计 4 项）。
+
+## R3.5 复现与采纳路径
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 170 passed
+python Quant-4/run_weekly_rotation.py --pit --profile robust --num-trials 88   # 全池复验
+python Quant-4/run_sleeve_portfolio.py --pit --profile robust --num-trials 88  # 套筒复验
+```
