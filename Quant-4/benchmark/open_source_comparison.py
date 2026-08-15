@@ -136,6 +136,32 @@ OURS_OOS = {
     "note": "out-of-sample window (single regime so far)",
 }
 
+# ---- 2026-08-14 offline-subset rows (421-name cache, same honest accounting).
+# NOT apples-to-apples with the reference set: the subset is a mid/small-cap
+# PIT-download slice, so the percentiles below are reported as evidence of the
+# offline iteration's internal progress, not as a claim about the full pool.
+OURS_SUBSET_BASELINE = {
+    "name": "Quant-Ultra subset baseline (production params)",
+    "source": "this repo, 421-name offline cache, 2016-2026, honest accounting",
+    "market": "A-share mid/small caps + ETFs", "period": "2016-2026",
+    "ann": 0.0280, "sharpe": 0.32, "mdd": -0.1669, "calmar": 0.1677,
+    "note": "incl. risk-off precedence fix; NOT comparable to the full-pool rows",
+}
+OURS_SUBSET_ROBUST = {
+    "name": "Quant-Ultra subset --profile robust",
+    "source": "this repo, 421-name offline cache, 2016-2026, honest accounting",
+    "market": "A-share mid/small caps + ETFs", "period": "2016-2026",
+    "ann": 0.0525, "sharpe": 0.55, "mdd": -0.1259, "calmar": 0.4170,
+    "note": "fixed 3% + z3.0 crash detection, 8% stop; OOS 7.26%/0.70",
+}
+OURS_SUBSET_ALT = {
+    "name": "Quant-Ultra subset robust + alt-signal 0.10",
+    "source": "this repo, 421-name offline cache, 2016-2026, honest accounting",
+    "market": "A-share mid/small caps + ETFs", "period": "2016-2026",
+    "ann": 0.0667, "sharpe": 0.67, "mdd": -0.1272, "calmar": 0.5243,
+    "note": "synthetic momentum-proxy signal - WIRING TEST, not new alpha; OOS 9.96%/0.92",
+}
+
 
 def _pct(metric: str, value: float, higher_better: bool) -> float:
     vals = [r[metric] for r in REFERENCE_STRATEGIES if r.get(metric) is not None]
@@ -153,7 +179,7 @@ def _pct(metric: str, value: float, higher_better: bool) -> float:
 
 
 def main() -> int:
-    rows = REFERENCE_STRATEGIES + [OURS_FULL, OURS_OOS]
+    rows = REFERENCE_STRATEGIES + [OURS_FULL, OURS_OOS, OURS_SUBSET_BASELINE, OURS_SUBSET_ROBUST, OURS_SUBSET_ALT]
     # MDD is stored as a negative number, so a higher (less negative) value is
     # better; "worse" therefore means a more negative drawdown.
     metrics = [
@@ -173,6 +199,15 @@ def main() -> int:
         comp = sum(v for v in per.values() if v == v) / 3
         print(f"  {key}: sharpe={per['sharpe']:.2f} calmar={per['calmar']:.2f} mdd={per['mdd']:.2f} composite={comp:.2f} "
               f"({'top30% OK' if comp >= 0.70 else 'below top30%'})")
+    # Offline-subset rows are reported separately (not apples-to-apples with
+    # the reference set, which spans other markets/periods).
+    print("\nOffline-subset rows (reference-set percentile, caveated):")
+    for key in ["ours_subset_baseline", "ours_subset_robust", "ours_subset_alt"]:
+        r = {"ours_subset_baseline": OURS_SUBSET_BASELINE, "ours_subset_robust": OURS_SUBSET_ROBUST, "ours_subset_alt": OURS_SUBSET_ALT}[key]
+        per = {m: _pct(m, r[m], hb) for m, hb in metrics}
+        comp = sum(v for v in per.values() if v == v) / 3
+        print(f"  {key}: sharpe={per['sharpe']:.2f} calmar={per['calmar']:.2f} mdd={per['mdd']:.2f} composite={comp:.2f} "
+              f"(internal progress only - different universe)")
     out = Path(__file__).parent / "open_source_ranking.json"
     out.write_text(
         json.dumps(
@@ -180,14 +215,27 @@ def main() -> int:
                 "methodology": (
                     "curated sample of open-source non-HFT strategies with published metrics; "
                     "percentile = fraction of references worse on that metric; composite = mean of "
-                    "sharpe/calmar/mdd percentiles; our rows use the honest small-capital backtest."
+                    "sharpe/calmar/mdd percentiles; our rows use the honest small-capital backtest. "
+                    "Offline-subset rows use the 421-name cache and are reported as internal "
+                    "iteration evidence, not cross-market rankings."
                 ),
                 "references": REFERENCE_STRATEGIES,
                 "ours_full": OURS_FULL,
                 "ours_oos": OURS_OOS,
+                "ours_subset_baseline": OURS_SUBSET_BASELINE,
+                "ours_subset_robust": OURS_SUBSET_ROBUST,
+                "ours_subset_alt": OURS_SUBSET_ALT,
                 "percentiles": {
                     key: {m: _pct(m, (OURS_FULL if key == "ours_full" else OURS_OOS)[m], hb) for m, hb in metrics}
                     for key in ["ours_full", "ours_oos"]
+                },
+                "subset_percentiles": {
+                    key: {m: _pct(m, row[m], hb) for m, hb in metrics}
+                    for key, row in [
+                        ("ours_subset_baseline", OURS_SUBSET_BASELINE),
+                        ("ours_subset_robust", OURS_SUBSET_ROBUST),
+                        ("ours_subset_alt", OURS_SUBSET_ALT),
+                    ]
                 },
             },
             ensure_ascii=False, indent=2, default=str,

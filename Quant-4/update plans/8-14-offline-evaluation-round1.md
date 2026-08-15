@@ -192,3 +192,52 @@ python -m pytest Quant-4/tests -q -p no:cacheprovider          # 170 passed
 python Quant-4/run_weekly_rotation.py --pit --profile robust --num-trials 88   # 全池复验
 python Quant-4/run_sleeve_portfolio.py --pit --profile robust --num-trials 88  # 套筒复验
 ```
+
+---
+
+# 第四轮（Round 4，2026-08-14）：另类信号通路端到端验证 + 开源排名子集行
+
+## R4.1 另类信号通路端到端验证（8-13/8-14 新特性的接线验证）
+
+在 `robust` 基座上挂载**合成 PIT 信号面板**（价格推导、无未来信息、完整 provenance），
+`alternative_signal_weight` 0/0.05/0.10/0.20 网格：
+
+| 权重 | 年化 | 夏普 | 卡玛 | 回撤 | OOS 年化 | OOS 夏普 | 治理门 |
+|---|---|---|---|---|---|---|---|
+| 0（robust 基座） | 5.25% | 0.55 | 0.42 | -12.59% | 7.26% | 0.70 | n/a |
+| 0.10（动量代理信号） | 6.67% | 0.67 | 0.52 | -12.72% | 9.96% | 0.92 | PASS |
+| 0.20 | 6.19% | 0.64 | 0.50 | -12.32% | 8.44% | 0.83 | PASS |
+
+**方向性验证**：反转发代理信号（-z）同权重下年化 -0.87%、回撤 -27.9% —— 通路对信号方向正确响应，
+治理门（provenance/有限性/覆盖/时延/回退策略）全 PASS，精确 as-of 与 PIT 语义正确。
+
+**重要诚实声明**：动量代理信号本质是 20 日相对强度 z 分（复合因子已含 mom20），
+该结果证明的是**通路接线正确**（治理、精确时点、方向响应），**不是新 alpha**；
+真实另类信号（新闻/论坛情绪 + 资金池变化，8-13 计划）需在全池上用真实数据复验。
+
+## R4.2 开源排名（综合评分）更新
+
+`benchmark/open_source_comparison.py` 新增带显式标注的离线子集行（caveat：不同标的池，
+仅作内部迭代证据，非跨市场排名）：
+
+| 行 | 参考集综合百分位 | 说明 |
+|---|---|---|
+| 全池（生产） | **0.86** | README 口径，不变 |
+| 全池 OOS | **0.92** | 不变 |
+| 子集基线 | 0.31 | 421 只缓存池 |
+| 子集 robust | 0.42 | 内部进步 +35% |
+| 子集 robust+alt 0.10 | 0.50 | 接线测试，非 alpha |
+
+## R4.3 结构审查（其余治理模块）
+
+- `adaptive_parameter_state.py`：checksum 校验、原子写入、篡改即失败关闭 —— 干净；
+- `parameter_governance.py`：allowlist + 硬边界 + 相对变更上限 + 人工审批 —— 干净；
+- 6 个 CLI 入口 import 冒烟通过（上一轮已验证）。
+- 网络复查：仍不可用（baidu/pypi 均超时）——全池复验继续挂起，属数据约束而非代码问题。
+
+## R4.4 验证
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 170 passed
+python Quant-4/benchmark/open_source_comparison.py             # 全池 0.86/0.92 + 子集行
+```
