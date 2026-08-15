@@ -140,6 +140,13 @@ class RotationParams:
     require_volume_confirm: bool = False
     require_relative_strength: bool = True   # beat the equal-weight benchmark
     min_top_momentum_gate: float = 0.0       # skip week if best raw 20d return below this
+    # Optional market-breadth confirmation gate (0 = off, byte-compatible).
+    # When > 0, opening NEW positions requires the fraction of the universe
+    # trading above its 60-day MA to be at least this level - a narrow market
+    # (few names above their MAs) is a topping risk even when the top momentum
+    # names look strong. The gate behaves like ``bull_only_trading``: on a
+    # breach the rebalance de-risks to cash (persistence is skipped).
+    min_breadth_for_buys: float = 0.0
     bull_only_trading: bool = False          # only open new positions in BULL regime
     bear_no_loss: bool = True                # hard constraint: zero exposure in BEAR
     us_trend_filter: bool = False            # require US benchmark uptrend (transfer)
@@ -1455,6 +1462,17 @@ def weekly_rotation_backtest(
                 top_20 = panel.momentum[20].loc[date].get(ranked[0][0], 0.0)
                 if pd.notna(top_20) and float(top_20) < params.min_top_momentum_gate:
                     skip = True
+            # Market-breadth gate: opening new positions requires enough of the
+            # universe above its 60d MA (topping-risk filter; same skip
+            # semantics as bull_only_trading, default off).
+            if params.min_breadth_for_buys > 0 and not skip:
+                close_row = panel.close.loc[date] if date in panel.close.index else None
+                if close_row is not None and panel.ma60 is not None and date in panel.ma60.index:
+                    ma60_row = panel.ma60.loc[date]
+                    valid = close_row.notna() & ma60_row.notna()
+                    breadth = float((close_row[valid] > ma60_row[valid]).mean()) if valid.any() else 0.5
+                    if breadth < float(params.min_breadth_for_buys):
+                        skip = True
             safe_symbol = _pick_safe_asset(panel, date, symbols, params)
             if safe_symbol is not None and defensive_state:
                 target = _defensive_hold_target(ranked, symbols, regime, params, weights, keep_symbols, safe_symbol)
