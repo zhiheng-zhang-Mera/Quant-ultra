@@ -123,22 +123,25 @@ def default_params() -> RotationParams:
         max_gross_exposure=1.0,
         per_position_cap=0.30,
         leverage_annual_cost=0.06,
-        # ---- 2026-08-11 evidence-gated production defaults (PIT pool grid) ----
-        # The weekly Friday rebalance (rebalance_weekday=4) was silently
-        # overriding rebalance_days and cost ~26pp of cumulative fees on the
-        # 100%-coverage PIT universe. Monthly rebalancing + position
-        # persistence + a 12%/9% stop band + euphoria 0.15 lifted the honest
-        # result from 4.27%/0.53/-10.8% to 6.35%/0.99/-9.1% (OOS 7.62%/1.10);
-        # the 2026-08-11 Calmar push (30+ configs) added safe-asset share 0.75
-        # and disabled vol-targeting: 6.25%/1.00/-7.65% (Calmar 0.82, OOS 1.07).
+        # ---- 2026-08-15 full-pool PIT revalidation (adopted defaults) ----
+        # The 2026-08-14 offline-subset recommendation (fixed 3% + z-score 3.0
+        # crash detection, 8% stop band) was revalidated on the honest full
+        # PIT pool (5478 names, 100% coverage, cninfo dividends, 106 trials):
+        #   production 4.79%/0.73/-13.40%  vs  adopted 6.54%/1.01/-10.29%
+        #   OOS 4.80%/0.71 vs 8.35%/1.31, DSR p=3.4e-06 (passes at 106 trials),
+        #   quarterly win vs equal-weight 46.5% -> 51.2% (>=50% target met).
+        # The old defaults (event_shock_threshold 0.025, z-score 0, stop 7%)
+        # remain available as ``--profile production`` for A/B comparison.
         rebalance_weekday=None,
         rebalance_days=21,
         hold_persistent=True,
         persist_rank_floor=8,
         max_holding_days=0,
         take_profit_pct=0.12,
-        stop_loss_pct=0.07,
+        stop_loss_pct=0.08,
         euphoria_threshold=0.15,
+        event_shock_threshold=0.03,
+        event_shock_zscore=3.0,
         confirm_leverage=1.0,            # no margin/leverage for personal capital
         confirm_ml_prob=0.65,
         confirm_equity_proximity=0.97,
@@ -158,7 +161,6 @@ def default_params() -> RotationParams:
         drawdown_guard=0.0,
         drawdown_guard_max=0.14,
         drawdown_floor=0.25,
-        event_shock_threshold=0.025,
         event_shock_latch=True,
         event_shock_recovery_ma=5,
         event_shock_exposure=0.70,
@@ -238,12 +240,11 @@ def main() -> int:
                         help="cross-sectional alternative-signal weight (0 = disabled)")
     parser.add_argument("--num-trials", type=int, default=None,
                         help="actual number of examined variants; required for DSR gate passage")
-    parser.add_argument("--profile", choices=["production", "robust"], default="production",
-                        help="evidence-gated risk profile. 'production' = the 2026-08-11 full-pool "
-                             "defaults (unchanged). 'robust' = the 2026-08-14 offline-subset "
-                             "recommendation: event-shock fixed 3%% + z-score 3.0 crash detection and "
-                             "an 8%% stop-loss band (see update plans/8-14-offline-evaluation-round1.md). "
-                             "It must be re-validated on the full PIT pool before adoption.")
+    parser.add_argument("--profile", choices=["production", "robust", "legacy"], default="production",
+                        help="risk profile. 'production' = the 2026-08-15 adopted defaults "
+                             "(full-pool PIT revalidated: fixed 3% + z-score 3.0 crash detection, "
+                             "8% stop). 'robust' = alias for production. 'legacy' = the pre-2026-08-15 "
+                             "defaults (2.5% fixed shock, no z-score, 7% stop) for A/B comparison.")
     args = parser.parse_args()
 
     universe = args.universe or PRODUCTION_UNIVERSE
@@ -269,14 +270,11 @@ def main() -> int:
     params.start_date = args.start
     params.signal_mode = args.signal_mode
     params.research_num_trials = args.num_trials
-    if args.profile == "robust":
-        # 2026-08-14 offline-subset evidence (81-config grid, same accounting):
-        # robust crash detection + wider stop band lifted the subset result from
-        # 2.80%/0.32/-16.69% to 5.25%/0.55/-12.59% (OOS 7.26%/0.70). Full-pool
-        # re-validation is required before this may become the production default.
-        params.event_shock_threshold = 0.03
-        params.event_shock_zscore = 3.0
-        params.stop_loss_pct = 0.08
+    if args.profile == "legacy":
+        # pre-2026-08-15 defaults, kept for A/B comparison only
+        params.event_shock_threshold = 0.025
+        params.event_shock_zscore = 0.0
+        params.stop_loss_pct = 0.07
     if args.alternative_signal_weight > 0 and args.alternative_signal_path is None:
         parser.error("--alternative-signal-weight requires --alternative-signal-path")
     if args.alternative_signal_path is not None:

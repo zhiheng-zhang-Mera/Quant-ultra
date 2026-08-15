@@ -79,25 +79,24 @@ flowchart TD
 | 3 个月持有上限 | 强制轮出，不设最短持有 |
 | 杠杆 | 全程禁用（个人资金不负债）：`confirm_leverage=1.0`、`max_gross_exposure=1.0`，无做空 |
 
-### ✦ 回测表现（2016-01 ~ 2026-08，2573 交易日，诚实口径：10 万元本金）
+### ✦ 回测表现（2016-01 ~ 2026-08，2578 交易日，诚实口径：10 万元本金，全池 PIT 复验后采纳的生产默认）
 
-| 指标 | 诚实回测（PIT 全市场 5475 只、覆盖 100%、月频、显式费用、整手、无杠杆） | 目标 / 对照 |
+| 指标 | 诚实回测（PIT 全市场 5478 只、覆盖 100%、月频、显式费用、整手、无杠杆） | 目标 / 对照 |
 |---|---|---|
-| 年化收益 | **6.25%**（OOS 2022+：6.95%） | 沪深300(510300) 5.33% ✅ |
-| 夏普比率 | **1.00**（OOS 1.07） | ≥0.9 ✅ |
-| 卡玛比率 | **0.82**（OOS 0.91） | ≥1.2 ❌ 未达 |
-| 最大回撤 | **-7.65%** | 沪深300 -44.75% ✅ |
-| 回撤修复期（近3年窗口） | **110 交易日** | ≤126 ✅ |
-| 回撤修复期（全窗口，披露） | 629 日 | 披露 |
-| 季度超沪深300胜率 | 53.5% | ≥60% ❌ 未达 |
-| 季度超等权基准胜率 | 48.8% | ≥50% ❌ 未达 |
-| 累计交易成本 | 11.8%（124 笔） | ✅ |
+| 年化收益 | **6.54%**（OOS 2022+：8.35%） | 沪深300(510300) ~5.3% ✅ |
+| 夏普比率 | **1.01**（OOS 1.31） | ≥0.9 ✅ |
+| 卡玛比率 | **0.64**（OOS 0.79） | ≥1.2 ❌ 未达（结构性上限，详见计划文档） |
+| 最大回撤 | **-10.29%** | 沪深300 ~-44.8% ✅ |
+| 回撤修复期（近3年窗口） | **181 交易日** | ≤126 ❌ 未达（进行中的 2026 回撤拉长修复期） |
+| 季度超等权基准胜率 | **51.2%** | ≥50% ✅ |
+| 季度超沪深300胜率 | 53.5% | ≥60% ❌ 披露 |
+| 累计交易成本 | 10.6%（93 笔） | ✅ |
 | 杠杆 | 0.00x（禁用） | ✅ |
-| 平均总仓位 | ~70% | — |
+| 平均总仓位 | ~73% | — |
 
-> **2026-08-11 里程碑**：股票池已改为"全 A 股曾上市 + 退市股"的 PIT 池（5475 只，含 248 只窗口内退市股，覆盖率 100%）。关键修复：原生产配置的 `rebalance_weekday=4` 使再平衡实际为每周五（`rebalance_days=21` 被覆盖），累计成本高达 38%；改为月频 + 持仓延续 + 12%/7% 止盈止损带 + 亢奋阈值 0.15 + 避险占比 0.75 后，诚实全池成绩提升到 **6.25%/1.00/-7.65%**（OOS 6.95%/1.07），卡玛 0.82（30+ 配置网格后的最优，≥1.0 受无杠杆长多月频的结构性限制，详见计划文档）。
+> **2026-08-15 全池 PIT 复验里程碑（生产默认采纳）**：接入网络后，从新浪 klc 全历史通道（东财/腾讯/baostock 均被风控或限流，已按授权寻找替代途径）重建全池日线 5478/5478（覆盖率 100%，退市 248/248），巨潮 cninfo 股息 5420 只/50947 行。全池复验（106 次尝试注册，DSR 多重检验）：**`--profile robust`（固定 3% + z-score 3.0 冲击检测、8% 止损）6.54%/1.01/-10.29%（OOS 8.35%/1.31，DSR p=3.4e-06 通过）全面胜出旧生产默认（4.79%/0.73/-13.40%，OOS 4.80%/0.71），暖启动折线 4/4 折年化胜出（2024-2026 折 13.52% vs 8.62%、回撤 -8.6% vs -13.4%）。**已采纳为生产默认**；旧参数保留为 `--profile legacy` 供 A/B 对比。注意：新鲜数据源下旧生产默认的复测为 4.79%（与 2026-08-11 文档数字 6.25% 存在数据源差异），以全池复验口径为准。
 
-> **2026-08-14 离线评估轮**（详见 `Quant-4/update plans/8-14-offline-evaluation-round1.md`）：在 421 只离线缓存池上完成引擎评估与风险控制修复——(1) 修复真实缺陷：**再平衡日的事件冲击风险处置曾被常规再平衡覆盖**（风险优先序，默认即生效）；(2) 新增默认关闭的机制：`rebalance_min_turnover`（最小换手再平衡门槛）、`event_shock_zscore`（波动自适应 z-score 事件冲击检测，固定 2.5% 阈值在小盘高波动池上实测误触发 158 次）与 `trailing_stop_pct`（峰值追踪止损，实测在本小盘池上回撤翻倍、仅作可选）；(3) 清除 `rank_candidates` 与 `weekly_rotation` 中未使用的死代码（字节兼容）；(4) 报告生成器修复过时/自相矛盾的"第三视角审查"文本（改为动态引用 summary）；(5) **账务自洽审计**：净值复利、敞口无杠杆、无执行日漂移界恒等式全部精确成立，止损路径"成本计入、换手不计"已注释明确；(6) 因子库额外因子（rsi14/idll20/MAX/Amihud）实测全部劣于基座——复合因子组合已近最优；(7) 套筒组合 40/30/20/10 用 `robust` 基准年化 1.14%→1.90%；(8) 另类信号通路端到端验证：治理门 PASS、方向响应正确（动量代理信号 OOS 9.96%/0.92，反转代理信号 -27.9% 回撤——**接线验证而非新 alpha**）；(9) 开源排名新增标注子集行（子集基线→robust→alt 综合百分位 0.31→0.42→0.50）；(10) 新增市场宽度门 `min_breadth_for_buys`（默认关，本池实测负结果——拒绝）与**暖启动折线验证**（每档一次全程回测后按 4 折切片：`robust` 在年化/夏普/卡玛上 **4/4 折胜出**、2/4 折回撤更小——全窗口优势并非单一时期伪影；冷启动折线方法被证实会引入不对称的冷启动噪声并反转结论，已记录方法论警告）；(11) **性能向量化**：per-day 循环 11.9 万次 pandas 标量 `.at` 访问（占运行时长 ~30%、随池规模线性增长）改为 numpy 数组 + 索引映射，421 只回测 **~40-60s → 9.9s（约 4-5×）**，重构前后 10 项指标字节一致；(12) **参数邻域稳定性**：robust 三参数单点扰动均显著优于基线（4.4-5.3% 年化平台，无刀锋）；(13) **资金敏感性披露**：robust 档 10万→30万→50万元本金年化 5.25%→6.10%→7.19%（夏普 0.55→0.71），整手约束随账户规模缓解——10 万口径为保守下界；(14) 测试套件环境加固后 **173/173 全绿**。88 配置网格在同一口径下：生产基线（含缺陷修复）2.80%/0.32/-16.69%，`--profile robust` 推荐档（固定 3% + z3.0 冲击、8% 止损）**5.25%/0.55/0.42/-12.59%**、OOS 7.26%/0.70；88 次尝试注册下 DSR 门诚实返回 HOLD（子集 OOS 不足），生产默认参数保持不变，`robust` 档需全池复验后采纳。
+> **2026-08-14 离线评估轮**（详见 `Quant-4/update plans/8-14-offline-evaluation-round1.md`）：在 421 只离线缓存池上完成引擎评估与风险控制修复——(1) 修复真实缺陷：**再平衡日的事件冲击风险处置曾被常规再平衡覆盖**（风险优先序，默认即生效）；(2) 新增默认关闭的机制：`rebalance_min_turnover`（最小换手再平衡门槛）、`event_shock_zscore`（波动自适应 z-score 事件冲击检测，固定 2.5% 阈值在小盘高波动池上实测误触发 158 次）与 `trailing_stop_pct`（峰值追踪止损，实测在本小盘池上回撤翻倍、仅作可选）；(3) 清除 `rank_candidates` 与 `weekly_rotation` 中未使用的死代码（字节兼容）；(4) 报告生成器修复过时/自相矛盾的"第三视角审查"文本（改为动态引用 summary）；(5) **账务自洽审计**：净值复利、敞口无杠杆、无执行日漂移界恒等式全部精确成立，止损路径"成本计入、换手不计"已注释明确；(6) 因子库额外因子（rsi14/idll20/MAX/Amihud）实测全部劣于基座——复合因子组合已近最优；(7) 套筒组合 40/30/20/10 用 `robust` 基准年化 1.14%→1.90%；(8) 另类信号通路端到端验证：治理门 PASS、方向响应正确（动量代理信号 OOS 9.96%/0.92，反转代理信号 -27.9% 回撤——**接线验证而非新 alpha**）；(9) 开源排名新增标注子集行（子集基线→robust→alt 综合百分位 0.31→0.42→0.50）；(10) 新增市场宽度门 `min_breadth_for_buys`（默认关，本池实测负结果——拒绝）与**暖启动折线验证**（每档一次全程回测后按 4 折切片：`robust` 在年化/夏普/卡玛上 **4/4 折胜出**、2/4 折回撤更小——全窗口优势并非单一时期伪影；冷启动折线方法被证实会引入不对称的冷启动噪声并反转结论，已记录方法论警告）；(11) **性能向量化**：per-day 循环 11.9 万次 pandas 标量 `.at` 访问（占运行时长 ~30%、随池规模线性增长）改为 numpy 数组 + 索引映射，421 只回测 **~40-60s → 9.9s（约 4-5×）**，重构前后 10 项指标字节一致；(12) **参数邻域稳定性**：robust 三参数单点扰动均显著优于基线（4.4-5.3% 年化平台，无刀锋）；(13) **资金敏感性披露**：robust 档 10万→30万→50万元本金年化 5.25%→6.10%→7.19%（夏普 0.55→0.71），整手约束随账户规模缓解——10 万口径为保守下界；(14) **2026-08-15 全池复验与采纳**：网络恢复后以替代数据源重建全池（5478/5478 覆盖 100%、cninfo 股息 5420 只），复验 `robust` 档全面胜出并**采纳为生产默认**（6.54%/1.01/-10.29%，OOS 8.35%/1.31，DSR p=3.4e-06，折线 4/4）；旧参数保留为 `--profile legacy`。(15) 测试套件 **173/173 全绿**。
 
 ![周轮动净值与回撤曲线](docs/images/weekly_rotation_equity.png)
 
@@ -242,25 +241,24 @@ Close-signal → next-open execution with no look-ahead, layered on multi-factor
 | 3-month rotation cap | hard max holding of 63 trading days, no minimum |
 | Leverage | disabled end-to-end (personal capital, no debt): `confirm_leverage=1.0`, `max_gross_exposure=1.0`, no shorting |
 
-### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,573 trading days, honest setup: 100k CNY)
+### ✦ Backtest Performance (2016-01 ~ 2026-08, 2,578 trading days, honest setup: 100k CNY, full-pool PIT revalidated production defaults)
 
-| Metric | Honest backtest (PIT universe 5,475 names, 100% coverage, monthly, explicit fees, board lots, no leverage) | Target / benchmark |
+| Metric | Honest backtest (PIT universe 5,478 names, 100% coverage, monthly, explicit fees, board lots, no leverage) | Target / benchmark |
 |---|---|---|
-| Annual return | **6.25%** (OOS 2022+: 6.95%) | CSI300 (510300) 5.33% ✅ |
-| Sharpe | **1.00** (OOS 1.07) | ≥0.9 ✅ |
-| Calmar | **0.82** (OOS 0.91) | ≥1.2 ❌ not met |
-| Max drawdown | **-7.65%** | CSI300 -44.75% ✅ |
-| Recovery (last-3y window) | **110 trading days** | ≤126 ✅ |
-| Recovery (full window, disclosed) | 629 d | disclosed |
-| Quarterly win vs CSI 300 | 53.5% | ≥60% ❌ not met |
-| Quarterly win vs equal-weight | 48.8% | ≥50% ❌ not met |
-| Cumulative cost | 11.8% (124 trades) | ✅ |
+| Annual return | **6.54%** (OOS 2022+: 8.35%) | CSI300 (510300) ~5.3% ✅ |
+| Sharpe | **1.01** (OOS 1.31) | ≥0.9 ✅ |
+| Calmar | **0.64** (OOS 0.79) | ≥1.2 ❌ structurally capped, see plan docs |
+| Max drawdown | **-10.29%** | CSI300 ~-44.8% ✅ |
+| Recovery (last-3y window) | **181 trading days** | ≤126 ❌ (ongoing 2026 drawdown) |
+| Quarterly win vs equal-weight | **51.2%** | ≥50% ✅ |
+| Quarterly win vs CSI 300 | 53.5% | ≥60% ❌ disclosed |
+| Cumulative cost | 10.6% (93 trades) | ✅ |
 | Leverage | 0.00x (disabled) | ✅ |
-| Average gross exposure | ~70% | — |
+| Average gross exposure | ~73% | — |
 
-> **2026-08-11 milestone**: the universe is the full ever-listed A-share PIT pool (5,475 names incl. 248 delisted, 100% coverage). Key fix: the old `rebalance_weekday=4` silently made rebalancing weekly (costing ~26pp cumulative fees); monthly rebalancing + persistence + a 12%/7% stop band + euphoria 0.15 + 75% safe-asset share lifted the honest all-pool result to **6.25%/1.00/-7.65%** (OOS 6.95%/1.07), Calmar 0.82 (best of a 30+-config grid; ≥1.0 is structurally capped for a no-leverage long-only monthly strategy). See `Quant-4/update plans/8-10-pit-universe-plan.md`.
+> **2026-08-15 full-pool PIT revalidation milestone (production defaults adopted)**: with network restored, the full daily-bar universe was rebuilt from the sina klc full-history channel (Eastmoney/Tencent/baostock were rate-limited or bot-blocked; alternatives were found as authorized) - 5,478/5,478 (100% coverage, 248/248 delisted), cninfo dividends 5,420 names / 50,947 rows. Full-pool revalidation (106 registered trials, DSR multiple-testing): **`--profile robust` (fixed 3% + z-score 3.0 crash detection, 8% stop) 6.54%/1.01/-10.29% (OOS 8.35%/1.31, DSR p=3.4e-06 passes)** beats the old production default on every metric (4.79%/0.73/-13.40%, OOS 4.80%/0.71), winning 4/4 warm walk-forward folds by annual return (2024-2026 fold: 13.52% vs 8.62%, MDD -8.6% vs -13.4%). **Adopted as the production default**; the old parameters remain available as `--profile legacy` for A/B. Note: the fresh data reproduces the old default at 4.79% (data-source differences vs the 2026-08-11 documented 6.25%); the revalidated full-pool figures are canonical.
 
-> **2026-08-14 offline evaluation round** (see `Quant-4/update plans/8-14-offline-evaluation-round1.md`): engine evaluation and risk-control fixes on the 421-name offline cache subset — (1) fixed a real defect: an event-shock risk-off pending was overwritten by the regular rebalance on rebalance days (risk precedence, active by default); (2) added default-off mechanisms: `rebalance_min_turnover` (minimum-turnover rebalance band), `event_shock_zscore` (volatility-adaptive z-score crash detection; the fixed 2.5% threshold fired 158 times on the volatile small-cap subset) and `trailing_stop_pct` (peak-based trailing stop; it doubled drawdown on this subset, kept as opt-in); (3) removed dead code in `rank_candidates`/`weekly_rotation` (byte-compatible); (4) fixed stale/self-contradicting report text (now derived from the summary); (5) **accounting self-consistency audit**: equity compounding, no-leverage exposure bounds and clean-day drift identities hold exactly; the stop path charges cost without turnover (documented design); (6) extra factors (rsi14/idll20/MAX/Amihud) all underperform the composite base — the factor set is near-optimal on this universe; (7) sleeve 40/30/20/10 portfolio with `robust` base: annual 1.14% → 1.90%; (8) end-to-end alternative-signal wiring verification: governance PASS and correct directional response (momentum-proxy signal OOS 9.96%/0.92, reversal-proxy −27.9% MDD — a wiring test, not new alpha); (9) the open-source ranking gains caveated subset rows (subset baseline → robust → alt composite percentile 0.31 → 0.42 → 0.50); (10) hardened the test environment — **170/170 tests green**. On the same subset over an 88-config grid: baseline incl. the fix 2.80%/0.32/-16.69%; the `--profile robust` recommendation (fixed 3% + z3.0 crash detection, 8% stop) **5.25%/0.55/0.42/-12.59%**, OOS 7.26%/0.70; DSR honestly returns HOLD at 88 registered trials on this subset; production defaults stay unchanged and `robust` needs full-pool revalidation before adoption.
+> **2026-08-14 offline evaluation round** (see `Quant-4/update plans/8-14-offline-evaluation-round1.md`): engine evaluation and risk-control fixes on the 421-name offline cache subset — (1) fixed a real defect: an event-shock risk-off pending was overwritten by the regular rebalance on rebalance days (risk precedence, active by default); (2) added default-off mechanisms: `rebalance_min_turnover` (minimum-turnover rebalance band), `event_shock_zscore` (volatility-adaptive z-score crash detection; the fixed 2.5% threshold fired 158 times on the volatile small-cap subset) and `trailing_stop_pct` (peak-based trailing stop; it doubled drawdown on this subset, kept as opt-in); (3) removed dead code in `rank_candidates`/`weekly_rotation` (byte-compatible); (4) fixed stale/self-contradicting report text (now derived from the summary); (5) **accounting self-consistency audit**: equity compounding, no-leverage exposure bounds and clean-day drift identities hold exactly; the stop path charges cost without turnover (documented design); (6) extra factors (rsi14/idll20/MAX/Amihud) all underperform the composite base — the factor set is near-optimal on this universe; (7) sleeve 40/30/20/10 portfolio with `robust` base: annual 1.14% → 1.90%; (8) end-to-end alternative-signal wiring verification: governance PASS and correct directional response (momentum-proxy signal OOS 9.96%/0.92, reversal-proxy −27.9% MDD — a wiring test, not new alpha); (9) the open-source ranking gains caveated subset rows (subset baseline → robust → alt composite percentile 0.31 → 0.42 → 0.50); (10) hardened the test environment — **170/170 tests green**; (11) parameter neighborhood stability; (12) capital-sensitivity disclosure; (13) **2026-08-15 full-pool revalidation & adoption**: with network restored, the full pool was rebuilt via alternative sources (sina klc full history + cninfo dividends; 5,478/5,478 = 100% coverage, 248/248 delisted), the robust profile was revalidated on the honest full pool and **adopted as the production default** (6.54%/1.01/-10.29%, OOS 8.35%/1.31, DSR p=3.4e-06 at 106 trials, 4/4 warm folds); the old parameters remain as `--profile legacy`; (14) **173/173 tests green**.
 
 ![Equity curve & drawdown](docs/images/weekly_rotation_equity.png)
 

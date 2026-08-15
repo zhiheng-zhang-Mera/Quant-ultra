@@ -102,8 +102,8 @@ def fetch_dividend_history(
         result: Dict[str, pd.DataFrame] = {}
         for symbol in symbols:
             frame = pd.DataFrame(columns=["symbol", "ex_date", "cash_ps"])
-            cache_path = cache_dir / f"{symbol.replace('.', '_')}_dividends.parquet"
-            if cache_path.exists():
+            cache_path = cache_dir / f"{symbol.replace('.', '_')}_dividends.parquet" if cache_dir is not None else None
+            if cache_path is not None and cache_path.exists():
                 try:
                     frame = pd.read_parquet(cache_path)
                     frame["ex_date"] = pd.to_datetime(frame["ex_date"])
@@ -117,7 +117,7 @@ def fetch_dividend_history(
                     .sort_values("ex_date")
                     .reset_index(drop=True)
                 )
-                if cache_dir is not None:
+                if cache_path is not None:
                     frame.to_parquet(cache_path, index=False)
             result[symbol] = frame
         return result

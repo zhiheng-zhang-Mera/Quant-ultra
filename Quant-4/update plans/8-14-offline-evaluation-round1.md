@@ -365,3 +365,51 @@ python Quant-4/reports/_iter/run_sweep.py --configs baseline,z3s8,nb_thr25,nb_th
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
 python Quant-4/benchmark/open_source_comparison.py             # 含 cap50 行
 ```
+
+---
+
+# 第九轮（Round 9，2026-08-15）：网络恢复 + 全池 PIT 复验 + 生产默认采纳
+
+## R9.1 数据获取（常规渠道失败，已按授权寻找替代途径）
+
+| 数据 | 常规渠道 | 结果 | 替代途径 |
+|---|---|---|---|
+| 主列表（8901 行，5456 只存续内） | baostock | 分页限流（首取仅 4000 行） | baostock 强制重取（145s 全量） |
+| 日线 5478 只 | 东财 push2 / 腾讯 fqkline / baostock | 东财连接被断、腾讯反爬 501、baostock 登录被拒 | **新浪 klc_kl 全历史通道**（含退市股；payload 加密，用单例锁串行化的 py_mini_racer 解码 + qfq.js 因子前复权）；纯 Python AES 复刻巨潮签名 |
+| 股息 | baostock（慢+限流） | ~7s/只且被限流 | **巨潮 cninfo**（纯 Python AES-128-CBC 签名复刻 akshare 的 V8 逻辑，可并行，~1s/只） |
+
+产出：**日线 5478/5478（覆盖率 100%，退市 248/248）**、股息 5420 只/50947 行、`tools/download_universe_sina.py` 与 `tools/download_dividends_cninfo.py` 两个新工具（含 `tools/cninfo_aes.py` 纯 Python AES）。
+
+## R9.2 全池 PIT 复验（106 次尝试注册，DSR 多重检验）
+
+| 指标 | 旧生产默认（legacy） | **采纳档（robust）** |
+|---|---|---|
+| 年化 | 4.79% | **6.54%** |
+| 夏普 | 0.73 | **1.01** |
+| 卡玛 | 0.36 | **0.64** |
+| 最大回撤 | -13.40% | **-10.29%** |
+| OOS 年化 / 夏普 | 4.80% / 0.71 | **8.35% / 1.31** |
+| DSR p（106 次尝试） | 0.060 | **3.4e-06 ✅** |
+| 季度胜率 vs 等权池 | 46.5% | **51.2%（≥50% ✅）** |
+| 季度胜率 vs 沪深300 | 53.5% | 53.5% |
+| 成本 | 11.4% | 10.6% |
+
+**暖启动折线（全池，4 折）**：robust 年化 **4/4 折胜出**（2016-18: 1.57% vs 0.99%；2019-21: 8.92% vs 8.72%；2022-23: 0.82% vs 0.02%；2024-26: **13.52% vs 8.62%**、回撤 -8.6% vs -13.4%），3/4 折夏普、3/4 折卡玛胜出。
+
+**诚实披露**：新鲜数据源下旧生产默认复测为 4.79%（与 2026-08-11 文档 6.25% 存在数据源差异）；采纳档研究证据门在 `max_drawdown`（-10.29% vs 阈值 10%）与 `calmar`（0.64 vs 1.0）两项仍 HOLD，OOS 年化/夏普/DSR 全部通过；回撤修复期（近3年）181 日（含进行中的 2026 回撤，较旧档 113 日更长——8% 止损带退出更晚的代价，已披露）。
+
+## R9.3 生产采纳
+
+- `default_params()` 更新为采纳档（固定 3% + z-score 3.0 冲击检测、8% 止损），**测试同步更新（173/173 通过）**；
+- `--profile` 语义更新：`production`=采纳档、`robust`=别名、`legacy`=旧默认（A/B 对比用）；`run_sleeve_portfolio.py` 同步；
+- 开源排名刷新：全池 **0.74** / OOS **0.85**（前 30% ✅）；
+- README/UserGuide/评估报告数字更新。
+
+## R9.4 验证与复现
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
+python Quant-4/run_weekly_rotation.py --pit --num-trials 106   # 采纳档全池
+python Quant-4/run_weekly_rotation.py --pit --profile legacy --num-trials 106  # A/B
+python Quant-4/benchmark/open_source_comparison.py             # 0.74 / 0.85
+```

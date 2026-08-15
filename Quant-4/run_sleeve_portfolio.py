@@ -137,12 +137,11 @@ def main() -> int:
                         help="alternative-signal weight applied to every sleeve (0 = off)")
     parser.add_argument("--num-trials", type=int, default=None,
                         help="actual number of examined variants; required for DSR gate passage")
-    parser.add_argument("--profile", choices=["production", "robust"], default="production",
-                        help="evidence-gated risk profile on every sleeve's base params. "
-                             "'production' = 2026-08-11 full-pool defaults (unchanged). 'robust' = "
-                             "the 2026-08-14 offline-subset recommendation: event-shock fixed 3%% + "
-                             "z-score 3.0 crash detection and an 8%% stop band (see update "
-                             "plans/8-14-offline-evaluation-round1.md); needs full-pool revalidation.")
+    parser.add_argument("--profile", choices=["production", "robust", "legacy"], default="production",
+                        help="risk profile on every sleeve's base params. 'production' = the "
+                             "2026-08-15 adopted defaults (full-pool PIT revalidated: fixed 3% + "
+                             "z-score 3.0 crash detection, 8% stop). 'robust' = alias. 'legacy' = "
+                             "pre-2026-08-15 defaults for A/B comparison.")
     args = parser.parse_args()
 
     alive_mask = None
@@ -165,12 +164,11 @@ def main() -> int:
     params.research_num_trials = args.num_trials
     params.start_date = args.start or params.start_date
     params.persist_rank_floor = args.persist_rank_floor
-    if args.profile == "robust":
-        # 2026-08-14 offline-subset evidence (see run_weekly_rotation --profile robust):
-        # robust crash detection + wider stop band; full-pool revalidation required.
-        params.event_shock_threshold = 0.03
-        params.event_shock_zscore = 3.0
-        params.stop_loss_pct = 0.08
+    if args.profile == "legacy":
+        # pre-2026-08-15 defaults, kept for A/B comparison only
+        params.event_shock_threshold = 0.025
+        params.event_shock_zscore = 0.0
+        params.stop_loss_pct = 0.07
     if not args.disable_short_sleeve:
         params.enable_short_sleeve = True
         params.max_short_exposure = args.max_short_exposure

@@ -76,10 +76,10 @@ def test_production_defaults_are_leverage_free():
 
 
 def test_production_defaults_are_monthly_persistent_config():
-    """The 2026-08-11 evidence-gated production default (PIT pool grid):
-    monthly rebalancing (weekly Friday override removed), position
-    persistence without a forced rotation cap, a 12%/7% stop band, and
-    euphoria threshold 0.15. All leverage-free."""
+    """The 2026-08-15 full-pool-revalidated production default: monthly
+    rebalancing, position persistence, 12%/8% stop band, euphoria 0.15 and
+    the adopted robust crash detection (fixed 3% + z-score 3.0). All
+    leverage-free."""
     import sys
     from pathlib import Path
     ROOT = Path(__file__).parents[1]
@@ -94,16 +94,18 @@ def test_production_defaults_are_monthly_persistent_config():
     assert p.persist_rank_floor == 8
     assert p.max_holding_days == 0
     assert p.take_profit_pct == 0.12
-    assert p.stop_loss_pct == 0.07
+    assert p.stop_loss_pct == 0.08
     assert p.euphoria_threshold == 0.15
     assert p.defensive_hold_safe_frac == 0.75
     assert p.vol_target == 0.0
+    assert p.event_shock_threshold == 0.03
+    assert p.event_shock_zscore == 3.0
     assert p.confirm_leverage == 1.0 and p.max_gross_exposure <= 1.0
 
 
-def test_robust_profile_keeps_production_defaults_untouched():
-    """The --profile robust CLI overrides must be applied on top of, not into,
-    the production defaults; default_params() must stay byte-identical."""
+def test_legacy_profile_preserves_old_defaults():
+    """The --profile legacy overrides must restore the pre-2026-08-15 defaults
+    for A/B comparison, without touching default_params()."""
     import sys
     from pathlib import Path
     ROOT = Path(__file__).parents[1]
@@ -112,18 +114,18 @@ def test_robust_profile_keeps_production_defaults_untouched():
     from run_weekly_rotation import default_params
 
     p = default_params()
-    # production defaults are unchanged by the profile feature
-    assert p.event_shock_threshold == 0.025
-    assert p.event_shock_zscore == 0.0
-    assert p.stop_loss_pct == 0.07
-    # the robust profile applies the documented offline-subset overrides
+    # adopted production defaults are unchanged by the profile feature
+    assert p.event_shock_threshold == 0.03
+    assert p.event_shock_zscore == 3.0
+    assert p.stop_loss_pct == 0.08
+    # the legacy profile applies the documented pre-2026-08-15 overrides
     q = default_params()
-    q.event_shock_threshold = 0.03
-    q.event_shock_zscore = 3.0
-    q.stop_loss_pct = 0.08
-    assert q.event_shock_threshold == 0.03
-    assert q.event_shock_zscore == 3.0
-    assert q.stop_loss_pct == 0.08
+    q.event_shock_threshold = 0.025
+    q.event_shock_zscore = 0.0
+    q.stop_loss_pct = 0.07
+    assert q.event_shock_threshold == 0.025
+    assert q.event_shock_zscore == 0.0
+    assert q.stop_loss_pct == 0.07
     assert q.confirm_leverage == 1.0 and q.max_gross_exposure <= 1.0
 
 

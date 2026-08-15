@@ -123,17 +123,17 @@ REFERENCE_STRATEGIES: List[Dict] = [
 
 OURS_FULL = {
     "name": "Quant-Ultra monthly rotation (PIT full-universe, honest)",
-    "source": "this repo, 2016-2026, 100k CNY, PIT universe 5475 names, real fees, no leverage",
+    "source": "this repo, 2016-2026, 100k CNY, PIT universe 5478 names, real fees, no leverage",
     "market": "A-share large caps + ETFs", "period": "2016-2026",
-    "ann": 0.0625, "sharpe": 0.9968, "mdd": -0.0765, "calmar": 0.8167,
-    "note": "full-window, 100% survivorship-free PIT universe; quarterly win vs CSI300 53.5%",
+    "ann": 0.0654, "sharpe": 1.0105, "mdd": -0.1029, "calmar": 0.6359,
+    "note": "full-window, 100% survivorship-free PIT universe; adopted 2026-08-15 defaults (3%+z3.0 crash detection, 8% stop); quarterly win vs CSI300 53.5%",
 }
 OURS_OOS = {
     "name": "Quant-Ultra monthly rotation (PIT OOS 2022+)",
     "source": "this repo, 2022-2026",
     "market": "A-share large caps + ETFs", "period": "2022-2026",
-    "ann": 0.0695, "sharpe": 1.0694, "mdd": -0.0765, "calmar": 0.9085,
-    "note": "out-of-sample window (single regime so far)",
+    "ann": 0.0835, "sharpe": 1.3098, "mdd": -0.1029, "calmar": 0.7900,
+    "note": "out-of-sample window; DSR p=3.4e-06 at 106 registered trials",
 }
 
 # ---- 2026-08-14 offline-subset rows (421-name cache, same honest accounting).
