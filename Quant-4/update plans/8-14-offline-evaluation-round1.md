@@ -325,3 +325,43 @@ python Quant-4/reports/_iter/run_sweep.py --configs baseline,z3s8 --trials 91   
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
 python Quant-4/reports/_iter/run_sweep.py --configs baseline,z3s8,nb_thr25,nb_thr35,nb_z25,nb_z35,nb_sl7,nb_sl9 --trials 97
 ```
+
+---
+
+# 第七轮（Round 7，2026-08-14）：资金敏感性、动态止损与剩余维度负结果
+
+## R7.1 资金敏感性（重要披露）
+
+`robust` 档在 10 万/30 万/50 万元本金下（同一诚实口径：显式费用、整手 100/200 股）：
+
+| 本金 | 年化 | 夏普 | 卡玛 | 回撤 | OOS 年化 | OOS 夏普 | 季度胜率(沪深300) |
+|---|---|---|---|---|---|---|---|
+| 10 万（生产基线口径） | 5.25% | 0.55 | 0.42 | -12.59% | 7.26% | 0.70 | 65.1% |
+| 30 万 | 6.10% | 0.62 | 0.46 | -13.37% | 7.49% | 0.72 | 69.8% |
+| 50 万 | **7.19%** | **0.71** | **0.54** | -13.44% | **7.70%** | **0.73** | **74.4%** |
+
+结论：**整手约束随账户规模缓解**（小账户在 10 万本金下大量标的不可整手买入/卖出摩擦更大），
+与全池旧口径的敏感性方向一致（9.2%→10.4%→12.0%）。**10 万元口径是保守下界**，
+资金敏感性作为披露项记录，不改变生产假设。
+
+## R7.2 剩余维度（多为负结果，如实记录）
+
+| 配置 | 结果 vs robust (5.25%/0.55/0.42) |
+|---|---|
+| dynamic_stops（ATR 动态止损） | 5.64%/0.59/0.42（年化略升，OOS 持平 7.25%）——边际，未采纳 |
+| defensive_tilt | 完全一致（RANGE 态未改变实际行为） |
+| regime_ma 60/100 | 4.61%/0.49/0.27、4.18%/0.46/0.24（回撤 -17%+，更差）——40 日最优 |
+| trend_filter_long 120 | 5.63%/0.59 但 OOS 4.98%/0.52（更差） |
+| bear_no_loss=True | 完全一致（ML 敞口下限已覆盖） |
+
+## R7.3 综合评分刷新
+
+- 开源排名新增 `ours_subset_robust_cap50` 行（50 万口径，标注为资金敏感性上界）。
+- 全池综合评分不变：0.86 全窗口 / 0.92 OOS（前 30% ✅）。
+
+## R7.4 验证
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
+python Quant-4/benchmark/open_source_comparison.py             # 含 cap50 行
+```

@@ -161,6 +161,13 @@ OURS_SUBSET_ALT = {
     "ann": 0.0667, "sharpe": 0.67, "mdd": -0.1272, "calmar": 0.5243,
     "note": "synthetic momentum-proxy signal - WIRING TEST, not new alpha; OOS 9.96%/0.92",
 }
+OURS_SUBSET_ROBUST_CAP50 = {
+    "name": "Quant-Ultra subset robust (500k CNY)",
+    "source": "this repo, 421-name offline cache, 2016-2026, honest accounting",
+    "market": "A-share mid/small caps + ETFs", "period": "2016-2026",
+    "ann": 0.0719, "sharpe": 0.71, "mdd": -0.1344, "calmar": 0.5350,
+    "note": "capital-sensitivity bound: board-lot friction shrinks with account size; 100k baseline is the conservative bound",
+}
 
 
 def _pct(metric: str, value: float, higher_better: bool) -> float:
@@ -179,7 +186,7 @@ def _pct(metric: str, value: float, higher_better: bool) -> float:
 
 
 def main() -> int:
-    rows = REFERENCE_STRATEGIES + [OURS_FULL, OURS_OOS, OURS_SUBSET_BASELINE, OURS_SUBSET_ROBUST, OURS_SUBSET_ALT]
+    rows = REFERENCE_STRATEGIES + [OURS_FULL, OURS_OOS, OURS_SUBSET_BASELINE, OURS_SUBSET_ROBUST, OURS_SUBSET_ALT, OURS_SUBSET_ROBUST_CAP50]
     # MDD is stored as a negative number, so a higher (less negative) value is
     # better; "worse" therefore means a more negative drawdown.
     metrics = [
@@ -202,8 +209,8 @@ def main() -> int:
     # Offline-subset rows are reported separately (not apples-to-apples with
     # the reference set, which spans other markets/periods).
     print("\nOffline-subset rows (reference-set percentile, caveated):")
-    for key in ["ours_subset_baseline", "ours_subset_robust", "ours_subset_alt"]:
-        r = {"ours_subset_baseline": OURS_SUBSET_BASELINE, "ours_subset_robust": OURS_SUBSET_ROBUST, "ours_subset_alt": OURS_SUBSET_ALT}[key]
+    for key in ["ours_subset_baseline", "ours_subset_robust", "ours_subset_alt", "ours_subset_robust_cap50"]:
+        r = {"ours_subset_baseline": OURS_SUBSET_BASELINE, "ours_subset_robust": OURS_SUBSET_ROBUST, "ours_subset_alt": OURS_SUBSET_ALT, "ours_subset_robust_cap50": OURS_SUBSET_ROBUST_CAP50}[key]
         per = {m: _pct(m, r[m], hb) for m, hb in metrics}
         comp = sum(v for v in per.values() if v == v) / 3
         print(f"  {key}: sharpe={per['sharpe']:.2f} calmar={per['calmar']:.2f} mdd={per['mdd']:.2f} composite={comp:.2f} "
@@ -235,6 +242,7 @@ def main() -> int:
                         ("ours_subset_baseline", OURS_SUBSET_BASELINE),
                         ("ours_subset_robust", OURS_SUBSET_ROBUST),
                         ("ours_subset_alt", OURS_SUBSET_ALT),
+                        ("ours_subset_robust_cap50", OURS_SUBSET_ROBUST_CAP50),
                     ]
                 },
             },
