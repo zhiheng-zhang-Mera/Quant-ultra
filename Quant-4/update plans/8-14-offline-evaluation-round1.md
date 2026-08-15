@@ -288,3 +288,40 @@ python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
 python Quant-4/reports/_iter/run_sweep.py --configs baseline,z3s8 --trials 91   # 全窗口
 # 折线脚本（reports/_iter/_walkforward_warm.py，gitignored 工作区）
 ```
+
+---
+
+# 第六轮（Round 6，2026-08-14）：性能向量化（4-5× 提速，字节一致）+ 参数邻域稳定性
+
+## R6.1 性能优化：per-day 循环标量访问向量化
+
+**问题**（cProfile，120 只子集）：回测总时长 ~30% 消耗在 **11.9 万次 pandas 标量 `.at[date, symbol]` 访问**
+（执行块/止损块/收益累计），且随标的数线性增长——5475 只全池上该路径会放大 ~13 倍。
+
+**修复**：矩阵转 numpy 数组 + 预计算 `date_idx`/`sym_idx` 索引映射，逐日循环改用
+`arr[row, col]` 纯浮点索引（比 pandas 标量访问快 3 个数量级）。纯重构，无行为变化。
+
+**验证**：
+- **字节一致**：重构前后同一配置的 10 项 summary 指标全部一致（<1e-9）；173/173 测试通过。
+- **提速**：421 只全量 robust 回测 **~40-60s → 9.9s（约 4-5×）**，全池复验成本大幅下降。
+
+## R6.2 参数邻域稳定性（robust 非刀锋）
+
+中心 z3s8（阈值 0.03 / z 3.0 / 止损 8%）单参数扰动：
+
+| 扰动 | 年化 | 夏普 | 卡玛 | 回撤 |
+|---|---|---|---|---|
+| 中心 | 5.25% | 0.55 | 0.42 | -12.59% |
+| 阈值 0.025 / 0.035 | 4.45% / 4.89% | 0.47 / 0.53 | 0.33 / 0.34 | -13.4% / -14.4% |
+| z 2.5 / 3.5 | 4.42% / 5.23% | 0.47 / 0.55 | 0.33 / 0.41 | -13.3% / -12.6% |
+| 止损 7% / 9% | 3.52% / 5.10% | 0.40 / 0.53 | 0.24 / 0.39 | -14.7% / -13.0% |
+
+结论：**邻域是稳定平台而非刀锋**——所有扰动仍显著优于生产基线（2.80%/0.32/0.17），
+无悬崖；止损维度最敏感（7%→3.52%，仍高于基线），阈值与 z 维度稳健。
+
+## R6.3 验证
+
+```powershell
+python -m pytest Quant-4/tests -q -p no:cacheprovider          # 173 passed
+python Quant-4/reports/_iter/run_sweep.py --configs baseline,z3s8,nb_thr25,nb_thr35,nb_z25,nb_z35,nb_sl7,nb_sl9 --trials 97
+```
