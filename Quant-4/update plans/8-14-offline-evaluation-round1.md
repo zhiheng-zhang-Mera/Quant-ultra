@@ -396,6 +396,12 @@ python Quant-4/benchmark/open_source_comparison.py             # 含 cap50 行
 
 **暖启动折线（全池，4 折）**：robust 年化 **4/4 折胜出**（2016-18: 1.57% vs 0.99%；2019-21: 8.92% vs 8.72%；2022-23: 0.82% vs 0.02%；2024-26: **13.52% vs 8.62%**、回撤 -8.6% vs -13.4%），3/4 折夏普、3/4 折卡玛胜出。
 
+> **2026-08-15 口径更正（R13）**：本行折线数字由 scratch loader（5503 只，含 25 只非 master-list 标的）计算；
+> 用规范 PIT loader（5478 只）重跑后判决不变（robust 4/4 年化、3/4 夏普/卡玛），
+> 2024-26 折 robust 年化修正为 **14.49%**（回撤 -8.34%）、base 8.62%。以
+> `Quant-4/update plans/8-15-walkforward-loader-fix-sleeve-folds.md` 与
+> `reports/_iter/walkforward_fullpool_pit_20260815.json` 为准。
+
 **诚实披露**：新鲜数据源下旧生产默认复测为 4.79%（与 2026-08-11 文档 6.25% 存在数据源差异）；采纳档研究证据门在 `max_drawdown`（-10.29% vs 阈值 10%）与 `calmar`（0.64 vs 1.0）两项仍 HOLD，OOS 年化/夏普/DSR 全部通过；回撤修复期（近3年）181 日（含进行中的 2026 回撤，较旧档 113 日更长——8% 止损带退出更晚的代价，已披露）。
 
 ## R9.3 生产采纳
