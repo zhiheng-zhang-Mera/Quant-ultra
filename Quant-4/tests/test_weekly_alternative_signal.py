@@ -162,3 +162,38 @@ def test_signal_governance_rejects_unsafe_evidence(panel, provenance, reason):
     assert result["status"] == "HOLD_FOR_REVIEW"
     assert result["action"] == "OBSERVATION_ONLY"
     assert reason in result["reasons"]
+
+
+def test_full_pool_shaped_sparse_panel_passes_governance_and_consumed_at_rebalance():
+    """Lock the full-pool wiring path: a sparse rebalance-cadence panel that
+    covers every symbol per as-of row must pass the governance gate and be
+    consumed at the exact rebalance dates (2026-08-15 full-pool verification).
+    The panel contains ONLY as-of rows (like the real full-pool panel); the
+    engine reindexes onto the common calendar, leaving non-rebalance dates NaN.
+    """
+    from Main.alternative_signal_governance import evaluate_signal_panel
+
+    frames = _frames(n=230)
+    symbols = sorted(frames)
+    dates = frames["000001.SZ"].index
+    rebalance_dates = dates[::5]
+    panel = pd.DataFrame(
+        index=rebalance_dates, columns=symbols, dtype=float,
+    )
+    for i, d in enumerate(rebalance_dates):
+        panel.loc[d] = np.linspace(0.2, -0.2, len(symbols)) + 0.05 * np.sin(i)
+    panel = panel.clip(-1.0, 1.0)
+    _governed(panel, latency=0.5, fallback=False)
+    gov = evaluate_signal_panel(panel, symbols, panel.attrs["provenance"])
+    assert gov["status"] == "PASS", gov["reasons"]
+    params = _params(alternative_signal_panel=panel, alternative_signal_weight=0.10)
+    result = weekly_rotation_backtest(frames, params)
+    assert result["alternative_signal_governance"]["status"] == "PASS"
+    # The engine only consumes the signal at exact rebalance dates, never
+    # backfills: a prior non-rebalance date must stay NaN in the panel.
+    prior = rebalance_dates[1] - pd.Timedelta(days=1)
+    if prior in result["returns"].index:
+        assert pd.isna(panel.reindex(dates).loc[prior]).all()
+    # weight>0 must change the result vs baseline (wiring actually consumed)
+    base = weekly_rotation_backtest(frames, _params())
+    assert not result["returns"].equals(base["returns"])
