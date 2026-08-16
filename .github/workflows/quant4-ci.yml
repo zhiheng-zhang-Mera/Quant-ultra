@@ -2,7 +2,7 @@ name: Quant-4 engineering gates
 
 on:
   push:
-    branches: ["8-4", "8-5", "8-14"]
+    branches: ["8-4", "8-5", "8-14", "8-16"]
   pull_request:
   workflow_dispatch:
 
