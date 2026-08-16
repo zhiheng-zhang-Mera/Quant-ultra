@@ -99,11 +99,13 @@ def main() -> int:
                              "(0.25 = PIT-gate-validated default; 0 = off)")
     parser.add_argument("--sector-momentum-weight", type=float, default=0.0,
                         help="sector-momentum tilt weight on every sleeve (0 = off)")
-    parser.add_argument("--fundamental-factors", default="gp_margin:0.10,yoy_ni:0.05,np_margin:0.05",
+    parser.add_argument("--fundamental-factors", default="gp_margin:0.10,yoy_ni:0.05,np_margin:0.05,ocf_np:0.05",
                         help="comma-separated NAME:WEIGHT pairs, e.g. "
-                             "'gp_margin:0.10,yoy_ni:0.05' (PIT fundamentals, "
+                             "'gp_margin:0.10,yoy_ni:0.05,ocf_np:0.05' (PIT fundamentals, "
                              "uncovered names fall back to the median; "
-                             "default = PIT-gate-validated; '' disables)")
+                             "ocf_np = operating-cash-flow/net-profit quality factor, "
+                             "adopted R19.7 after full-pool + sleeve evidence gate; "
+                             "'' disables)")
     parser.add_argument("--fundamental-top-n", type=int, default=600,
                         help="fundamentals coverage: most-liquid N names "
                              "(600 = PIT-validated; wider coverage was "

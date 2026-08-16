@@ -43,7 +43,10 @@ def test_registry_has_attributed_factors():
     assert "roc20" in FACTOR_SPECS and "rsi14" in FACTOR_SPECS
     for name, spec in FACTOR_SPECS.items():
         assert "source" in spec and "formula" in spec
-        assert "qlib" in spec["source"].lower() or "wq" in spec["source"].lower() or "alpha" in spec["source"].lower()
+        # every entry must carry an honest source: an open-source reference
+        # (qlib/WorldQuant/Alpha...) or the engine's own derivation
+        assert ("qlib" in spec["source"].lower() or "wq" in spec["source"].lower()
+                or "alpha" in spec["source"].lower() or "engine" in spec["source"].lower())
 
 
 def test_factor_default_off():

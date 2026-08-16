@@ -36,6 +36,9 @@ FUNDAMENTAL_FIELDS: Dict[str, str] = {
     "debt_ratio": "debt_ratio",
     "current_ratio": "current_ratio",
     "asset_turn": "asset_turn",
+    # cash-flow quality (Data_Cache/fundamentals_cashflow.json, R19.7)
+    # ocf_np = operating-cash-flow / net profit (>1 = earnings backed by cash)
+    "ocf_np": "ocf_np",
 }
 
 
@@ -56,19 +59,23 @@ def load_fundamentals(path: Optional[Path] = None, top_n: Optional[int] = None) 
 def load_all_fundamentals(
     profit_path: Optional[Path] = None,
     balance_path: Optional[Path] = None,
+    cashflow_path: Optional[Path] = None,
     top_n: Optional[int] = None,
 ) -> Dict[str, list]:
-    """Merge the profit/growth and balance/operation caches by symbol+period."""
+    """Merge the profit/growth, balance/operation and cash-flow caches by
+    symbol+period. All caches share the {symbol: [{pub_date, stat_date, ...}]}
+    record format."""
     root = Path(__file__).resolve().parents[1] / "Data_Cache"
     if profit_path is None:
         quarterly = root / "fundamentals_quarterly.json"
         profit_path = quarterly if quarterly.exists() else root / "fundamentals_annual.json"
     profit = load_fundamentals(profit_path, top_n=top_n)
     balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"), top_n=top_n)
+    cashflow = load_fundamentals(cashflow_path or (root / "fundamentals_cashflow.json"), top_n=top_n)
     out: Dict[str, list] = {}
-    for sym in set(profit) | set(balance):
+    for sym in set(profit) | set(balance) | set(cashflow):
         merged: dict = {}
-        for rec in profit.get(sym, []) + balance.get(sym, []):
+        for rec in profit.get(sym, []) + balance.get(sym, []) + cashflow.get(sym, []):
             key = (rec.get("pub_date"), rec.get("stat_date"))
             bucket = merged.setdefault(key, {})
             bucket.update(rec)
@@ -104,6 +111,10 @@ def build_fundamental_panels(
             if col not in records:
                 continue
             series = pd.Series(records[col].to_numpy(dtype=float), index=pd.to_datetime(records["pub_date"]))
-            aligned = series.reindex(common)
-            out[fname][sym] = aligned.ffill().to_numpy(dtype=float)
+            # PIT: a report announced on a non-trading day (e.g. weekend) must
+            # still become visible on the next trading day - reindex-ffill on
+            # the union, then select the trading grid (R19.7 bug fix: a plain
+            # reindex silently dropped weekend-announced values).
+            aligned = series.reindex(common.union(series.index)).ffill().reindex(common)
+            out[fname][sym] = aligned.to_numpy(dtype=float)
     return out

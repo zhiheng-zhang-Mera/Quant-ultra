@@ -43,6 +43,8 @@ FACTOR_SPECS: Dict[str, dict] = {
     "idll20": {"source": "qlib Alpha158 (KBAR.IDLL)", "formula": "min(ret,20)", "family": "extremes"},
     "rsi14": {"source": "qlib Alpha158 (KBAR.RSI)", "formula": "Wilder RSI(14)", "family": "momentum"},
     "vol_ratio20": {"source": "qlib Alpha158 (KBAR.VMA)", "formula": "MA(volume,5)/MA(volume,20)", "family": "liquidity"},
+    "amount_share": {"source": "engine crowding proxy (R19.7)", "formula": "amount / sum(amount, cross-section)", "family": "crowding"},
+    "amount_share_inv": {"source": "engine crowding proxy inverted (R19.7)", "formula": "-amount / sum(amount, cross-section)", "family": "crowding"},
 }
 
 
@@ -129,6 +131,25 @@ def compute_factor(panel, name: str, date: pd.Timestamp) -> Optional[pd.Series]:
         if frame is None:
             vol = panel.volume
             frame = _store(panel, key, vol.rolling(5).mean() / vol.rolling(20).mean().replace(0, np.nan))
+        return frame.loc[date]
+    if name == "amount_share":
+        # cross-sectional crowding proxy: this name's turnover share of the
+        # whole universe on the date (higher = more crowded/attention-heavy).
+        # NaN when the cross-section is empty; row is z-scored downstream.
+        key = _cache_key(panel, name, 0)
+        frame = _cached(panel, key)
+        if frame is None:
+            amt = panel.amount
+            frame = _store(panel, key, amt.div(amt.sum(axis=1), axis=0).replace([np.inf, -np.inf], np.nan))
+        return frame.loc[date]
+    if name == "amount_share_inv":
+        # inverse crowding preference: prefer LOW turnover share (avoid
+        # crowded/attention-heavy names). Same row, negated.
+        key = _cache_key(panel, name, 0)
+        frame = _cached(panel, key)
+        if frame is None:
+            amt = panel.amount
+            frame = _store(panel, key, -amt.div(amt.sum(axis=1), axis=0).replace([np.inf, -np.inf], np.nan))
         return frame.loc[date]
     return None
 
