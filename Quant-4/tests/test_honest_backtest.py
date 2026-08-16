@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
@@ -135,6 +136,10 @@ def test_sweep_harness_baseline_matches_adopted_defaults():
     fix: a harness baseline that silently used stop 7% / fixed 2.5% shock /
     no z-score would make every future sweep compare against the
     pre-2026-08-15 profile)."""
+    harness = ROOT / "reports" / "_iter" / "run_sweep.py"
+    if not harness.exists():
+        pytest.skip("local scratch sweep harness is intentionally not published")
+
     from reports._iter.run_sweep import default_params as sweep_defaults
     from run_weekly_rotation import default_params as prod_defaults
 

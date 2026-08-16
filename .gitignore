@@ -50,5 +50,12 @@ Quant-4/reports/
 Quant-4/.tmp/
 Quant-4/benchmark/*.json
 
+# --- repository-root local diagnostics / model-catalog scratch ---
+/_bin_catalog_chunk.txt
+/_fix_dryrun/
+/_recon_8_10.py
+/fix_approval_model*.py
+/models_catalog_addon.json*
+
 # --- Cython generated C ---
 Quant-4/cython/*.c
