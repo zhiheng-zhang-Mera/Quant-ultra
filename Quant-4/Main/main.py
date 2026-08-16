@@ -92,6 +92,7 @@ def run_pipeline(args):
         "alternative_signal_max_missing_rate": 0.20,
         "alternative_signal_max_latency_hours": 24.0,
         "alternative_signal_allow_fallback": False, "local_llm_sentiment_enabled": True,
+        "local_llm_provider": "auto",  # auto: Ollama -> DeepSeek(env DEEPSEEK_API_KEY) -> lexical fallback
         "local_llm_model": "qwen3-coder:30b", "local_llm_base_url": "http://127.0.0.1:11434",
         "local_llm_timeout_seconds": 20, "local_llm_max_records_total": 6,
         "local_llm_max_records_per_symbol": 2, "local_llm_max_chars_per_record": 300,

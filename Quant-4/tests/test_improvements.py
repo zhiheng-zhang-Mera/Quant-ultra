@@ -16,7 +16,8 @@ from Main.parameter_governance import validate_parameter_proposal
 from Main.schema_contracts import PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_MODULES, PHASE_OUTPUT_SCHEMA, resolve_phase_name, validate_phase_contract
 from Main.trading_costs import explicit_order_fees, round_trip_friction_rate
 from Main.stage_reporter import StageReporter
-from Phase_3.alternative_data import build_alternative_signals, enhance_sentiment_with_local_llm, score_text
+from Phase_3.alternative_data import (DeepSeekClient, _provider_chain, build_alternative_signals,
+                                      enhance_sentiment_with_local_llm, score_text)
 from Main.decision_chain import STAGE_METHODS, TRANSITIONS, four_stage_decision_chain
 from Main.distributed_compute import HardwareProfile, apply_resource_plan, build_resource_plan
 from Main.download_runtime import AsyncRestBatchClient, build_download_plan, create_persistent_session
@@ -142,6 +143,134 @@ def test_local_llm_missing_model_falls_back_without_failure():
     unchanged, evidence = enhance_sentiment_with_local_llm({"news": frame}, {"local_llm_model": "absent"}, client=MissingClient())
     assert evidence["status"] == "MODEL_NOT_FOUND" and evidence["fallback_used"]
     assert unchanged["news"].empty
+
+def test_deepseek_client_reads_environment_and_builds_bearer_request(monkeypatch):
+    """DeepSeek fallback reads DEEPSEEK_API_KEY / BASE_URL / MODEL from the
+    local environment and posts an OpenAI-compatible chat/completions request."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-123")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.example")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat-test")
+    client = DeepSeekClient()
+    assert client.available is True
+    assert client.api_key == "sk-test-123"
+    assert client.base_url == "https://api.deepseek.example"
+    assert client.model == "deepseek-chat-test"
+    # explicit constructor args override the environment
+    explicit = DeepSeekClient(api_key="sk-explicit", base_url="https://other", model="m2")
+    assert explicit.api_key == "sk-explicit" and explicit.model == "m2"
+    # missing key -> unavailable
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    assert DeepSeekClient().available is False
+
+def test_ollama_unavailable_falls_back_to_deepseek_and_packages_lexical_scores(monkeypatch):
+    """When Ollama is down, the provider chain must fall back to DeepSeek; the
+    enhancement then sends ONE batched prompt whose payload includes the
+    packaged lexical (dictionary) scores for every candidate."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.example")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    captured = {}
+
+    class UnreachableOllama:
+        def list_models(self):
+            raise OSError("connection refused")
+
+    class FakeDeepSeek:
+        def __init__(self):
+            self.calls = 0
+            self.available = True
+            self.model = "deepseek-chat"
+        def generate(self, model, prompt):
+            self.calls += 1
+            captured["model"] = model
+            captured["prompt"] = prompt
+            return '{"results":[{"id":"news:0","score":0.8,"confidence":0.9},{"id":"forum:0","score":-0.4,"confidence":0.8}]}'
+
+    # force Ollama unreachable so the chain must fall back to DeepSeek
+    import Phase_3.alternative_data as ad
+    monkeypatch.setattr(ad, "OllamaClient", lambda *a, **k: UnreachableOllama())
+
+    # chain resolution: ollama unavailable -> deepseek is the only candidate
+    chain = _provider_chain({"local_llm_model": "qwen3-coder:30b"})
+    assert len(chain) == 1
+    assert chain[0][1] == "deepseek" and chain[0][2] == "deepseek-chat"
+
+    # replace the real DeepSeek with a fake so no network call happens
+    fake = FakeDeepSeek()
+    monkeypatch.setattr(ad, "DeepSeekClient", lambda *a, **k: fake)
+
+    frame = pd.DataFrame([
+        {"published_at": pd.Timestamp("2026-08-01", tz="UTC"), "symbol": "600519.SH", "text": "增长 回购 bullish", "sentiment": 1.0},
+        {"published_at": pd.Timestamp("2026-08-02", tz="UTC"), "symbol": "000858.SZ", "text": "亏损 违约 miss", "sentiment": -1.0},
+    ])
+    forum = pd.DataFrame([{"published_at": pd.Timestamp("2026-08-02", tz="UTC"), "symbol": "600519.SH", "text": "减持 风险", "sentiment": -1.0}])
+    enhanced, evidence = enhance_sentiment_with_local_llm({"news": frame, "forum": forum}, {"local_llm_model": "ignored"})
+    assert evidence["status"] == "ANALYZED"
+    assert evidence["provider"] == "deepseek"
+    assert fake.calls == 1, "exactly ONE batched call - no per-record round trips"
+    # the single prompt packages lexical scores for every candidate
+    payload = json.loads(captured["prompt"][captured["prompt"].index("[") : captured["prompt"].rindex("]") + 1])
+    assert len(payload) == 3
+    assert all("lexical_score" in item and "text" in item and "id" in item for item in payload)
+    by_id = {item["id"]: item["lexical_score"] for item in payload}
+    assert by_id["news:0"] == 1.0    # 增长 回购 bullish -> dictionary +1
+    assert by_id["forum:0"] == -1.0  # 减持 风险 -> dictionary -1
+    # llm scores applied to the frames
+    assert enhanced["news"].loc[0, "effective_sentiment"] == 0.8
+    assert enhanced["forum"].loc[0, "effective_sentiment"] == -0.4
+
+def test_ollama_generate_failure_falls_through_to_deepseek(monkeypatch):
+    """A model listed by Ollama but failing at generate time (e.g. GPU memory
+    constrained, as documented in R17) must fall through to DeepSeek instead
+    of failing the enhancement."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    import Phase_3.alternative_data as ad
+    captured = {}
+
+    class BrokenOllama:
+        def list_models(self):
+            return ["qwen3-coder:30b"]
+        def generate(self, model, prompt):
+            raise OSError("llama-server process has terminated")
+
+    class WorkingDeepSeek:
+        def __init__(self):
+            self.calls = 0
+            self.available = True
+            self.model = "deepseek-chat"
+        def generate(self, model, prompt):
+            self.calls += 1
+            captured["prompt"] = prompt
+            return '{"results":[{"id":"news:0","score":-0.3,"confidence":0.7}]}'
+
+    monkeypatch.setattr(ad, "OllamaClient", lambda *a, **k: BrokenOllama())
+    monkeypatch.setattr(ad, "DeepSeekClient", lambda *a, **k: WorkingDeepSeek())
+    frame = pd.DataFrame([{"published_at": pd.Timestamp("2026-08-01", tz="UTC"), "symbol": "600519.SH",
+                           "text": "增长 回购 bullish", "sentiment": 1.0}])
+    enhanced, evidence = enhance_sentiment_with_local_llm({"news": frame}, {"local_llm_model": "qwen3-coder:30b"})
+    assert evidence["status"] == "ANALYZED"
+    assert evidence["provider"] == "deepseek"
+    assert enhanced["news"].loc[0, "effective_sentiment"] == -0.3
+
+def test_provider_chain_reports_unavailable_when_no_provider(monkeypatch):
+    """No Ollama and no DEEPSEEK_API_KEY -> empty chain -> the enhancement
+    returns PROVIDER_UNAVAILABLE (fail-closed, no silent half-calls)."""
+    class UnreachableOllama:
+        def list_models(self):
+            raise OSError("connection refused")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    import Phase_3.alternative_data as ad
+    monkeypatch.setattr(ad, "OllamaClient", lambda *a, **k: UnreachableOllama())
+    assert _provider_chain({"local_llm_model": "qwen3-coder:30b"}) == []
+    # forced deepseek without a key is also empty
+    assert _provider_chain({"local_llm_provider": "deepseek"}) == []
+    frame = pd.DataFrame([{"published_at": pd.Timestamp("2026-08-01", tz="UTC"), "symbol": "600519.SH",
+                           "text": "增长", "sentiment": 1.0}])
+    unchanged, evidence = enhance_sentiment_with_local_llm({"news": frame}, {"local_llm_model": "qwen3-coder:30b"})
+    assert evidence["status"] == "PROVIDER_UNAVAILABLE" and evidence["fallback_used"]
+    assert unchanged["news"].loc[0, "sentiment"] == 1.0  # lexical preserved, no llm columns added
 
 def test_stage_report_is_bilingual_and_interpreted(tmp_path):
     reporter = StageReporter(tmp_path, "run", "abc123")

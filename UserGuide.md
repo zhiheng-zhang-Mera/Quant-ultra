@@ -121,7 +121,8 @@ D:\Quant-Ultra\.venv-full\Scripts\python.exe Quant-4\run_adaptive_backtest.py 60
 | `cash_buffer_weight` / `max_daily_turnover` | 0.05 / 0.25 | 现金缓冲/单日换手上限 |
 | `max_single_stock_weight` | 0.05 | 单票上限 |
 | `embargo_min` / `holding_period` | 5 / 5 | 隔离带/持有期 |
-| `local_llm_*` | — | 本地 Ollama 情绪增强限额 |
+| `local_llm_*` | — | 本地 Ollama / DeepSeek API 情绪增强限额与回退 |
+| `DEEPSEEK_API_KEY`（环境变量） | — | 设置后，Ollama 不可用或生成失败时自动回退 DeepSeek API；未设置则保持词典情绪回退（失败关闭） |
 
 **`run_weekly_rotation.py::default_params`（周轮动）** 关键项：
 

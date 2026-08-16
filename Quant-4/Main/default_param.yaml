@@ -40,6 +40,7 @@ alternative_signal_max_missing_rate: 0.20
 alternative_signal_max_latency_hours: 24.0
 alternative_signal_allow_fallback: false
 local_llm_sentiment_enabled: true
+local_llm_provider: "auto"   # auto | ollama | deepseek; auto = Ollama first, then DeepSeek (env DEEPSEEK_API_KEY), else lexical fallback
 local_llm_model: "qwen3-coder:30b"
 local_llm_base_url: "http://127.0.0.1:11434"
 local_llm_timeout_seconds: 20
