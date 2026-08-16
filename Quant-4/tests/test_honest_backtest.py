@@ -131,16 +131,16 @@ def test_legacy_profile_preserves_old_defaults():
 
 
 def test_sweep_harness_baseline_matches_adopted_defaults():
-    """The dev sweep harness (reports/_iter/run_sweep.py) must baseline on the
+    """The dev sweep harness (research/run_sweep.py) must baseline on the
     adopted production profile, not the legacy bake (R13 loader-consistency
     fix: a harness baseline that silently used stop 7% / fixed 2.5% shock /
     no z-score would make every future sweep compare against the
     pre-2026-08-15 profile)."""
-    harness = ROOT / "reports" / "_iter" / "run_sweep.py"
+    harness = ROOT / "research" / "run_sweep.py"
     if not harness.exists():
         pytest.skip("local scratch sweep harness is intentionally not published")
 
-    from reports._iter.run_sweep import default_params as sweep_defaults
+    from research.run_sweep import default_params as sweep_defaults
     from run_weekly_rotation import default_params as prod_defaults
 
     s = sweep_defaults()

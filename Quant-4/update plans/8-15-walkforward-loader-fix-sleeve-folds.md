@@ -54,8 +54,8 @@ R9 结论稳健性不受影响（判决未翻转），但折线数字以规范�
 
 ```powershell
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 174 passed
-python Quant-4/reports/_iter/_walkforward_sleeve.py            # 套筒折线（切片，秒级）
-python Quant-4/reports/_iter/_walkforward_fullpool_pit.py      # 规范 PIT 折线重跑（~7 分钟，2 次全池）
+python Quant-4/research/walkforward/walkforward_sleeve.py            # 套筒折线（切片，秒级）
+python Quant-4/research/walkforward/walkforward_fullpool_pit.py      # 规范 PIT 折线重跑（~7 分钟，2 次全池）
 # 结果：reports/_iter/walkforward_sleeve_fullpool_20260815.json、
 #       reports/_iter/walkforward_fullpool_pit_20260815.json（gitignored）
 ```

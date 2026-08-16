@@ -91,7 +91,7 @@ R16 的 20 只小样本方向属偶然，不可外推。`alternative_signal_weig
 ```powershell
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 175 passed
 python Quant-4/tools/fetch_real_news_sina.py --codes 600519.SH ... --max-pages 8   # 真实语料
-python Quant-4/reports/_iter/_real_news_ab.py                  # 真实信号 A/B（~2 分钟）
+python Quant-4/research/real_news_ab.py                  # 真实信号 A/B（~2 分钟）
 # 结果：reports/_iter/real_news_ab_20260816.json（gitignored）
 ```
 

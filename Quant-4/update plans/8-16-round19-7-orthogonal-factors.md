@@ -96,9 +96,9 @@ ocf_np:0.05）；单书可通过 `--fundamental-factors ocf_np:0.05` 手动启�
 ## 4. 验证与复现
 
 ```powershell
-python Quant-4/reports/_iter/_event_signal_ab.py          # 事件因子 A/B（~8 分钟）
-python Quant-4/reports/_iter/_crowding_ab.py              # 拥挤度 A/B + 正交性（~5 分钟）
+python Quant-4/research/event_signal_ab.py          # 事件因子 A/B（~8 分钟）
+python Quant-4/research/crowding_ab.py              # 拥挤度 A/B + 正交性（~5 分钟）
 python Quant-4/reports/_iter/_fetch_cashflow_top600.py    # 现金流抓取（~20 分钟）
-python Quant-4/reports/_iter/_cashflow_ab.py              # 现金流 A/B（待数据）
+python Quant-4/research/cashflow_ab_fullpool.py              # 现金流 A/B（待数据）
 python -m pytest Quant-4/tests -q -p no:cacheprovider     # 含新因子测试
 ```

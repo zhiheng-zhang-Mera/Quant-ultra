@@ -79,9 +79,9 @@ published_at/ingested_at/symbol/text/is_synthetic=False），record_id 取公告
 ```powershell
 $env:DEEPSEEK_API_KEY = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY","User")
 python Quant-4/tools/fetch_history_notices_eastmoney.py --codes 600519.SH ...  # 公告抓取（~25 分钟）
-python Quant-4/reports/_iter/_notice_ab_historical.py                          # 历史 A/B（~8 分钟）
-python Quant-4/reports/_iter/_llm_deepseek_score_real.py --corpus ...stratified.jsonl --out llm_scores_notice_38.jsonl
-python Quant-4/reports/_iter/_llm_vs_lex_deepseek.py --scores .../llm_scores_notice_38.jsonl --out-tag notice_38 --corpus-total 3300
+python Quant-4/research/notice_ab_historical.py                          # 历史 A/B（~8 分钟）
+python Quant-4/research/llm/deepseek_score_corpus.py --corpus ...stratified.jsonl --out llm_scores_notice_38.jsonl
+python Quant-4/research/llm/llm_vs_lexical.py --scores .../llm_scores_notice_38.jsonl --out-tag notice_38 --corpus-total 3300
 ```
 
 ## 6. 限制披露

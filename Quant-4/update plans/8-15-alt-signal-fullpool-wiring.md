@@ -57,7 +57,7 @@
 
 ```powershell
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 174 passed
-python Quant-4/reports/_iter/_alt_signal_fullpool_test.py      # 全池接线复验（5 变体，~10 分钟）
+python Quant-4/research/alt_signal_fullpool_test.py      # 全池接线复验（5 变体，~10 分钟）
 # 结果：Quant-4/reports/_iter/alt_signal_fullpool_20260815.json（gitignored）
 ```
 

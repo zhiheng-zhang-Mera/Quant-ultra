@@ -11,7 +11,7 @@
 R17 因本机 GPU 显存不足（qwen 系无法加载、gpt-oss 输出为空）无法验证。DeepSeek 回退实现后，
 用云端 API 对 **12066 条真实新闻**（`sina_news_real_38.jsonl`，38 只生产池全量）做 LLM 情绪评分。
 
-**执行**：`reports/_iter/_llm_deepseek_score_real.py` —— 批量 prompt（每批 30 条，packaged lexical_score
+**执行**：`research/llm/deepseek_score_corpus.py` —— 批量 prompt（每批 30 条，packaged lexical_score
 与生产 `enhance_sentiment_with_local_llm` 同格式）、temperature 0、逐批落盘可续跑、失败重试 3 次；
 输出 `reports/_iter/llm_deepseek/llm_scores_real_38.jsonl`（逐条 id/symbol/published_at/text/lex/llm）。
 
@@ -112,7 +112,7 @@ R17 因本机 GPU 显存不足（qwen 系无法加载、gpt-oss 输出为空）�
 
 - `Phase_3/alternative_data.py` DeepSeekClient（OpenAI 兼容 chat/completions，读环境变量）已在
   上一提交实现并测试（179/179）。
-- 本轮新增 `reports/_iter/_e2e_deepseek_pipeline.py`：真实语料 + 生产池 38 只 + 显式 as_of +
+- 本轮新增 `research/llm/e2e_deepseek_pipeline.py`：真实语料 + 生产池 38 只 + 显式 as_of +
   Ollama 不可用（provider chain 自动跳过）+ DEEPSEEK_API_KEY 注入，走 `build_alternative_signals`
   （`main.py` Phase-3 实际调用路径）。
 - **结果：E2E-DEEPSEEK: PASS** —— 契约 LOADED（sha256 970cc0…）、`local_llm` 证据
@@ -144,10 +144,10 @@ max_drawdown 翻转 PASS）、月度胜率 57.8%→60.2%、OOS 夏普 1.31→1.3
 
 ```powershell
 $env:DEEPSEEK_API_KEY = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY","User")
-python Quant-4/reports/_iter/_llm_deepseek_score_real.py --out llm_scores_real_38.jsonl
-python Quant-4/reports/_iter/_llm_vs_lex_deepseek.py
-python Quant-4/reports/_iter/_llm_real_ab.py
-python Quant-4/reports/_iter/_e2e_deepseek_pipeline.py        # E2E-DEEPSEEK: PASS
+python Quant-4/research/llm/deepseek_score_corpus.py --out llm_scores_real_38.jsonl
+python Quant-4/research/llm/llm_vs_lexical.py
+python Quant-4/research/llm/llm_real_news_ab.py
+python Quant-4/research/llm/e2e_deepseek_pipeline.py        # E2E-DEEPSEEK: PASS
 python Quant-4/tools/fetch_forum_guba.py --codes ... --max-pages 2
 python Quant-4/run_sleeve_portfolio.py --pit                  # 生产入口（套筒采纳后）
 python -m pytest Quant-4/tests -q -p no:cacheprovider         # 182 passed

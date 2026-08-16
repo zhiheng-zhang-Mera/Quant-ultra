@@ -89,9 +89,9 @@ momentum 5.78%/0.90、sprint 4.32%/0.57——sprint 最弱），权重组合为�
 
 ```powershell
 python -m pytest Quant-4/tests -q -p no:cacheprovider          # 187 passed
-python Quant-4/reports/_iter/_reentry_sweep_fullpool.py         # 早期再入场 sweep（~13 分钟）
-python Quant-4/reports/_iter/_stop_sweep_fullpool.py            # 止损/止盈 sweep（~17 分钟）
-python Quant-4/reports/_iter/_sleeve_weight_sweep_fullpool.py   # 套筒权重 sweep（~15 分钟，书结果已缓存可复跑）
+python Quant-4/research/reentry_sweep_fullpool.py         # 早期再入场 sweep（~13 分钟）
+python Quant-4/research/stop_sweep_fullpool.py            # 止损/止盈 sweep（~17 分钟）
+python Quant-4/research/sleeve_weight_sweep.py   # 套筒权重 sweep（~15 分钟，书结果已缓存可复跑）
 ```
 
 ## 7. 限制披露
