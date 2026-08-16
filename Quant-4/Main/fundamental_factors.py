@@ -64,7 +64,14 @@ def load_all_fundamentals(
 ) -> Dict[str, list]:
     """Merge the profit/growth, balance/operation and cash-flow caches by
     symbol+period. All caches share the {symbol: [{pub_date, stat_date, ...}]}
-    record format."""
+    record format.
+
+    ``top_n`` is applied PER CACHE (each cache is written in amount-ranked
+    order, so the first ``top_n`` keys are the most-liquid names - the
+    PIT-validated coverage), and the merged covered set is their union.
+    The output dict is ordered deterministically (profit-ranked first) so the
+    covered-set semantics never depend on hash iteration order (R19.8).
+    """
     root = Path(__file__).resolve().parents[1] / "Data_Cache"
     if profit_path is None:
         quarterly = root / "fundamentals_quarterly.json"
@@ -72,8 +79,12 @@ def load_all_fundamentals(
     profit = load_fundamentals(profit_path, top_n=top_n)
     balance = load_fundamentals(balance_path or (root / "fundamentals_balance.json"), top_n=top_n)
     cashflow = load_fundamentals(cashflow_path or (root / "fundamentals_cashflow.json"), top_n=top_n)
+    ordered = [s for s in list(profit) + list(balance) + list(cashflow)
+               if s in profit or s in balance or s in cashflow]
+    seen = set()
+    ordered = [s for s in ordered if not (s in seen or seen.add(s))]
     out: Dict[str, list] = {}
-    for sym in set(profit) | set(balance) | set(cashflow):
+    for sym in ordered:
         merged: dict = {}
         for rec in profit.get(sym, []) + balance.get(sym, []) + cashflow.get(sym, []):
             key = (rec.get("pub_date"), rec.get("stat_date"))

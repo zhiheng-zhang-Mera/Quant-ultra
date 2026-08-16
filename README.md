@@ -100,6 +100,8 @@ flowchart TD
 
 > **2026-08-16 真实另类信号复验轮（Round 16-18）**（详见 `Quant-4/update plans/8-16-real-news-fullpool-revalidation.md`）：网络诊断确认此前"无网络"为**误报**——PowerShell/curl 走 Windows Schannel 层被沙箱限制（`SEC_E_NO_CREDENTIALS`），而 **Python/OpenSSL 通道实际可用**（baidu/sina/pypi 及全部项目数据源 TLS/HTTP 均 200）。新工具 `Quant-4/tools/fetch_real_news_sina.py` 从新浪个股新闻页抓取**生产池全部 38 只 12066 条真实新闻**（契约全列、`is_synthetic=0`、sha256 入不可变缓存）。真实信号 A/B（采纳档基座）：通路方向响应正确，但 **38 只全生产池上方向与 20 只子样本相反**（20 只时正情绪拖累/反转改善；38 只时真实信号轻微改善窗口 -3.89%→-3.07%、反转更差 -3.94%）且全窗口/OOS 差异均在 ±0.05pp 内——**真实新闻情绪无稳健方向性 alpha**（R16 小样本方向属偶然，不可外推）；免费源仅约 5 个月窗口、28% 覆盖率，无法支撑全池历史复验，`alternative_signal_weight` 保持 0。测试套件 **175/175 全绿**。
 
+> **2026-08-16 Round 19.8：代码落盘审计 + 位置整理 + 利润/资产负债表因子激活**（详见 `Quant-4/update plans/8-16-round19-8-code-audit-fundamentals-activation.md`）：(1) **代码落盘审计**：生产/引擎/工具/测试全部已追踪；19 个研究/证据脚本从 gitignored 的 reports/_iter 纳入版本控制（`research/llm/`、`research/`、`research/walkforward/`、`tools/`），根锚定路径任意 CWD 可运行，sweep 治理测试更新（195/195 全绿）。(2) **激活利润/资产负债表因子**：baostock 利润表 598 只 + 资产负债表 595 只（pubDate PIT 对齐、断点续跑），与现金流合并 753 只 10 字段——生产默认 `--fundamental-factors` 从"缓存缺失静默空转"变为全部真正生效；修复合并排序确定性。(3) **激活后回测（全池 PIT 套筒 40/30/20/10 + 全基本面）**：**年化 9.21%、夏普 1.470、卡玛 1.609、最大回撤 -5.73%、月度胜率 67.2%、OOS 11.69%/1.83**（vs 仅 ocf_np：8.70%/1.366/1.316/-6.61%）——生产默认更新为全基本面激活配置。测试套件 **195/195 全绿**。
+
 > **2026-08-16 Round 19.7：正交因子族——现金流质量因子 ocf_np 首个通过全部证据门并采纳**（详见 `Quant-4/update plans/8-16-round19-7-orthogonal-factors.md`）：(1) 事件因子（股东行为/业绩预告）38 只池全负 → 拒绝；(2) 拥挤度（amount_share）38 只池伪正、全池复核全面更差 → 拒绝（小池伪象第三次证实）；(3) 资金流端点被拒 → 数据不可得；(4) **现金流质量 ocf_np（经营现金流/净利润，Sloan 应计异常代理）**：并行抓取 top-600 流动性名单 506 只（东财现金流表，NOTICE_DATE 公告日 PIT 对齐，集成进 fundamental_factors 框架并修复周末公告被丢弃的 PIT 缺陷）；**套筒级（生产默认层）PIT 修复版证据：年化 6.55%→8.53%、夏普 1.085→1.356、卡玛 0.661→1.228（首次突破 1.0）、回撤 -9.91%→-6.94%、月度胜率 60.2%→64.8%、OOS 8.35%/1.35→10.07%/1.58——研究门全部检查通过 → 采纳进生产默认**；单书亦显著改善（年化 +2.2pp、OOS +1.2pp，卡玛 0.82 未达 1.0，如实披露）。测试套件 **194/194 全绿**。
 
 > **2026-08-16 Round 19.6：开源/免费历史数据源——东财公告解除"全池历史复验"数据约束**（详见 `Quant-4/update plans/8-16-round19-6-history-sources-eastern-notices.md`）：(1) 实测 8 类候选源，**东财公告（data.eastmoney.com/notices）可用且完整历史**（✅ 采纳）；东财/新浪新闻均限 ~5 个月、财新付费、chinascope SSL 错误、HuggingFace CN-Market-Corpus 债券向无 A 股代码——其余不可用。(2) 新工具 `tools/fetch_history_notices_eastmoney.py` 抓取生产池 38 只 **73792 条历史公告**（1993-2026 IPO 至今，契约 LOADED，2016-2026 窗口 54898 条）。(3) **历史窗口 A/B（2016-2026 全 10 年、123 再平衡日、覆盖 94-96%）**：公告词典情绪无稳健 alpha（正权重全劣于 base、反转不优）——**R16/R18"无 alpha"结论在完整历史上最终确认，非覆盖不足伪影**。(4) **LLM 差异化在公告上远弱于新闻**（相关 0.71 vs 0.53、符号分歧 13.4% vs 59.8%、LLM 中性 80% vs 18%）——正式披露标题基本中性，8-13 假设不适用公告文体；LLM 仍修正词典系统性错误（"回购注销"误判、"计提减值"漏判）。测试套件 **189/189 全绿**。
@@ -201,6 +203,7 @@ git diff --check
 - `Quant-4/update plans/8-16-round19-5-direction2-reentry-stops-sleeve.md` — R19.5：方向 2 剩余杠杆全测（早期再入场/止损止盈/套筒权重，3 机制家族 23 配置全拒绝，结构性上限确认）
 - `Quant-4/update plans/8-16-round19-6-history-sources-eastern-notices.md` — R19.6：开源/免费历史数据源探索（东财公告 73792 条全历史 + 10 年窗口复验无 alpha + 公告 LLM 差异化远弱于新闻）
 - `Quant-4/update plans/8-16-round19-7-orthogonal-factors.md` — R19.7：正交因子族（事件/拥挤度拒绝、现金流质量 ocf_np 采纳进生产默认，卡玛首次破 1.0）
+- `Quant-4/update plans/8-16-round19-8-code-audit-fundamentals-activation.md` — R19.8：代码落盘审计 + 位置整理（research/ 纳入版本控制）+ 利润/资产负债表因子激活（9.21%/1.47/1.61/-5.73%）
 - `Quant-4/benchmark/open_source_comparison.py` — 开源对比排名脚本（排名见其生成的 JSON）
 
 ---

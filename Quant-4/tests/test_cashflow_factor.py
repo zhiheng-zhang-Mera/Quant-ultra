@@ -35,6 +35,34 @@ def test_load_all_fundamentals_merges_cashflow_cache(tmp_path):
     assert merged["600519.SH"][0]["ocf_np"] == 1.54
 
 
+def test_merge_top_n_is_per_cache_and_union_deterministic(tmp_path):
+    """top_n is applied per cache (liquidity-ranked), the covered set is the
+    union, and the output order is deterministic (R19.8: a union-level top_n
+    slice or hash-order merge would starve factors / vary across processes)."""
+    profit = {"P%06d.SZ" % i: [{"pub_date": "2026-01-01", "stat_date": "2025-12-31", "gpMargin": 0.5}]
+              for i in range(30)}
+    balance = {"B%06d.SZ" % i: [{"pub_date": "2026-01-01", "stat_date": "2025-12-31", "debt_ratio": 0.4}]
+               for i in range(30)}
+    cashflow = {"C%06d.SZ" % i: [{"pub_date": "2026-01-01", "stat_date": "2025-12-31", "ocf_np": 1.2}]
+                for i in range(30)}
+    (tmp_path / "fundamentals_annual.json").write_text(json.dumps(profit, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "fundamentals_balance.json").write_text(json.dumps(balance, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "fundamentals_cashflow.json").write_text(json.dumps(cashflow, ensure_ascii=False), encoding="utf-8")
+    m1 = load_all_fundamentals(profit_path=tmp_path / "fundamentals_annual.json",
+                               balance_path=tmp_path / "fundamentals_balance.json",
+                               cashflow_path=tmp_path / "fundamentals_cashflow.json",
+                               top_n=20)
+    m2 = load_all_fundamentals(profit_path=tmp_path / "fundamentals_annual.json",
+                               balance_path=tmp_path / "fundamentals_balance.json",
+                               cashflow_path=tmp_path / "fundamentals_cashflow.json",
+                               top_n=20)
+    assert list(m1.keys()) == list(m2.keys()), "merge must be deterministic"
+    # each cache keeps its own top-20 -> union covers all 60 distinct symbols
+    assert len(m1) == 60
+    # the cashflow factor survived the merge (union, not a profit-first slice)
+    assert any(any("ocf_np" in rec for rec in recs) for recs in m1.values())
+
+
 def test_ocf_np_panel_is_pit_forward_filled():
     data = {
         "600519.SH": [
