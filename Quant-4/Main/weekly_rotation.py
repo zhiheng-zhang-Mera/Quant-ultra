@@ -263,6 +263,19 @@ class RotationParams:
     # ---- optional strategy-selection layer (evidence-gated, default off) ----
     strategy_selector: str = ""              # "" = disabled; "hysteresis" enables the rule-based switcher
     selector_min_stay: int = 4               # consecutive rebalances required before switching archetype
+    # ---- earlier re-entry after defensive periods (evidence-gated, default off) ----
+    # The BULL gate normally also requires the benchmark above its long
+    # confirmation MA (regime_confirmation_ma, 200 by default) - measured as
+    # the binding constraint in the 2026 recovery (R19: on 2026-08-05 the
+    # benchmark had reclaimed MA40 with MA10>MA40 and positive 20d momentum
+    # but was still below its MA200, so the book stayed NEUTRAL/defensive and
+    # missed the rebound). ``reentry_skip_confirmation_periods`` > 0 lets the
+    # book return to BULL after that many consecutive non-BULL rebalance
+    # periods when the rest of the bull condition holds (close>MA40,
+    # MA10>MA40, mom20>0). The regime label is restored to BULL but the risk
+    # layers' exposure scaling (ML/vol/trend) is preserved - a book switch,
+    # not a risk-limit bypass. Default 0 = off, byte-identical.
+    reentry_skip_confirmation_periods: int = 0
 
 
 @dataclass
@@ -706,6 +719,38 @@ def rank_candidates(panel: FeaturePanel, date: pd.Timestamp, params: RotationPar
     return ranked
 
 
+def _reentry_fast_ok(params, non_bull_periods: int, risk_off: bool, last, ma_fast, ma_slow, mom20) -> bool:
+    """Earlier-re-entry eligibility (evidence-gated, default off).
+
+    True when the rule is enabled, the strategy has spent at least
+    ``reentry_skip_confirmation_periods`` consecutive non-BULL rebalance
+    periods, the event-shock latch is not held, and the benchmark satisfies
+    every bull condition except the long confirmation MA (close>MA40,
+    MA10>MA40, positive 20d momentum). Only active in the hybrid
+    MA+ML-overlay mode (``ml_bear_override``), which is the production
+    default; it never fights a hard ML veto.
+    """
+    if params.reentry_skip_confirmation_periods <= 0:
+        return False
+    if not params.ml_bear_override:
+        return False
+    if non_bull_periods < params.reentry_skip_confirmation_periods:
+        return False
+    if risk_off:
+        return False
+    try:
+        last = float(last)
+        ma_fast = float(ma_fast)
+        ma_slow = float(ma_slow)
+        mom20 = float(mom20)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        np.isfinite(last) and np.isfinite(ma_fast) and np.isfinite(ma_slow)
+        and last > ma_slow and ma_fast > ma_slow and mom20 > 0.0
+    )
+
+
 def detect_regime(panel: FeaturePanel, date: pd.Timestamp, params: RotationParams) -> RegimeState:
     """Equal-weight benchmark trend determines the market regime."""
     last = float(panel.bench_close.loc[date])
@@ -991,6 +1036,7 @@ def weekly_rotation_backtest(
     equity_peak = 1.0
     risk_off = False
     dd_guard_active = False
+    non_bull_periods = 0  # consecutive rebalances with strict regime != BULL (re-entry hysteresis)
     base_params = params
     gross_ceiling = float(params.max_gross_exposure)
     selector = None
@@ -1409,6 +1455,21 @@ def weekly_rotation_backtest(
                 regime = detect_regime(panel, date, params)
                 if params.bear_no_loss and regime.regime == "BEAR":
                     regime.exposure = 0.0
+            # ---- earlier re-entry (evidence-gated, default off) ----
+            # Track the strict regime on a per-rebalance basis (hysteresis for
+            # the re-entry rule) and compute whether the confirmation-MA skip
+            # is available: the benchmark must satisfy every other bull
+            # condition (close>MA40, MA10>MA40, positive 20d momentum) and the
+            # strategy must have spent enough consecutive non-BULL periods.
+            strict_bull = regime.regime == "BULL"
+            reentry_eligible = (not strict_bull) and _reentry_fast_ok(
+                params, non_bull_periods, risk_off,
+                panel.bench_close.loc[date] if pd.notna(panel.bench_close.loc[date]) else np.nan,
+                panel.bench_ma_fast.loc[date] if pd.notna(panel.bench_ma_fast.loc[date]) else np.nan,
+                panel.bench_ma_slow.loc[date] if pd.notna(panel.bench_ma_slow.loc[date]) else np.nan,
+                panel.bench_return_20d.loc[date] if pd.notna(panel.bench_return_20d.loc[date]) else 0.0,
+            )
+            non_bull_periods = 0 if strict_bull else non_bull_periods + 1
             current_regime = regime.regime
             equity_dd = equity / equity_peak - 1.0 if equity_peak > 0 else 0.0
             regime = apply_risk_scaling(panel, date, params, regime, ml_res if regime_detector is not None else None, equity_dd=equity_dd)
@@ -1416,6 +1477,13 @@ def weekly_rotation_backtest(
                 regime.exposure = min(regime.exposure, params.event_shock_exposure)
             if params.drawdown_guard > 0 and dd_guard_active:
                 regime.exposure = min(regime.exposure, params.dd_guard_exposure)
+            if reentry_eligible:
+                # Restore the BULL label (book switch to the full-universe
+                # rotator book) while keeping the risk layers' exposure scaling
+                # intact - an earlier re-entry, not a risk-limit bypass.
+                regime.regime = "BULL"
+                regime.advice_zh = "提前再入场:基准已收复 MA40 且短期动能为正(仅差长期确认均线),恢复多头组合但保留风险层敞口缩放。"
+                regime.advice_en = "Early re-entry: benchmark reclaimed MA40 with positive momentum (long-confirmation MA skipped); bull book at risk-scaled exposure."
             euphoria = bool(params.euphoria_threshold > 0 and pd.notna(panel.bench_return_20d.loc[date])
                             and float(panel.bench_return_20d.loc[date]) > params.euphoria_threshold)
             defensive_state = (regime.regime == "BEAR") or euphoria or (params.drawdown_guard > 0 and dd_guard_active) or risk_off

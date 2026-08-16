@@ -154,6 +154,7 @@ def default_params() -> RotationParams:
         defensive_core_bull_momentum=True,
         defensive_filter=True,
         defensive_div_weight=0.0,
+        reentry_skip_confirmation_periods=0,   # earlier re-entry (evidence-gated, default off)
         max_annual_vol=0.40,
         bear_no_loss=False,
         vol_target=0.0,
