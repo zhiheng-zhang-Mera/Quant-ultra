@@ -126,6 +126,12 @@ flowchart TD
 - 既有 16 个开源非高频策略排名（`Quant-4/benchmark/open_source_comparison.py`）存在跨市场、跨时期和口径差异，现明确降级为 **AUXILIARY_REFERENCE_ONLY（辅助背景）**；历史 0.74/0.85 百分位不再作为 Quant-Ultra 性能优势或生产准入的核心证据。
 - 生产候选须额外通过 `Quant-4/Main/statistical_validation_v2.py`：PSR、Holm 多重检验校正、PBO、块 bootstrap 区间、预定义参数邻域稳定性及 OOS 门槛缺一不可；证据缺失一律 `HOLD / OBSERVATION_ONLY`。正式实验与负结果由 `Quant-4/Main/experiment_registry.py` 的追加式哈希链统一登记，`ACCEPT / REJECT / HOLD` 均保留。
 
+### ✦ 研究深度治理（2026-08-19 Wave 2）
+
+- `Quant-4/Main/factor_research.py` 为生产因子提供独立诊断：Pearson IC / Rank IC / ICIR、月度稳定性、分组单调性、多期限衰减、换手与成本后价差、容量、行业/市值暴露、状态敏感性、冗余和组合增量信息。容量、暴露或状态证据缺失时因子保持 `HOLD / RESEARCH_ONLY`。
+- LLM 输出契约由单一情绪分数升级为 `financial-event/v1`：事件类型、公司/行业/宏观/监管作用域、方向、重要性、新颖性、不确定性、影响期限、可靠性、score 与 confidence 均为结构化字段；同时记录与传统词典分数的差异。未完成独立 PIT/OOS 信号验证前，事件输出固定为 `RESEARCH_ONLY`，不改变生产权重。
+- `Quant-4/Main/alternative_data_research.py` 将新闻、公告、论坛纳入统一覆盖率、双时间戳 PIT、延迟、来源版本、可靠性和跨来源冲突视图，并明确区分 `DATA_MISSING` 与 `NO_ELIGIBLE_EVENT`；资金流作为非文本另类数据在同一 Phase 3 结果中保留。三类文本源不完整时统一门禁保持 `HOLD / OBSERVATION_ONLY`。
+
 ### ✦ 快速开始
 
 ```powershell

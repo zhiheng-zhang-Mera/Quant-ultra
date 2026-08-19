@@ -11,11 +11,13 @@ import pandas as pd
 
 from Phase_3.alternative_data_contract import RAW_TEXT_CONTRACT_VERSION, load_contract_text
 from Main.alternative_signal_governance import evaluate_phase3_signal
+from Main.alternative_data_research import evaluate_alternative_sources
+from Main.financial_events import EVENT_SCHEMA_VERSION, evaluate_event_representation, parse_financial_event_response
 
 POSITIVE = {"利好", "增长", "增持", "突破", "回购", "盈利", "beat", "growth", "upgrade", "buyback", "bullish"}
 NEGATIVE = {"利空", "下跌", "减持", "亏损", "处罚", "违约", "风险", "miss", "loss", "downgrade", "default", "bearish"}
 
-LLM_PROMPT_VERSION = "financial-sentiment-json/v1"
+LLM_PROMPT_VERSION = "financial-event-json/v1"
 
 # DeepSeek API configuration is read from the local environment. These names
 # match the OpenAI-compatible DeepSeek endpoints:
@@ -194,7 +196,13 @@ def enhance_sentiment_with_local_llm(frames, config, client=None):
         # record in one call (no per-record round trips -> token savings).
         for item in candidates:
             item["lexical_score"] = score_text(item["text"])
-        prompt = "Analyze financial sentiment. Return JSON object with key results, an array of objects: id, score (-1 to 1), confidence (0 to 1). lexical_score is a dictionary baseline for reference; your score may agree or disagree. No prose.\n" + json.dumps([{"id": x["id"], "symbol": x["symbol"], "text": x["text"], "lexical_score": x["lexical_score"]} for x in candidates], ensure_ascii=False)
+        prompt = (
+            "Extract financial events. Return a JSON object with key results, an array of objects with exactly: "
+            "id; event_type (earnings/guidance/capital_action/corporate_action/credit/legal/regulatory/management/industry/macro/market/other); "
+            "scope (company/industry/macro/regulatory/market); direction (-1,0,1); importance, novelty, uncertainty, reliability, confidence (0..1); "
+            "horizon_days (1..3650); score (-1..1). lexical_score is a dictionary baseline; identify incremental event meaning rather than merely restating it. No prose.\n"
+            + json.dumps([{"id": x["id"], "symbol": x["symbol"], "source_type": x["source"], "text": x["text"], "lexical_score": x["lexical_score"]} for x in candidates], ensure_ascii=False)
+        )
         prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         last_error = None
         for cand_client, provider, cand_model in chain:
@@ -202,19 +210,32 @@ def enhance_sentiment_with_local_llm(frames, config, client=None):
                 raw = cand_client.generate(cand_model, prompt)
                 parsed = json.loads(raw)
                 scores = {item["id"]: float(np.clip(item["score"], -1, 1)) for item in parsed.get("results", []) if "id" in item and "score" in item}
+                try:
+                    structured = parse_financial_event_response(raw, [item["id"] for item in candidates])
+                except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                    structured = {}
                 updated = {name: frame.copy() for name, frame in frames.items()}
                 for item in candidates:
                     if item["id"] in scores:
                         updated[item["source"]].loc[item["index"], "llm_sentiment"] = scores[item["id"]]
+                    if item["id"] in structured:
+                        for field, value in structured[item["id"]].items():
+                            updated[item["source"]].loc[item["index"], field] = value
                 for frame in updated.values():
                     if "llm_sentiment" not in frame.columns: frame["llm_sentiment"] = np.nan
                     frame["effective_sentiment"] = frame["llm_sentiment"].where(frame["llm_sentiment"].notna(), frame["sentiment"])
+                event_research = evaluate_event_representation(
+                    structured, {item["id"]: item["lexical_score"] for item in candidates}, len(candidates)
+                )
                 return updated, {"status": "ANALYZED", "provider": provider, "model": cand_model,
                                  "prompt_version": LLM_PROMPT_VERSION,
+                                 "event_schema_version": EVENT_SCHEMA_VERSION,
                                  "prompt_sha256": prompt_sha256,
                                  "response_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
                                  "temperature": 0, "num_predict": 256, "response_format": "json",
-                                 "analyzed_records": len(scores), "requested_records": len(candidates),
+                                 "analyzed_records": len(scores), "structured_records": len(structured),
+                                 "requested_records": len(candidates), "event_research": event_research,
+                                 "research_only": True,
                                  "fallback_used": len(scores) < len(candidates), "timeout_seconds": timeout}
             except (OSError, ValueError, KeyError, json.JSONDecodeError, urllib.error.URLError, IndexError) as exc:
                 last_error = type(exc).__name__
@@ -247,20 +268,34 @@ def build_alternative_signals(context, as_of=None):
     if as_of is None:
         as_of = max(pd.Timestamp(x).tz_localize(None) for x in context.get("trading_days_dt", [pd.Timestamp.now("UTC")]))
     news, news_evidence = load_timed_text(config.get("news_input_path"), assets, as_of, config)
+    announcement, announcement_evidence = load_timed_text(config.get("announcement_input_path"), assets, as_of, config)
     forum, forum_evidence = load_timed_text(config.get("forum_input_path"), assets, as_of, config)
-    enhanced, llm_evidence = enhance_sentiment_with_local_llm({"news": news, "forum": forum}, config)
-    news, forum = enhanced["news"], enhanced["forum"]
+    enhanced, llm_evidence = enhance_sentiment_with_local_llm(
+        {"news": news, "announcement": announcement, "forum": forum}, config
+    )
+    news, announcement, forum = enhanced["news"], enhanced["announcement"], enhanced["forum"]
     result = pd.DataFrame({"symbol": assets})
-    for name, frame in (("news", news), ("forum", forum)):
+    for name, frame in (("news", news), ("announcement", announcement), ("forum", forum)):
         score_column = "effective_sentiment" if "effective_sentiment" in frame.columns else "sentiment"
         agg = frame.groupby("symbol")[score_column].agg(["mean", "count"]).reset_index()
         agg.columns = ["symbol", f"{name}_sentiment", f"{name}_record_count"]
         result = result.merge(agg, on="symbol", how="left")
     result = result.merge(capital_flow(context.get("asset_ohlcv", {})), on="symbol", how="left")
-    for col in ("news_sentiment", "forum_sentiment"): result[col] = result[col].fillna(0.0).clip(-1, 1)
-    for col in ("news_record_count", "forum_record_count"): result[col] = result[col].fillna(0).astype(int)
-    result["alternative_signal"] = (0.35 * result["news_sentiment"] + 0.25 * result["forum_sentiment"] + 0.40 * result["capital_pool_change_5v20"].fillna(0).clip(-1, 1)).clip(-1, 1)
+    for col in ("news_sentiment", "announcement_sentiment", "forum_sentiment"):
+        result[col] = result[col].fillna(0.0).clip(-1, 1)
+    for col in ("news_record_count", "announcement_record_count", "forum_record_count"):
+        result[col] = result[col].fillna(0).astype(int)
+    result["alternative_signal"] = (
+        0.30 * result["news_sentiment"] + 0.20 * result["announcement_sentiment"]
+        + 0.20 * result["forum_sentiment"]
+        + 0.30 * result["capital_pool_change_5v20"].fillna(0).clip(-1, 1)
+    ).clip(-1, 1)
     governance = evaluate_phase3_signal(
-        result, assets, [news_evidence, forum_evidence], llm_evidence, config
+        result, assets, [news_evidence, announcement_evidence, forum_evidence], llm_evidence, config
     )
-    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "mode": mode, "as_of": str(pd.Timestamp(as_of).tz_localize(None)), "as_of_source": as_of_source, "pit_cutoff_explicit": as_of_source == "EXPLICIT", "method": "PIT lexical sentiment, optional bounded local-LLM enhancement, and 5-day/20-day turnover pool change", "future_records_excluded": True}, "alternative_signal_governance": governance}
+    research = evaluate_alternative_sources(
+        {"news": news, "announcement": announcement, "forum": forum},
+        {"news": news_evidence, "announcement": announcement_evidence, "forum": forum_evidence},
+        assets, as_of,
+    )
+    return {"alternative_signals": result, "alternative_data_evidence": {"news": news_evidence, "announcement": announcement_evidence, "forum": forum_evidence, "local_llm": llm_evidence, "research_framework": research, "mode": mode, "as_of": str(pd.Timestamp(as_of).tz_localize(None)), "as_of_source": as_of_source, "pit_cutoff_explicit": as_of_source == "EXPLICIT", "method": "PIT structured financial events across news, announcements and forums plus non-text capital flow", "future_records_excluded": True}, "alternative_signal_governance": governance}

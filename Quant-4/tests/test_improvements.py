@@ -133,7 +133,7 @@ def test_local_llm_sentiment_is_bounded_and_optional():
     assert evidence["status"] == "ANALYZED"
     assert len(evidence["prompt_sha256"]) == 64
     assert len(evidence["response_sha256"]) == 64
-    assert evidence["prompt_version"] == "financial-sentiment-json/v1"
+    assert evidence["prompt_version"] == "financial-event-json/v1"
     assert enhanced["news"].loc[0, "effective_sentiment"] == 0.8
 
 def test_local_llm_missing_model_falls_back_without_failure():
