@@ -337,11 +337,18 @@ This records raw and cleaned dataset hashes, source/licence/coverage lineage, th
 all installed package versions, explicit random seeds, numeric tolerances, and output hashes. Python 3.12 setup
 uses `Quant-4/requirements-lock-py312.txt`; generated caches and evidence remain local and untracked.
 
+Governed Markdown reports can be generated from a reviewed JSON specification with:
+
+```powershell
+python Quant-4\research\generate_standard_report.py spec.json report.md
+```
+
 CI runs the full suite on Windows and Linux with Python 3.11/3.12, plus Ruff, mypy, an 80% coverage gate for
 research-governance modules, Hypothesis financial-invariant properties, and deterministic full-pool/alternative-data
 performance budgets. These gates detect engineering and financial-logic regressions; they do not establish investment validity.
 
 See **[UserGuide.md](UserGuide.md)** for the full bilingual manual.
+Formal research methods and governed reports are indexed in **[docs/research/README.md](docs/research/README.md)**.
 
 ### ✦ Validation & Governance
 

@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "report_type": "BENCHMARK",
+    "experiment_id": "EXP-20260819-BENCHMARK-001",
+    "status": "HOLD",
+    "code_version": "git:4c57019744b592fd228cda5b9f226b1f39ec4b60",
+    "data_version": "NOT_RUN",
+    "parameter_version": "comparable-benchmark/v1",
+    "generated_at": "2026-08-19T06:05:00+00:00",
+    "title": "Comparable Benchmark Report"
+  },
+  "summary": "The comparable benchmark contract and automatic manifest are implemented and tested, but no new real-data same-contract benchmark run was performed in this strengthening wave.",
+  "metrics": {
+    "required_categories": 4,
+    "required_quant_ultra_versions": 2,
+    "unit_tests_at_wave_1": 202,
+    "performance_claim_status": "HOLD"
+  },
+  "evidence": [
+    "Quant-4/Main/benchmark_governance.py enforces one index, data version, costs, capital and constraints.",
+    "Quant-4/tests/test_benchmark_governance.py covers complete and fail-closed contracts.",
+    "GitHub Actions run 32217606288 passed Wave 1."
+  ],
+  "limitations": [
+    "Capability tests are not a real-market comparative result.",
+    "External open-source rankings remain auxiliary only.",
+    "A future formal run must supply the immutable data manifest."
+  ],
+  "decision": "HOLD all new benchmark performance claims until a registered real-data run emits the governed manifest."
+}

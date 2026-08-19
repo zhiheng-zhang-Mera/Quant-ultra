@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "report_type": "NEGATIVE_RESULT",
+    "experiment_id": "LEGACY-20260816-ALTERNATIVE-SIGNAL",
+    "status": "REJECT",
+    "code_version": "git:81c5fe4-legacy-evidence",
+    "data_version": "legacy-real-news-cache",
+    "parameter_version": "alternative-signal-weight/v1",
+    "generated_at": "2026-08-19T06:05:00+00:00",
+    "title": "Negative Results Report"
+  },
+  "summary": "Real-news signal direction changed with universe size and full-window/OOS deltas were immaterial; additional parameter and risk-control mechanisms also failed their predefined evidence requirements.",
+  "metrics": {
+    "alternative_signal_weight": 0,
+    "strategy_selector": "disabled",
+    "formal_registry_migration": "not retroactive",
+    "decision_status": "REJECT"
+  },
+  "evidence": [
+    "The root README retains the 2026-08-14 to 2026-08-16 negative-result narrative.",
+    "Quant-4/Main/experiment_registry.py now preserves all new ACCEPT, HOLD and REJECT outcomes.",
+    "Alternative-event outputs remain research-only unless independent evidence passes."
+  ],
+  "limitations": [
+    "These experiments predate the formal EXP- registry and are labelled LEGACY rather than backfilled.",
+    "Historical local report files and caches are not published.",
+    "A rejected signal in this sample is not proof it can never work."
+  ],
+  "decision": "REJECT production activation; keep alternative_signal_weight=0 and preserve the failed direction/stability evidence."
+}
