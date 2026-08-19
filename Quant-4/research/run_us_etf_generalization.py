@@ -44,14 +44,19 @@ def _sha256_file(path: Path) -> str:
 def fetch_or_load(cache_dir: Path, *, start: str, end: str, download: bool) -> tuple[dict[str, pd.DataFrame], str]:
     cache_dir.mkdir(parents=True, exist_ok=True)
     paths = {ticker: cache_dir / f"us_etf_{ticker}_history.parquet" for ticker in US_ETF_UNIVERSE}
-    missing = [ticker for ticker, path in paths.items() if not path.exists()]
+    raw_paths = {ticker: cache_dir / f"us_etf_{ticker}_raw.csv" for ticker in US_ETF_UNIVERSE}
+    missing = [ticker for ticker in US_ETF_UNIVERSE if not paths[ticker].exists() or not raw_paths[ticker].exists()]
     if missing and not download:
         raise FileNotFoundError(f"missing US ETF caches: {missing}; rerun with --download")
     if missing:
         import yfinance as yf
+        # Keep yfinance's timezone/cookie SQLite stores inside the project cache;
+        # this also makes the one-command run work in isolated CI/workspaces.
+        yf.set_tz_cache_location(str(cache_dir / "yfinance_cache"))
         raw = yf.download(list(US_ETF_UNIVERSE), start=start, end=end, auto_adjust=True, actions=False, group_by="ticker", threads=True, progress=False)
         for ticker, path in paths.items():
             frame = raw[ticker].reset_index() if isinstance(raw.columns, pd.MultiIndex) else raw.reset_index()
+            frame.to_csv(raw_paths[ticker], index=False)
             frame.columns = [str(column).lower().replace(" ", "_") for column in frame.columns]
             frame = frame.rename(columns={"datetime": "date"})
             required = ["date", "open", "high", "low", "close", "volume"]
@@ -66,7 +71,9 @@ def fetch_or_load(cache_dir: Path, *, start: str, end: str, download: bool) -> t
         frame = pd.read_parquet(path)
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frames[ticker] = frame.sort_values("date").drop_duplicates("date").set_index("date")
-    data_version = hashlib.sha256(json.dumps({ticker: _sha256_file(path) for ticker, path in paths.items()}, sort_keys=True).encode("utf-8")).hexdigest()
+    hashes = {ticker: {"raw": _sha256_file(raw_paths[ticker]), "cleaned": _sha256_file(paths[ticker])}
+              for ticker in US_ETF_UNIVERSE}
+    data_version = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode("utf-8")).hexdigest()
     return frames, data_version
 
 
@@ -101,6 +108,16 @@ def frozen_momentum_backtest(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return result.iloc[int(lookback) + 1:]
 
 
+def build_validation(frames: dict[str, pd.DataFrame], data_version: str, project_root: Path) -> dict:
+    returns = frozen_momentum_backtest(frames)
+    commit = _git_commit(project_root)
+    frozen = FrozenResearchLogic("CN_A", "2026-08-19", commit, PARAMETER_HASH, "2026-08-18", "cross-sectional-momentum/v1", "no-overlay/v1", "next-open-us-etf/v1")
+    context = MarketValidationContext("US_ETF", f"sha256:{data_version}", PARAMETER_HASH,
+                                      str(returns.index.min().date()), str(returns.index.max().date()),
+                                      "XNYS", "USD", "fixed-5bps/v1", "T+0;lot=1;gross<=1", True, 0)
+    return validate_external_market(returns, context, frozen)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Frozen US ETF generalization validation")
     parser.add_argument("--cache-dir", type=Path, default=Path(__file__).parents[1] / "Data_Cache" / "external_validation")
@@ -111,13 +128,7 @@ def main() -> int:
     args = parser.parse_args()
     project_root = Path(__file__).parents[2]
     frames, data_version = fetch_or_load(args.cache_dir, start=args.start, end=args.end, download=args.download)
-    returns = frozen_momentum_backtest(frames)
-    commit = _git_commit(project_root)
-    frozen = FrozenResearchLogic("CN_A", "2026-08-19", commit, PARAMETER_HASH, "2026-08-18", "cross-sectional-momentum/v1", "no-overlay/v1", "next-open-us-etf/v1")
-    context = MarketValidationContext("US_ETF", f"sha256:{data_version}", PARAMETER_HASH,
-                                      str(returns.index.min().date()), str(returns.index.max().date()),
-                                      "XNYS", "USD", "fixed-5bps/v1", "T+0;lot=1;gross<=1", True, 0)
-    validation = validate_external_market(returns, context, frozen)
+    validation = build_validation(frames, data_version, project_root)
     payload = {"validation": validation, "parameters": FROZEN_PARAMETERS,
                "universe": list(US_ETF_UNIVERSE),
                "limitations": ["Static liquid ETF universe; not a historical constituent study.",

@@ -20,6 +20,7 @@ from urllib.request import urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PROJECT_ROOT.parent
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
+LOCK_REQUIREMENTS = PROJECT_ROOT / f"requirements-lock-py{sys.version_info.major}{sys.version_info.minor}.txt"
 REPORT_PATH = PROJECT_ROOT / "reports" / "setup" / "setup_report.json"
 
 IMPORT_CHECKS = {
@@ -115,7 +116,8 @@ def main() -> int:
     if args.mirror: pip_base += ["--index-url", args.mirror]
     if not args.no_pip_upgrade:
         run(pip_base + ["--upgrade", "pip", "setuptools", "wheel"])
-    run(pip_base + ["--requirement", str(REQUIREMENTS)])
+    install_requirements = LOCK_REQUIREMENTS if LOCK_REQUIREMENTS.is_file() else REQUIREMENTS
+    run(pip_base + ["--requirement", str(install_requirements)])
     pip_check = run([sys.executable, "-m", "pip", "check"], check=False)
     passed, failed = verify_imports()
     compile_check = run([sys.executable, "-m", "compileall", "-q", "Main", "Phase_1", "Phase_2", "Phase_3", "Phase_4", "Phase_5", "Phase_6", "Phase_7", "Phase_8", "Phase_9", "Phase_10", "Phase_11"], check=False)
@@ -127,7 +129,8 @@ def main() -> int:
     report = {
         "generated_at": datetime.now().astimezone().isoformat(), "success": success,
         "project_root": str(PROJECT_ROOT), "venv": str(target), "python": sys.executable,
-        "requirements": str(REQUIREMENTS), "imports_passed": passed, "imports_failed": failed,
+        "requirements": str(install_requirements), "lock_used": install_requirements == LOCK_REQUIREMENTS,
+        "imports_passed": passed, "imports_failed": failed,
         "pip_check_exit_code": pip_check.returncode, "compile_exit_code": compile_check.returncode,
         "test_exit_code": test_code, "ollama": ollama,
         "notes": ["Ollama/model checks are read-only", "Native Cython build is optional; verified NumPy fallback remains available"],

@@ -326,6 +326,16 @@ python Quant-4\run_adaptive_backtest.py 600519 --kind stock --years 8
 python -m pytest Quant-4\tests -q
 ```
 
+For a content-addressed reproducibility proof of the frozen external-market experiment:
+
+```powershell
+python Quant-4\research\run_reproducibility_smoke.py --download
+```
+
+This records raw and cleaned dataset hashes, source/licence/coverage lineage, the Git and Python environment,
+all installed package versions, explicit random seeds, numeric tolerances, and output hashes. Python 3.12 setup
+uses `Quant-4/requirements-lock-py312.txt`; generated caches and evidence remain local and untracked.
+
 See **[UserGuide.md](UserGuide.md)** for the full bilingual manual.
 
 ### ✦ Validation & Governance

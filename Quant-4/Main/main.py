@@ -28,6 +28,7 @@ from Main.schema_contracts import PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA, resol
 from Main.distributed_compute import apply_resource_plan, initialize_distributed_compute
 from Main.execute_report import generate_execute_report
 from Main.universe_rules import symbol_purchase_eligibility
+from Main.reproducibility import build_environment_manifest, write_environment_manifest
 
 RUN_TIMESTAMP = datetime.now(pytz.timezone("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S_%f")[:-3]
 logging.basicConfig(
@@ -125,6 +126,8 @@ def run_pipeline(args):
             logger.warning(f"外部配置加载失败: {e}")
     if config.get("analysis_only") is not True:
         raise ValueError("Quant-4 is an analysis-only engine; analysis_only must remain true")
+    global_seed = int(config.get("global_random_seed", config.get("lgb_params", {}).get("random_state", 42)))
+    np.random.seed(global_seed)
 
     # The run fingerprint must be stable across hardware states: it feeds the
     # phase cache. Hardware-derived resource-plan keys change every run and
@@ -135,6 +138,11 @@ def run_pipeline(args):
     logger.info("Distributed compute initialized | hardware=%s | connectivity=%s | plan=%s", compute_audit["hardware"], compute_audit["connectivity"], compute_audit["resource_plan"])
     dag_audit = validate_orchestration(PHASE_MODULES, PHASE_DEPENDENCIES, PHASE_INPUT_SCHEMA, PHASE_OUTPUT_SCHEMA)
     startup_manifest = write_startup_manifest(PROJECT_ROOT / "reports", RUN_TIMESTAMP, run_fingerprint, fingerprint_material, dag_audit)
+    environment_manifest = write_environment_manifest(
+        PROJECT_ROOT / "reports" / f"environment_manifest_{RUN_TIMESTAMP}.json",
+        build_environment_manifest(PROJECT_ROOT.parent, random_seeds={"numpy": global_seed, "lightgbm": global_seed},
+                                   hardware=compute_audit.get("hardware")),
+    )
 
     # ---- 核心组件 ----
     data_manager = FreeDataSourceManager(offline_debug=args.offline, source_timeout_seconds=float(config.get("market_source_timeout_seconds", 30.0)), source_cooldown_seconds=float(config.get("market_source_cooldown_seconds", 60.0)), source_max_cooldown_seconds=float(config.get("market_source_max_cooldown_seconds", 600.0)))
@@ -200,7 +208,8 @@ def run_pipeline(args):
     }
 
     pipeline_context = {
-        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash(), "run_fingerprint": run_fingerprint, "startup_manifest": str(startup_manifest)},
+        "run_metadata": {"timestamp": RUN_TIMESTAMP, "git_hash": get_git_hash(), "run_fingerprint": run_fingerprint,
+                         "startup_manifest": str(startup_manifest), "environment_manifest": str(environment_manifest)},
         "config": config,
         "compute_audit": compute_audit,
         "data_bus": data_bus,
