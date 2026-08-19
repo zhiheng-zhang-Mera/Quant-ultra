@@ -132,6 +132,13 @@ flowchart TD
 - LLM 输出契约由单一情绪分数升级为 `financial-event/v1`：事件类型、公司/行业/宏观/监管作用域、方向、重要性、新颖性、不确定性、影响期限、可靠性、score 与 confidence 均为结构化字段；同时记录与传统词典分数的差异。未完成独立 PIT/OOS 信号验证前，事件输出固定为 `RESEARCH_ONLY`，不改变生产权重。
 - `Quant-4/Main/alternative_data_research.py` 将新闻、公告、论坛纳入统一覆盖率、双时间戳 PIT、延迟、来源版本、可靠性和跨来源冲突视图，并明确区分 `DATA_MISSING` 与 `NO_ELIGIBLE_EVENT`；资金流作为非文本另类数据在同一 Phase 3 结果中保留。三类文本源不完整时统一门禁保持 `HOLD / OBSERVATION_ONLY`。
 
+### ✦ 外部泛化治理（2026-08-19 Wave 3）
+
+- `Quant-4/Main/generalization_validation.py` 固化源市场代码、参数、因子、风险与执行版本，目标市场 `target_search_trials` 必须为 0，且参数哈希必须与冻结版本一致；外部市场结果按因子、风险和执行成本分解，迁移失败也输出正式 `TRANSFER_FAILED` 证据。
+- 同一模块提供预注册的牛市、熊市、震荡、高波动、低波动、流动性冲击和极端日分类，并统一输出策略、基准、核心因子及风险保护机制的分状态表现，明确优势环境与弱势环境。
+- 时间外验证窗口必须预先给定且互不重叠；样本、PIT、市场日历、币种、成本或交易制度元数据不完整时保持 `HOLD / OBSERVATION_ONLY`。合成测试只验证工程契约，不作为任何市场迁移有效性的实证结论。
+- 冻结入口 `Quant-4/research/run_us_etf_generalization.py` 已在 2026-08-19 对固定美国 ETF 池完成 2,544 个交易日、零目标调参验证，结论为 **`TRANSFER_MIXED`**：年化收益高于 SPY，但 Sharpe 更低且回撤明显更差，因此只证明部分收益迁移，不支持风险调整后的普适优势。运行报告和行情缓存按 source-only 发布规则保留本地且被 Git 忽略；脚本会记录数据哈希、参数哈希、Git commit 与限制说明，可重复生成证据。
+
 ### ✦ 快速开始
 
 ```powershell
