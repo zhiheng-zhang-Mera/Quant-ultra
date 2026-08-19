@@ -8,7 +8,41 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    name: test-${{ matrix.os }}-py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Quant-4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            Quant-4/requirements.txt
+            Quant-4/requirements-lock-py312.txt
+            Quant-4/requirements-dev.txt
+      - run: python -m pip install --upgrade pip
+      - if: matrix.python-version == '3.12'
+        run: python -m pip install -r requirements-lock-py312.txt
+      - if: matrix.python-version == '3.11'
+        run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip check
+      - run: python -m compileall -q Main Phase_1 Phase_2 Phase_3 Phase_4 Phase_5 Phase_6 Phase_7 Phase_8 Phase_9 Phase_10 Phase_11
+      - run: python -m pytest -q -p no:cacheprovider tests
+      - run: python -m Main.production_readiness
+      - run: python research/run_performance_gate.py
+
+  quality:
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
@@ -19,10 +53,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: Quant-4/requirements.txt
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
-      - run: python -m pip check
-      - run: python -m compileall -q Main Phase_1 Phase_2 Phase_3 Phase_4 Phase_5 Phase_6 Phase_7 Phase_8 Phase_9 Phase_10 Phase_11
-      - run: python -m pytest -q -p no:cacheprovider tests
-      - run: python -m Main.production_readiness
+          cache-dependency-path: |
+            Quant-4/requirements-lock-py312.txt
+            Quant-4/requirements-dev.txt
+      - run: python -m pip install -r requirements-lock-py312.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m ruff check Main/data_provenance.py Main/reproducibility.py Main/financial_invariants.py Main/performance_engineering.py research/run_reproducibility_smoke.py research/run_performance_gate.py tests/test_reproducibility.py tests/test_engineering_quality.py
+      - run: python -m mypy Main/data_provenance.py Main/reproducibility.py Main/financial_invariants.py Main/performance_engineering.py
+      - run: python -m pytest -q -p no:cacheprovider --cov=Main.benchmark_governance --cov=Main.statistical_validation_v2 --cov=Main.experiment_registry --cov=Main.generalization_validation --cov=Main.data_provenance --cov=Main.reproducibility --cov=Main.financial_invariants --cov-report=term-missing --cov-fail-under=80 tests

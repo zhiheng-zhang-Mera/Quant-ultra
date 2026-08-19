@@ -324,6 +324,7 @@ python Quant-4\Main\main.py --force-recompute --non-interactive
 python Quant-4\run_weekly_rotation.py
 python Quant-4\run_adaptive_backtest.py 600519 --kind stock --years 8
 python -m pytest Quant-4\tests -q
+python Quant-4\research\run_performance_gate.py
 ```
 
 For a content-addressed reproducibility proof of the frozen external-market experiment:
@@ -335,6 +336,10 @@ python Quant-4\research\run_reproducibility_smoke.py --download
 This records raw and cleaned dataset hashes, source/licence/coverage lineage, the Git and Python environment,
 all installed package versions, explicit random seeds, numeric tolerances, and output hashes. Python 3.12 setup
 uses `Quant-4/requirements-lock-py312.txt`; generated caches and evidence remain local and untracked.
+
+CI runs the full suite on Windows and Linux with Python 3.11/3.12, plus Ruff, mypy, an 80% coverage gate for
+research-governance modules, Hypothesis financial-invariant properties, and deterministic full-pool/alternative-data
+performance budgets. These gates detect engineering and financial-logic regressions; they do not establish investment validity.
 
 See **[UserGuide.md](UserGuide.md)** for the full bilingual manual.
 

@@ -1,11 +1,17 @@
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from Main.data_provenance import DatasetLineage, append_provenance_event, build_dataset_manifest, verify_dataset_manifest, verify_provenance_history
+from Main.data_provenance import (
+    DatasetLineage,
+    append_provenance_event,
+    build_dataset_manifest,
+    verify_dataset_manifest,
+    verify_provenance_history,
+)
 from Main.reproducibility import build_artifact_manifest, build_environment_manifest, compare_numeric_results, verify_artifact_manifest
 
 
@@ -32,14 +38,17 @@ def test_provenance_history_is_hash_chained(tmp_path):
     assert second["previous_hash"] == first["event_hash"]
     assert verify_provenance_history(history)["valid"]
     rows = history.read_text(encoding="utf-8").splitlines()
-    event = json.loads(rows[0]); event["event_type"] = "TAMPERED"; rows[0] = json.dumps(event)
+    event = json.loads(rows[0])
+    event["event_type"] = "TAMPERED"
+    rows[0] = json.dumps(event)
     history.write_text("\n".join(rows), encoding="utf-8")
     assert not verify_provenance_history(history)["valid"]
 
 
 def test_artifact_manifest_and_numeric_tolerance_fail_closed(tmp_path):
     source, output = tmp_path / "input", tmp_path / "output"
-    source.write_text("a", encoding="utf-8"); output.write_text("b", encoding="utf-8")
+    source.write_text("a", encoding="utf-8")
+    output.write_text("b", encoding="utf-8")
     manifest = build_artifact_manifest(experiment_id="exp", code_version="git", data_version="data", parameter_version="params",
                                        inputs={"source": source}, outputs={"result": output}, numeric_tolerances={"sharpe": 1e-9})
     assert verify_artifact_manifest(manifest)["valid"]

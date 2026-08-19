@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-import hashlib
 import json
-from pathlib import Path
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
 QUANT4_ROOT = Path(__file__).resolve().parents[1]
 if str(QUANT4_ROOT) not in sys.path:
@@ -14,12 +13,19 @@ if str(QUANT4_ROOT) not in sys.path:
 
 from Main.data_provenance import DatasetLineage, build_dataset_manifest, verify_dataset_manifest
 from Main.reproducibility import (
-    build_artifact_manifest, build_environment_manifest, compare_numeric_results,
-    verify_artifact_manifest, write_environment_manifest,
+    build_artifact_manifest,
+    build_environment_manifest,
+    compare_numeric_results,
+    verify_artifact_manifest,
+    write_environment_manifest,
 )
 from research.run_us_etf_generalization import (
-    FROZEN_PARAMETERS, PARAMETER_HASH, US_ETF_UNIVERSE, _git_commit,
-    build_validation, fetch_or_load,
+    FROZEN_PARAMETERS,
+    PARAMETER_HASH,
+    US_ETF_UNIVERSE,
+    _git_commit,
+    build_validation,
+    fetch_or_load,
 )
 
 

@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import hashlib
-from importlib import metadata
 import json
 import os
 import platform
-from pathlib import Path
 import subprocess
 import sys
+from importlib import metadata
+from pathlib import Path
 from typing import Mapping
 
 import numpy as np
