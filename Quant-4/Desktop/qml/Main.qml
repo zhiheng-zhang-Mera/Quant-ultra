@@ -24,7 +24,7 @@ ApplicationWindow {
             Label { text: "QUANT ULTRA"; color: "#E8F3F7"; font.pixelSize: 17; font.weight: Font.Bold }
             Label { text: "RESEARCH WORKBENCH"; color: "#6F8493"; font.pixelSize: 12 }
             Item { Layout.fillWidth: true }
-            StatusPill { text: workbench.demoMode ? "DEMO DATA" : "REAL MODE"; tone: workbench.demoMode ? "#F4B860" : "#39D98A" }
+            StatusPill { text: workbench.executionMode; tone: workbench.demoMode ? "#F4B860" : "#39D98A" }
             Label { text: workbench.activeRun || "No active run"; color: "#8EA0AF"; font.family: "monospace" }
         }
     }
@@ -65,9 +65,9 @@ ApplicationWindow {
                     visible: root.activePage === 0
                     columns: 4; columnSpacing: 12; rowSpacing: 12; Layout.fillWidth: true
                     MetricCard { title: "Active run"; value: workbench.activeRun ? "1" : "0"; detail: "Persistent lifecycle"; Layout.fillWidth: true }
-                    MetricCard { title: "Verification"; value: "0 / 12"; detail: "No aggregate score"; Layout.fillWidth: true }
-                    MetricCard { title: "Critical holds"; value: "12"; detail: "Fail-closed default"; Layout.fillWidth: true }
-                    MetricCard { title: "Event source"; value: "REAL"; detail: "Hash-chained replay"; Layout.fillWidth: true }
+                    MetricCard { title: "Verification"; value: workbench.verificationPassed + " / 12"; detail: "No aggregate score"; Layout.fillWidth: true }
+                    MetricCard { title: "Critical holds"; value: workbench.verificationHolds.toString(); detail: "Fail-closed evidence state"; Layout.fillWidth: true }
+                    MetricCard { title: "Lifecycle / admission"; value: workbench.lifecycleStatus; detail: workbench.admissionAction; Layout.fillWidth: true }
                 }
 
                 Rectangle {

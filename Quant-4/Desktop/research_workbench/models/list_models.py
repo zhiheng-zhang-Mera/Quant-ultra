@@ -35,6 +35,18 @@ class DictListModel(QAbstractListModel):
         self._rows.append(dict(row))
         self.endInsertRows()
 
+    def update_where(self, role_name: str, value: Any, changes: dict[str, Any]) -> bool:
+        for position, row in enumerate(self._rows):
+            if row.get(role_name) == value:
+                row.update(changes)
+                index = self.index(position, 0)
+                self.dataChanged.emit(index, index, list(self._roles))
+                return True
+        return False
+
+    def rows(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self._rows]
+
 
 class ResearchRunListModel(DictListModel):
     def __init__(self) -> None:
@@ -60,7 +72,51 @@ class EventStreamModel(DictListModel):
     def __init__(self) -> None:
         super().__init__(("sequence", "eventType", "runId", "summary", "occurredAt"))
 
+    def append(self, row: dict[str, Any]) -> None:
+        super().append(row)
+        overflow = len(self._rows) - 1000
+        if overflow > 0:
+            self.beginRemoveRows(QModelIndex(), 0, overflow - 1)
+            del self._rows[:overflow]
+            self.endRemoveRows()
+
 
 class GovernanceGateModel(DictListModel):
     def __init__(self) -> None:
         super().__init__(("dimension", "status", "reason", "critical"))
+
+
+class AgentActivityModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("agentId", "role", "status", "activity"))
+
+
+class ExperimentModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("experimentId", "status", "specHash", "trialCount"))
+
+
+class TwinImplementationModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("level", "status", "agreement", "diagnostic"))
+
+
+class StatisticalModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("metric", "value", "status", "evidenceId"))
+
+
+class RobustnessModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("attack", "status", "detail", "evidenceId"))
+
+
+class GeneralizationModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("axis", "status", "parameterHash", "evidenceId"))
+
+
+class KernelPhaseModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("phase", "status", "duration", "artifact"))
+
+
+class MemoryModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("memoryId", "type", "result", "failureReason"))
+
+
+class ReportModel(DictListModel):
+    def __init__(self) -> None: super().__init__(("path", "sha256", "status", "size"))

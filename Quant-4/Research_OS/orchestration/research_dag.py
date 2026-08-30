@@ -7,7 +7,10 @@ from typing import Any, Callable
 from Research_OS.contracts.common import LifecycleStatus, sha256
 
 from .budget import ResearchBudget
+from .cancellation import CancellationToken
 from .dag import DAG, Stage, StageContext, StageResult
+from .subdag_executor import SubDagExecutor, SubstageHandlerRegistry
+from .subgraphs import VERIFICATION_SUBGRAPHS
 
 STAGE_NAMES = (
     "Research Intake", "Research Memory Retrieval", "Evidence Reconnaissance", "Multi-AI Hypothesis Generation",
@@ -43,12 +46,40 @@ def _offline_handler(stage_id: str, name: str):
 
 
 class ResearchLifecycle:
-    def __init__(self, handler_factory: Callable[[str, str], Callable[[StageContext], StageResult]] = _offline_handler):
-        self.dag = DAG(canonical_stages(handler_factory))
+    def __init__(self, handler_factory: Callable[[str, str], Callable[[StageContext], StageResult]] = _offline_handler,
+                 substage_registry: SubstageHandlerRegistry | None = None):
+        self.subdag_executor = SubDagExecutor(substage_registry)
+        stages = []
+        for stage in canonical_stages(handler_factory):
+            if stage.stage_id not in VERIFICATION_SUBGRAPHS:
+                stages.append(stage)
+                continue
+            original = stage.handler
+
+            def with_subdag(context: StageContext, *, parent: Stage = stage,
+                            handler: Callable[[StageContext], StageResult] = original) -> StageResult:
+                results = self.subdag_executor.execute(parent.stage_id, context)
+                definitions = {item.substage_id: item for item in VERIFICATION_SUBGRAPHS[parent.stage_id]}
+                blockers = [result for key, result in results.items() if definitions[key].critical
+                            and result.status != LifecycleStatus.PASS]
+                if blockers:
+                    failed = any(result.status in {LifecycleStatus.FAILED, LifecycleStatus.REJECT} for result in blockers)
+                    return StageResult(parent.stage_id, LifecycleStatus.FAILED if failed else LifecycleStatus.HOLD,
+                                       {"subdag_executed": True},
+                                       tuple(ref for result in blockers for ref in result.evidence_refs),
+                                       tuple(reason for result in blockers for reason in result.reasons))
+                return handler(context)
+
+            stages.append(Stage(stage.stage_id, stage.name, stage.dependencies, with_subdag,
+                                stage.max_retries, stage.critical))
+        self.dag = DAG(stages)
 
     def run(self, run_id: str, inputs: dict, *, state_path: str | Path | None = None,
-            budget: ResearchBudget | None = None) -> StageContext:
-        return self.dag.run(StageContext(run_id, inputs, budget=budget or ResearchBudget()), state_path=state_path)
+            budget: ResearchBudget | None = None, cancellation_token: CancellationToken | None = None,
+            event_sink: Callable[[str, dict[str, Any]], None] | None = None) -> StageContext:
+        context = StageContext(run_id, inputs, budget=budget or ResearchBudget(),
+                               cancellation_token=cancellation_token or CancellationToken(), event_sink=event_sink)
+        return self.dag.run(context, state_path=state_path)
 
     def resume(self, state_path: str | Path, *, budget: ResearchBudget | None = None) -> StageContext:
         return self.dag.run(self.dag.resume(state_path, budget), state_path=state_path)

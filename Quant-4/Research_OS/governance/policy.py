@@ -83,12 +83,12 @@ class GovernancePolicy:
         if rejected:
             action = AdmissionAction.REJECTED
             reasons = tuple(f"composite critical gate failed: {level}" for level in rejected)
-        elif unavailable:
-            action = AdmissionAction.HOLD_FOR_REVIEW
-            reasons = tuple(f"composite evidence unavailable: {level}" for level in unavailable)
         elif execution_mode == "DEMO_OFFLINE":
             action = AdmissionAction.RESEARCH_ONLY
             reasons = ("demo/reference execution cannot become a production candidate",)
+        elif unavailable:
+            action = AdmissionAction.HOLD_FOR_REVIEW
+            reasons = tuple(f"composite evidence unavailable: {level}" for level in unavailable)
         else:
             action = AdmissionAction.PRODUCTION_CANDIDATE
             reasons = ("all profile-required composite gates passed", "human authorization is still required")

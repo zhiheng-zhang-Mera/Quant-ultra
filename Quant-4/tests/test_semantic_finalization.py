@@ -1,15 +1,25 @@
 import subprocess
+import sys
 from pathlib import Path
+from threading import Event, Thread
 
 import pandas as pd
 import pytest
 
-from Research_OS.application import ExecutionCapabilities, ResearchApplicationService, ResearchExecutionMode
+from Research_OS.application import (
+    ExecutionCapabilities,
+    PersistentEventBus,
+    ResearchApplicationService,
+    ResearchExecutionMode,
+    ResearchProcessManager,
+    RunStateCorruptionError,
+)
 from Research_OS.contracts.common import AdmissionAction, LifecycleStatus
 from Research_OS.contracts.composite import VERIFICATION_LEVELS, IndependentImplementationManifest, ResearchGeneration
 from Research_OS.contracts.evidence import EvidenceRecord, SourceRecord
 from Research_OS.evidence.independence import SourceIndependenceAnalyzer
-from Research_OS.governance import AdmissionProfile, GovernancePolicy
+from Research_OS.governance import AdmissionProfile, GovernanceDecisionStore, GovernancePolicy
+from Research_OS.orchestration import ResearchLifecycle, StageContext, StageResult, SubstageHandlerRegistry
 from Research_OS.verification import (
     HoldoutVault,
     VerificationEvidenceStore,
@@ -169,3 +179,111 @@ def test_expanded_pit_suite_preserves_past_for_causal_transform() -> None:
                           "publication_time": pd.date_range("2025-01-01", periods=10, tz="UTC")})
     results = run_pit_sentinel_suite(frame, lambda data: data[["value"]].expanding().mean(), split=5)
     assert len(results) >= 7 and all(result.passed for result in results)
+
+
+def test_stage_started_is_persisted_before_handler_finishes(tmp_path: Path) -> None:
+    entered, release = Event(), Event()
+
+    def factory(stage_id: str, _name: str):
+        def handler(_context: StageContext) -> StageResult:
+            if stage_id == "R0":
+                entered.set()
+                assert release.wait(5)
+            return StageResult(stage_id, LifecycleStatus.PASS)
+        return handler
+
+    service = ResearchApplicationService(tmp_path, lifecycle=ResearchLifecycle(factory))
+    intake = {"question": "are events live?"}
+    run_id = service.create_research(intake)
+    worker = Thread(target=service.start_research, args=(run_id, intake), daemon=True)
+    worker.start()
+    assert entered.wait(5)
+    types = [event.event_type for event in service.events.replay(run_id=run_id)]
+    assert "STAGE_STARTED" in types and "STAGE_COMPLETED" not in types
+    release.set()
+    worker.join(10)
+    assert not worker.is_alive()
+
+
+def test_cancel_active_run_stops_downstream_and_never_completes_governance(tmp_path: Path) -> None:
+    entered, release = Event(), Event()
+
+    def factory(stage_id: str, _name: str):
+        def handler(_context: StageContext) -> StageResult:
+            if stage_id == "R0":
+                entered.set()
+                assert release.wait(5)
+            return StageResult(stage_id, LifecycleStatus.PASS)
+        return handler
+
+    service = ResearchApplicationService(tmp_path, lifecycle=ResearchLifecycle(factory))
+    intake = {"question": "does cancel stop execution?"}
+    run_id = service.create_research(intake)
+    worker = Thread(target=service.start_research, args=(run_id, intake), daemon=True)
+    worker.start()
+    assert entered.wait(5)
+    service.cancel_research(run_id)
+    release.set()
+    worker.join(10)
+    state = service.get_run(run_id)
+    assert state["lifecycle_status"] == "CANCELLED" and state["admission_action"] is None
+    assert state["results"]["R1"]["status"] == "SKIPPED"
+    types = [event.event_type for event in service.events.replay(run_id=run_id)]
+    assert "CANCELLED" in types and "RUN_COMPLETED" not in types
+
+
+def test_critical_substage_failure_blocks_parent_and_persists_evidence() -> None:
+    registry = SubstageHandlerRegistry()
+    registry.register("R13.S2", lambda _context: StageResult("R13.S2", LifecycleStatus.FAILED,
+                                                             evidence_refs=("EVD-runtime-failure",),
+                                                             reasons=("runtime sentinel failed",)))
+    context = ResearchLifecycle(substage_registry=registry).run("RUN-subdag", {"question": "subdag"})
+    assert context.subresults["R13"]["R13.S2"].status == LifecycleStatus.FAILED
+    assert context.results["R13"].status == LifecycleStatus.FAILED
+    assert context.results["R14"].status == LifecycleStatus.SKIPPED
+
+
+def test_subscriber_failure_does_not_rollback_persisted_event(tmp_path: Path) -> None:
+    bus = PersistentEventBus(tmp_path / "events.jsonl")
+    bus.subscribe(lambda _event: (_ for _ in ()).throw(RuntimeError("subscriber crashed")))
+    event = bus.publish("RUN-subscriber", "TEST_EVENT", {"value": 1})
+    assert bus.subscriber_error_count == 1
+    assert PersistentEventBus(tmp_path / "events.jsonl").replay()[0].event_id == event.event_id
+
+
+def test_process_manager_timeout_and_cancel_leave_no_running_child(tmp_path: Path) -> None:
+    manager = ResearchProcessManager(terminate_grace_seconds=0.1)
+    sleeping = manager.start([sys.executable, "-c", "import time; time.sleep(10)"], cwd=tmp_path)
+    timed_out = manager.wait(sleeping.process_id, timeout=0.05)
+    assert timed_out.status == "TIMED_OUT" and timed_out.exit_code is not None
+    running = manager.start([sys.executable, "-c", "import time; time.sleep(10)"], cwd=tmp_path)
+    cancelled = manager.cancel(running.process_id)
+    assert cancelled.status in {"CANCELLED", "KILLED"} and cancelled.exit_code is not None
+    manager.shutdown()
+
+
+def test_state_corruption_is_surfaced_not_silently_omitted(tmp_path: Path) -> None:
+    service = ResearchApplicationService(tmp_path)
+    run_id = service.create_research({"question": "corruption?"})
+    service.run_store.path_for(run_id).write_text("{broken", encoding="utf-8")
+    with pytest.raises(RunStateCorruptionError):
+        ResearchApplicationService(tmp_path)
+
+
+def test_policy_change_appends_decision_without_rewriting_history(tmp_path: Path) -> None:
+    evidence = VerificationEvidenceStore(tmp_path / "evidence.jsonl")
+    for level in VERIFICATION_LEVELS:
+        evidence.append(level=level, run_id="RUN-policy", experiment_id="EXP-policy", record_type="test/v1",
+                        record={"level": level}, status=LifecycleStatus.PASS, producer="test")
+    matrix = VerificationMatrixBuilder(evidence).build("RUN-policy", experiment_id="EXP-policy")
+    policy = GovernancePolicy()
+    first = policy.decide_composite("EXP-policy", matrix, profile=AdmissionProfile.STANDARD_RESEARCH,
+                                    execution_mode="REAL_RESEARCH")
+    second = policy.decide_composite("EXP-policy", matrix, profile=AdmissionProfile.CRITICAL_CANDIDATE,
+                                     execution_mode="REAL_RESEARCH")
+    store = GovernanceDecisionStore(tmp_path / "decisions.jsonl")
+    old = store.append("RUN-policy", matrix, first)
+    new = store.append("RUN-policy", matrix, second, supersedes_decision_id=old.decision_id)
+    history = store.list_by_run("RUN-policy")
+    assert [item.decision_id for item in history] == [old.decision_id, new.decision_id]
+    assert history[0].policy_hash != history[1].policy_hash
