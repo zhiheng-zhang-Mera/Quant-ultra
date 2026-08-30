@@ -13,7 +13,9 @@ flowchart TD
     V --> G[Governance hard gate]
 ```
 
-QML sees stable Qt models and command methods only. It does not import the lifecycle, registry storage, provider adapters, policy configuration, or credentials. Expensive research commands execute outside the GUI thread. Application events are redacted, per-run monotonic, duplicate-safe, bounded in memory, hash-chained on disk, and replayable after restart.
+QML sees stable Qt models and command methods only. It does not import the lifecycle, registry storage, provider adapters, policy configuration, or credentials. Expensive research commands execute outside the GUI thread. Application events are redacted, per-run monotonic, duplicate-safe, bounded in memory, hash-chained on disk, and replayable after restart. Subscriber failures are isolated from persistence.
+
+The default handler is explicitly `DEMO_OFFLINE`. Its truthful terminal state is `Lifecycle: COMPLETED`, `Governance: RESEARCH_ONLY`, with V1–V12 remaining `HOLD` until persisted verification evidence exists.
 
 ## Verification dimensions
 
@@ -32,9 +34,13 @@ QML sees stable Qt models and command methods only. It does not import the lifec
 | V11 | generalization | target tuning, parameter drift, or incomplete PIT metadata |
 | V12 | governance integrity | policy hash mismatch, missing dissent, or absent human authorization |
 
-## Desktop pages
+## Desktop status
 
-The navigation implements the 16 planned work areas: Dashboard, New Research, Research Flow, Agents, Evidence Nexus, Experiment Lab, Twin Implementation, Verification Matrix, Statistical Observatory, Adversarial Lab, Generalization, Kernel Telemetry, Research Memory, Governance Gate, Reports, and Settings. Every screen shows empty or HOLD states until real evidence exists; demo state must be marked explicitly.
+Implemented: backend-derived mode/status badges, durable run creation, startup hydration, live lifecycle graph state, persisted event stream, V1–V12 matrix, governance policy binding, cancellation and shutdown.
+
+Reference/empty-state views: Agents, Evidence Nexus, Experiment Lab, Twin Implementation, Statistical Observatory, Adversarial Lab, Generalization, Kernel Telemetry, Research Memory and Reports. These use page-specific models but are not described as feature-complete.
+
+Deferred: advanced charts, event-driven graph packets, standalone Windows packaging and signed installer.
 
 ## Local verification
 
@@ -42,7 +48,7 @@ From `Quant-4`:
 
 ```bash
 python -m compileall -q Research_OS Desktop
-python -m ruff check Research_OS tests/test_research_os.py tests/test_composite_verification.py
+python -m ruff check Research_OS tests/test_research_os.py tests/test_composite_verification.py tests/test_semantic_finalization.py
 python -m mypy Research_OS --ignore-missing-imports --cache-dir=.mypy_ci_cache
 python -m pytest -q -p no:cacheprovider tests
 QT_QPA_PLATFORM=offscreen python -m pytest -q -p no:cacheprovider Desktop/tests

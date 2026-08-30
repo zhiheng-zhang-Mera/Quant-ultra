@@ -92,15 +92,15 @@ ApplicationWindow {
                         Label { text: root.activePage === 2 ? "R0–R20 deterministic lifecycle" : root.activePage === 7 ? "Explicit verification levels" : "Evidence-bound workspace"; color: "#BAC9D2"; font.weight: Font.DemiBold }
                         ListView {
                             Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                            model: root.activePage === 2 ? workbench.graph : root.activePage === 7 ? workbench.verification : workbench.events
+                            model: pageModel(root.activePage)
                             delegate: Rectangle {
                                 required property var model
                                 width: ListView.view.width; height: 44; color: index % 2 ? "#0E151B" : "transparent"
                                 RowLayout {
                                     anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                                    Label { text: root.activePage === 2 ? model.stageId : root.activePage === 7 ? model.level : model.sequence; color: "#2DE2E6"; font.family: "monospace"; Layout.preferredWidth: 70 }
-                                    Label { text: root.activePage === 2 ? model.name : root.activePage === 7 ? "Independent evidence dimension" : model.eventType; color: "#D7E3E9"; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    StatusPill { text: root.activePage === 2 || root.activePage === 7 ? model.status : "EVENT"; tone: "#8B7CFF" }
+                                    Label { text: rowKey(root.activePage, model, index); color: "#2DE2E6"; font.family: "monospace"; Layout.preferredWidth: 90 }
+                                    Label { text: rowTitle(root.activePage, model); color: "#D7E3E9"; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    StatusPill { text: rowStatus(root.activePage, model); tone: "#8B7CFF" }
                                 }
                             }
                             Label { anchors.centerIn: parent; visible: parent.count === 0; text: "No evidence has been produced for this view."; color: "#607583" }
@@ -127,5 +127,51 @@ ApplicationWindow {
     function pageDescription(index) {
         const descriptions = ["Operational truth without composite scoring", "Preregister a falsifiable research request", "Lifecycle state and critical dependencies", "Roles, providers and information firewalls", "Lineage, origin families and reconciliation", "Frozen specifications and experiment budgets", "Blind N-version comparison from L1 to L6", "V1–V12 remain independently visible", "Multiplicity and dependence-aware inference", "Placebos, attacks and runtime sentinels", "Frozen transfer across required axes", "Kernel runs, environments and fault telemetry", "Searchable successes and failures", "Policy hash, dissent and human authorization", "Reproducible export bundles", "Accessibility, motion and local preferences"]
         return descriptions[index]
+    }
+
+    function pageModel(index) {
+        const models = ({2: workbench.graph, 3: workbench.agents, 4: workbench.evidence,
+            5: workbench.experiments, 6: workbench.twins, 7: workbench.verification,
+            8: workbench.statistics, 9: workbench.robustness, 10: workbench.generalization,
+            11: workbench.kernelPhases, 12: workbench.memory, 13: workbench.governance,
+            14: workbench.reports})
+        return models[index] || workbench.events
+    }
+
+    function rowKey(page, item, index) {
+        if (page === 2) return item.stageId
+        if (page === 3) return item.agentId
+        if (page === 4) return item.evidenceId
+        if (page === 5) return item.experimentId
+        if (page === 6 || page === 7) return item.level
+        if (page === 8) return item.metric
+        if (page === 9) return item.attack
+        if (page === 10) return item.axis
+        if (page === 11) return item.phase
+        if (page === 12) return item.memoryId
+        if (page === 13) return item.dimension
+        if (page === 14) return item.path
+        return item.sequence || (index + 1)
+    }
+
+    function rowTitle(page, item) {
+        if (page === 2) return item.name
+        if (page === 3) return item.role + " · " + item.activity
+        if (page === 4) return item.claim + " · " + item.origin
+        if (page === 5) return item.specHash
+        if (page === 6) return item.diagnostic
+        if (page === 7) return "Independent evidence dimension"
+        if (page === 8) return item.value
+        if (page === 9) return item.detail
+        if (page === 10) return item.parameterHash
+        if (page === 11) return item.artifact
+        if (page === 12) return item.result + " · " + item.failureReason
+        if (page === 13) return item.reason
+        if (page === 14) return item.sha256
+        return item.eventType
+    }
+
+    function rowStatus(page, item) {
+        return page === 0 || page === 1 || page === 15 ? "EVENT" : (item.status || "HOLD")
     }
 }

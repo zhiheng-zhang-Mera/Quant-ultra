@@ -9,7 +9,23 @@ from PySide6.QtCore import Property, QObject, QSettings, Signal, Slot
 
 from Research_OS.application import ResearchApplicationService, ResearchExecutionMode
 
-from .models import EventStreamModel, GovernanceGateModel, ResearchGraphModel, ResearchRunListModel, VerificationMatrixModel
+from .models import (
+    AgentActivityModel,
+    EventStreamModel,
+    EvidenceNexusModel,
+    ExperimentModel,
+    GeneralizationModel,
+    GovernanceGateModel,
+    KernelPhaseModel,
+    MemoryModel,
+    ReportModel,
+    ResearchGraphModel,
+    ResearchRunListModel,
+    RobustnessModel,
+    StatisticalModel,
+    TwinImplementationModel,
+    VerificationMatrixModel,
+)
 
 
 class WorkbenchViewModel(QObject):
@@ -22,11 +38,21 @@ class WorkbenchViewModel(QObject):
         super().__init__()
         self.service = ResearchApplicationService(state_dir)
         self.settings = QSettings("QuantUltra", "ResearchWorkbench")
-        self.runs = ResearchRunListModel()
-        self.graph = ResearchGraphModel()
-        self.verification = VerificationMatrixModel()
-        self.events = EventStreamModel()
-        self.governance = GovernanceGateModel()
+        self._runs = ResearchRunListModel()
+        self._graph = ResearchGraphModel()
+        self._verification = VerificationMatrixModel()
+        self._events = EventStreamModel()
+        self._governance = GovernanceGateModel()
+        self._agents = AgentActivityModel()
+        self._evidence = EvidenceNexusModel()
+        self._experiments = ExperimentModel()
+        self._twins = TwinImplementationModel()
+        self._statistics = StatisticalModel()
+        self._robustness = RobustnessModel()
+        self._generalization = GeneralizationModel()
+        self._kernel_phases = KernelPhaseModel()
+        self._memory = MemoryModel()
+        self._reports = ReportModel()
         self._active_run = ""
         self._execution_mode = self.service.execution_mode.value
         self._lifecycle_status = "NO_RUN"
@@ -68,6 +94,66 @@ class WorkbenchViewModel(QObject):
     def verificationHolds(self) -> int:  # noqa: N802 - Qt property
         return self._verification_holds
 
+    @Property(QObject, constant=True)
+    def runs(self) -> QObject:
+        return self._runs
+
+    @Property(QObject, constant=True)
+    def graph(self) -> QObject:
+        return self._graph
+
+    @Property(QObject, constant=True)
+    def verification(self) -> QObject:
+        return self._verification
+
+    @Property(QObject, constant=True)
+    def events(self) -> QObject:
+        return self._events
+
+    @Property(QObject, constant=True)
+    def governance(self) -> QObject:
+        return self._governance
+
+    @Property(QObject, constant=True)
+    def agents(self) -> QObject:
+        return self._agents
+
+    @Property(QObject, constant=True)
+    def evidence(self) -> QObject:
+        return self._evidence
+
+    @Property(QObject, constant=True)
+    def experiments(self) -> QObject:
+        return self._experiments
+
+    @Property(QObject, constant=True)
+    def twins(self) -> QObject:
+        return self._twins
+
+    @Property(QObject, constant=True)
+    def statistics(self) -> QObject:
+        return self._statistics
+
+    @Property(QObject, constant=True)
+    def robustness(self) -> QObject:
+        return self._robustness
+
+    @Property(QObject, constant=True)
+    def generalization(self) -> QObject:
+        return self._generalization
+
+    @Property(QObject, constant=True)
+    def kernelPhases(self) -> QObject:  # noqa: N802 - Qt property
+        return self._kernel_phases
+
+    @Property(QObject, constant=True)
+    def memory(self) -> QObject:
+        return self._memory
+
+    @Property(QObject, constant=True)
+    def reports(self) -> QObject:
+        return self._reports
+
     @Property(bool, notify=activeRunChanged)
     def reducedMotion(self) -> bool:  # noqa: N802 - Qt property
         return bool(self.settings.value("reducedMotion", False, bool))
@@ -75,7 +161,7 @@ class WorkbenchViewModel(QObject):
     @Slot()
     def hydrate(self) -> None:
         summaries = self.service.list_run_summaries()
-        self.runs.replace([{"runId": item.run_id, "question": item.question, "status": item.lifecycle_status,
+        self._runs.replace([{"runId": item.run_id, "question": item.question, "status": item.lifecycle_status,
                             "mode": item.execution_mode} for item in summaries])
         preferred = str(self.settings.value("selectedRun", ""))
         available = {item.run_id for item in summaries}
@@ -140,14 +226,14 @@ class WorkbenchViewModel(QObject):
             nodes = self.service.get_lifecycle_state(self._active_run)
             verification = self.service.get_verification_matrix(self._active_run)
             governance = self.service.get_governance_summary(self._active_run)
-        self.graph.replace([{"stageId": item.stage_id, "name": item.name, "status": item.status,
+        self._graph.replace([{"stageId": item.stage_id, "name": item.name, "status": item.status,
                              "x": (index % 4) * 230, "y": (index // 4) * 105, "critical": item.critical}
                             for index, item in enumerate(nodes)])
-        self.verification.replace([{"level": item.level, "status": item.status,
+        self._verification.replace([{"level": item.level, "status": item.status,
                                     "evidenceCount": len(item.evidence_ids)} for item in verification])
         self._verification_passed = sum(item.status == "PASS" for item in verification)
         self._verification_holds = sum(item.status != "PASS" for item in verification) if verification else 12
-        self.governance.replace([] if governance is None else [
+        self._governance.replace([] if governance is None else [
             {"dimension": "Admission", "status": governance.admission_action or "HOLD",
              "reason": "; ".join(governance.reasons), "critical": True},
             {"dimension": "Policy", "status": "BOUND", "reason": governance.policy_hash, "critical": True},
@@ -158,11 +244,11 @@ class WorkbenchViewModel(QObject):
 
     @Slot(object)
     def _reduce_event(self, event: Any) -> None:
-        self.events.append({"sequence": event.sequence, "eventType": event.event_type, "runId": event.run_id,
+        self._events.append({"sequence": event.sequence, "eventType": event.event_type, "runId": event.run_id,
                             "summary": str(event.payload), "occurredAt": event.occurred_at.isoformat()})
         if event.run_id != self._active_run or not event.stage_id or event.substage_id:
             return
         status_by_event = {"STAGE_STARTED": "RUNNING", "STAGE_COMPLETED": "PASS", "STAGE_HELD": "HOLD",
                            "STAGE_FAILED": "FAILED", "STAGE_SKIPPED": "SKIPPED"}
         if event.event_type in status_by_event:
-            self.graph.update_where("stageId", event.stage_id, {"status": status_by_event[event.event_type]})
+            self._graph.update_where("stageId", event.stage_id, {"status": status_by_event[event.event_type]})

@@ -18,7 +18,7 @@ def create_engine(state_dir: str | Path | None = None) -> tuple[QGuiApplication,
     engine.rootContext().setContextProperty("workbench", view_model)
     engine.setProperty("workbenchViewModel", view_model)
     app.aboutToQuit.connect(view_model.shutdown)
-    qml = Path(__file__).resolve().parents[1] / "qml" / "Main.qml"
+    qml = Path(__file__).resolve().parent / "qml" / "Main.qml"
     engine.load(QUrl.fromLocalFile(str(qml)))
     return app, engine
 

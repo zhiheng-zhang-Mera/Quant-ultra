@@ -62,6 +62,7 @@ jobs:
           cache-dependency-path: Quant-4/requirements-dev.txt
       - run: python -m pip install PyYAML pytest
       - run: python -m compileall -q Research_OS
+      - run: python -c "import Research_OS.application; import Research_OS.verification"
       - run: python -m pytest -q -p no:cacheprovider tests/test_research_os.py
       - run: python -m Research_OS.cli.run examples/research_os/synthetic_intake.yaml --offline-agents --state-dir reports/ci-state --reports-dir reports/ci-workspace
 
@@ -83,7 +84,7 @@ jobs:
       - run: python -m pip install -r requirements-lock-py312.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m compileall -q Research_OS
-      - run: python -m ruff check Research_OS tests/test_research_os.py tests/test_composite_verification.py
+      - run: python -m ruff check Research_OS tests/test_research_os.py tests/test_composite_verification.py tests/test_semantic_finalization.py
       - run: python -m mypy Research_OS --ignore-missing-imports --cache-dir=.mypy_ci_cache
       - run: python -m ruff check Main/data_provenance.py Main/reproducibility.py Main/financial_invariants.py Main/performance_engineering.py Main/research_reporting.py research/run_reproducibility_smoke.py research/run_performance_gate.py research/generate_standard_report.py tests/test_reproducibility.py tests/test_engineering_quality.py tests/test_research_reporting.py
       - run: python -m mypy Main/data_provenance.py Main/reproducibility.py Main/financial_invariants.py Main/performance_engineering.py Main/research_reporting.py
@@ -102,6 +103,22 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install PySide6 PyYAML pytest pandas
+      - run: python -m pip install -e Desktop pytest pandas
       - run: python -m compileall -q Desktop Research_OS
-      - run: python -m pytest -q -p no:cacheprovider Desktop/tests tests/test_composite_verification.py
+      - run: python -m pytest -q -p no:cacheprovider Desktop/tests tests/test_composite_verification.py tests/test_semantic_finalization.py
+      - run: python Desktop/package_smoke.py
+
+  semantic-finalization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Quant-4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest PyYAML pandas numpy
+      - run: python -m compileall -q Research_OS
+      - run: python -m pytest -q -p no:cacheprovider tests/test_semantic_finalization.py tests/test_composite_verification.py
