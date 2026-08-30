@@ -36,6 +36,7 @@ class SourceIndependenceEvidence(Contract):
     origin_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
     near_duplicate_clusters: tuple[tuple[str, ...], ...] = ()
     reconciliation_findings: tuple[dict[str, Any], ...] = ()
+    lineage_resolution_states: dict[str, str] = field(default_factory=dict)
     status: LifecycleStatus = LifecycleStatus.HOLD
     reasons: tuple[str, ...] = ()
 
@@ -114,6 +115,8 @@ class ExecutionEnvironmentManifest(Contract):
     experiment_spec_hash: str = ""
     shared_writable_cache: bool = True
     run_classification: str = "HOLD"
+    source_snapshot_hash: str = ""
+    workspace_content_tree_hash: str = ""
 
     @property
     def production_candidate_eligible(self) -> bool:
@@ -127,6 +130,7 @@ class ReasoningIndependenceEvidence(Contract):
     profiles: tuple[dict[str, Any], ...] = ()
     provider_diversity: float = 0.0
     model_family_diversity: float = 0.0
+    prompt_family_diversity: float = 0.0
     context_diversity: float = 0.0
     evidence_set_diversity: float = 0.0
     conclusion_similarity: float = 0.0
@@ -168,6 +172,22 @@ class HoldoutVaultManifest(Contract):
             raise ValidationError("invalid holdout exposure accounting")
         if self.clean_holdout != (self.exposure_count == 0):
             raise ValidationError("clean_holdout must reflect exposure history")
+
+
+@dataclass(frozen=True)
+class ResearchGeneration(Contract):
+    SCHEMA: ClassVar[str] = "research-generation/v1"
+    generation_id: str = ""
+    parent_generation_id: str | None = None
+    family_id: str = ""
+    clean_holdout: bool = True
+    exposure_count: int = 0
+    created_reason: str = "INITIAL"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.exposure_count < 0 or self.clean_holdout != (self.exposure_count == 0):
+            raise ValidationError("research generation exposure state is inconsistent")
 
 
 @dataclass(frozen=True)

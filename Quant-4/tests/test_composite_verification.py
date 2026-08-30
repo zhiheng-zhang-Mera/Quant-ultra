@@ -68,8 +68,10 @@ def test_reasoning_risk_transfer_and_policy_dimensions_remain_separate() -> None
         {"provider_family": "b", "model_family": "y", "context_hash": "2", "evidence_set_hash": "e2", "peer_conclusions_visible": False},
     ))
     assert reasoning.status == LifecycleStatus.PASS and reasoning.informational_only
-    risk = verify_risk_plane("EXP-testing", {"max_drawdown": 1.0, "expected_shortfall": 2.0, "turnover": 3.0,
-                                               "concentration": 4.0}, {}, capacity_profile={}, stress_passed=True)
+    protected = {"max_drawdown": 1.0, "expected_shortfall": 2.0, "turnover": 3.0, "concentration": 4.0}
+    unprotected = {"max_drawdown": 2.0, "expected_shortfall": 3.0, "turnover": 4.0, "concentration": 5.0}
+    risk = verify_risk_plane("EXP-testing", protected, unprotected,
+                             capacity_profile={"estimated_capacity": 1_000_000.0}, stress_passed=True)
     assert risk.status == LifecycleStatus.PASS
     axes = {"time": "SUPPORTED", "market": "SUPPORTED"}
     matrix = build_generalization_matrix("EXP-testing", "strict", axes, frozen_parameter_hash="frozen",

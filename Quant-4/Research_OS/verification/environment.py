@@ -14,12 +14,24 @@ from typing import Iterable
 
 from Research_OS.contracts.common import sha256, stable_id
 from Research_OS.contracts.composite import ExecutionEnvironmentManifest
+from Research_OS.contracts.provenance import MaterializedWorkspaceManifest, SourceSnapshotManifest
 
 DEFAULT_ENV_WHITELIST = ("PYTHONHASHSEED", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TZ")
 
 
 def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _content_tree_hash(root: Path, excluded: Iterable[str] = ()) -> str:
+    ignored = set(excluded)
+    rows = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if not path.is_file() or any(part in ignored for part in relative.parts):
+            continue
+        rows.append((str(relative).replace("\\", "/"), _hash_file(path)))
+    return sha256(rows)
 
 
 def _git(root: Path) -> tuple[str, str]:
@@ -46,12 +58,36 @@ class WorkspaceMaterializer:
         shutil.copytree(source, destination, ignore=shutil.ignore_patterns(*self.IGNORE), copy_function=shutil.copy2)
         return destination
 
+    def capture_source_snapshot(self, source_root: str | Path, *, spec_hash: str,
+                                data_manifest_hash: str) -> SourceSnapshotManifest:
+        source = Path(source_root).resolve()
+        git_sha, git_state = _git(source)
+        locks = sorted(source.glob("**/requirements*.txt"))
+        lock_hashes = {str(path.relative_to(source)).replace("\\", "/"): _hash_file(path)
+                       for path in locks if path.is_file()}
+        return SourceSnapshotManifest(SourceSnapshotManifest.SCHEMA, git_sha, git_state,
+                                      _content_tree_hash(source, self.IGNORE), lock_hashes,
+                                      spec_hash, data_manifest_hash)
+
+    def describe_workspace(self, workspace: str | Path, source_snapshot: SourceSnapshotManifest, *,
+                           shared_writable_cache: bool = False) -> MaterializedWorkspaceManifest:
+        root = Path(workspace).resolve()
+        return MaterializedWorkspaceManifest(
+            MaterializedWorkspaceManifest.SCHEMA,
+            stable_id("RUN", "workspace", str(root)), _content_tree_hash(root, self.IGNORE),
+            source_snapshot.record_sha256, shared_writable_cache, self.IGNORE,
+        )
+
 
 def capture_environment(workspace: str | Path, *, experiment_spec_hash: str, data_manifest_hash: str,
                         random_seeds: dict[str, int], shared_writable_cache: bool = False,
-                        environment_whitelist: Iterable[str] = DEFAULT_ENV_WHITELIST) -> ExecutionEnvironmentManifest:
+                        environment_whitelist: Iterable[str] = DEFAULT_ENV_WHITELIST,
+                        source_snapshot: SourceSnapshotManifest | None = None,
+                        workspace_manifest: MaterializedWorkspaceManifest | None = None) -> ExecutionEnvironmentManifest:
     root = Path(workspace).resolve()
-    git_sha, git_state = _git(root)
+    local_git_sha, local_git_state = _git(root)
+    git_sha = source_snapshot.source_git_sha if source_snapshot else local_git_sha
+    git_state = source_snapshot.source_git_state if source_snapshot else local_git_state
     locks = sorted(root.glob("**/requirements*.txt"))
     lock_hashes = {str(path.relative_to(root)).replace("\\", "/"): _hash_file(path) for path in locks if path.is_file()}
     selected_env = {key: os.environ.get(key) for key in sorted(set(environment_whitelist))}
@@ -69,12 +105,16 @@ def capture_environment(workspace: str | Path, *, experiment_spec_hash: str, dat
         git_sha=git_sha, git_state=git_state, environment_whitelist_hash=sha256(selected_env),
         data_manifest_hash=data_manifest_hash, experiment_spec_hash=experiment_spec_hash,
         shared_writable_cache=shared_writable_cache, run_classification=classification,
+        source_snapshot_hash=source_snapshot.record_sha256 if source_snapshot else "",
+        workspace_content_tree_hash=(workspace_manifest.workspace_content_tree_hash if workspace_manifest
+                                     else _content_tree_hash(root, WorkspaceMaterializer.IGNORE)),
     )
 
 
 def compare_environments(primary: ExecutionEnvironmentManifest, reproduction: ExecutionEnvironmentManifest) -> dict:
     fields = ("python_version", "dependency_lock_hashes", "architecture", "timezone", "locale", "random_seeds",
-              "blas", "git_sha", "environment_whitelist_hash", "data_manifest_hash", "experiment_spec_hash")
+              "blas", "git_sha", "environment_whitelist_hash", "data_manifest_hash", "experiment_spec_hash",
+              "source_snapshot_hash", "workspace_content_tree_hash")
     mismatches = {field: {"primary": getattr(primary, field), "reproduction": getattr(reproduction, field)}
                   for field in fields if getattr(primary, field) != getattr(reproduction, field)}
     isolated = primary.workspace_id != reproduction.workspace_id and not reproduction.shared_writable_cache
