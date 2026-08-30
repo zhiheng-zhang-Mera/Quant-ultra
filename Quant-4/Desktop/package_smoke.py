@@ -1,4 +1,4 @@
-"""Clean-install smoke entry used by the desktop CI job."""
+"""Packaged-resource smoke entry used by the monorepo desktop CI job."""
 from __future__ import annotations
 
 import tempfile

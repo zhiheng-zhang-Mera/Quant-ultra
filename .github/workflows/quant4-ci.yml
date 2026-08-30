@@ -107,7 +107,7 @@ jobs:
       - run: python -m pip install -e Desktop pytest pandas
       - run: python -m compileall -q Desktop Research_OS
       - run: python -m pytest -q -p no:cacheprovider Desktop/tests tests/test_composite_verification.py tests/test_semantic_finalization.py
-      - run: python Desktop/package_smoke.py
+      - run: python -m Desktop.package_smoke
 
   semantic-finalization:
     runs-on: ubuntu-latest
