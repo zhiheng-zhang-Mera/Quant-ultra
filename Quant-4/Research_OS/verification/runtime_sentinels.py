@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -14,7 +15,9 @@ class SentinelResult:
     detail: str
 
 
-def future_mutation_sentinel(frame: pd.DataFrame, transform: Callable[[pd.DataFrame], Any], *, split: int) -> SentinelResult:
+def future_mutation_sentinel(frame: "pd.DataFrame", transform: Callable[["pd.DataFrame"], Any], *, split: int) -> SentinelResult:
+    import pandas as pd
+
     if not 0 < split < len(frame):
         raise ValueError("split must leave past and future rows")
     baseline = transform(frame.copy())
@@ -31,7 +34,9 @@ def future_mutation_sentinel(frame: pd.DataFrame, transform: Callable[[pd.DataFr
     return SentinelResult("future_mutation", True, "past output invariant under future mutation")
 
 
-def duplicate_calendar_sentinel(frame: pd.DataFrame, transform: Callable[[pd.DataFrame], Any]) -> SentinelResult:
+def duplicate_calendar_sentinel(frame: "pd.DataFrame", transform: Callable[["pd.DataFrame"], Any]) -> SentinelResult:
+    import pandas as pd
+
     duplicated = pd.concat([frame, frame.iloc[[-1]]], axis=0)
     try:
         transform(duplicated)
