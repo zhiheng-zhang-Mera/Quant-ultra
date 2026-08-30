@@ -1,0 +1,9 @@
+title: RSI-like standalone reversal factor duplicate check
+research_type: factor_research
+question: Does a standalone RSI-like factor add robust full-pool alpha?
+mechanism: short-term reversal
+features: [rsi14]
+expected_lifecycle: stop_at_novelty_gate_unless_reformulated
+constraints:
+  analysis_only: true
+  maximum_kernel_runs: 0

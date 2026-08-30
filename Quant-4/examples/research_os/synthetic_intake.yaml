@@ -1,0 +1,11 @@
+title: Synthetic quality-factor lifecycle
+research_type: factor_research
+question: Does a synthetic cash-flow-quality signal survive preregistered validation?
+market: SYNTHETIC
+universe:
+  - SYNTH-A
+  - SYNTH-B
+constraints:
+  analysis_only: true
+  no_live_execution: true
+expected_use: architecture_validation_only

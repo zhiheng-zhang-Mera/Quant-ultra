@@ -1,10 +1,23 @@
-# Quant-Ultra — Auditable Quantitative Research & Adaptive Rotation System
+# Quant-Ultra — Evidence-Governed Autonomous Quantitative Research System
 
 **可审计量化研究流水线 · 自适应多因子轮动引擎**
 
 > Research & engineering validation system. **This is not investment advice.** Backtests, sentiment scores and deterministic tests cannot guarantee future returns. / 研究与工程验证系统，**不构成投资建议**。回测、情绪评分与确定性测试均不能保证未来收益。
 
+> **8-30 architecture:** the stable Phase 1–11 Quant Kernel is now wrapped by an additive `Quant-4/Research_OS` plane. AI/provider roles may propose, implement, critique and explain research, but immutable preregistration, PIT checks, independent reproduction, deterministic evidence gates and human authorization retain decision authority. AI consensus is not validation, and Research OS cannot authorize live brokerage execution.
+
 [中文](#中文) · [English](#english)
+
+## Research OS quick start
+
+The offline reference lifecycle needs no API key and does not mutate production defaults:
+
+```bash
+cd Quant-4
+python -m Research_OS.cli.run examples/research_os/synthetic_intake.yaml --offline-agents
+```
+
+It generates a hash-addressed R0–R20 workspace under `Quant-4/reports/research_os/`. See [`docs/research_os_architecture.md`](docs/research_os_architecture.md) for the contracts, trust boundaries and implementation status.
 
 ---
 

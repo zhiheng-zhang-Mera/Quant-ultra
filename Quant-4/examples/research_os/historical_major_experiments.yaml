@@ -1,0 +1,48 @@
+schema_version: historical-research-import/v1
+records:
+  - title: robust profile adoption
+    mechanism: volatility-adaptive event-shock protection
+    result: ACCEPT
+    source_path: Quant-4/update plans/8-14-offline-evaluation-round1.md
+  - title: strategy selector rejection
+    mechanism: adaptive prototype selection
+    result: REJECT
+    failure_reason: preregistered OOS Sharpe gate failed
+    source_path: Quant-4/update plans/8-15-selector-gate-rerun-recovery-iteration.md
+  - title: real alternative-signal validation
+    mechanism: news sentiment overlay
+    result: REJECT
+    failure_reason: no robust directional full-history alpha
+    source_path: Quant-4/update plans/8-16-real-news-fullpool-revalidation.md
+  - title: sleeve allocation adoption
+    mechanism: risk diversification across strategy sleeves
+    result: ACCEPT
+    source_path: Quant-4/update plans/8-16-round19-deepseek-llm-sleeve-adoption.md
+  - title: early re-entry rejection
+    mechanism: skip long-term confirmation after drawdown
+    result: REJECT
+    failure_reason: OOS and drawdown deterioration
+    source_path: Quant-4/update plans/8-16-round19-5-direction2-reentry-stops-sleeve.md
+  - title: dynamic stop rejection
+    mechanism: adaptive trailing protection
+    result: REJECT
+    failure_reason: robustness deterioration
+    source_path: Quant-4/update plans/8-14-offline-evaluation-round1.md
+  - title: breadth gate rejection
+    mechanism: suppress buys under weak market breadth
+    result: REJECT
+    failure_reason: full-pool negative result
+    source_path: Quant-4/update plans/8-14-offline-evaluation-round1.md
+  - title: cash-flow quality factor adoption
+    mechanism: operating cash flow to net income quality
+    result: ACCEPT
+    source_path: Quant-4/update plans/8-16-round19-7-orthogonal-factors.md
+  - title: full fundamentals activation
+    mechanism: PIT income and balance-sheet factor expansion
+    result: ACCEPT
+    source_path: Quant-4/update plans/8-16-round19-8-code-audit-fundamentals-activation.md
+  - title: orthogonal factor-family negative results
+    mechanism: event, crowding and fund-flow factor families
+    result: REJECT
+    failure_reason: no full-pool improvement
+    source_path: Quant-4/update plans/8-16-round19-7-orthogonal-factors.md

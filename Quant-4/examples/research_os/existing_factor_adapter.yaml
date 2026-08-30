@@ -1,0 +1,8 @@
+title: Existing cash-flow-quality factor evidence wrapper
+research_type: factor_research
+question: Can existing ocf_np evidence be represented without changing production defaults?
+existing_adapter: Main/factor_research.py
+features: [ocf_np]
+constraints:
+  analysis_only: true
+  mutate_production_defaults: false
