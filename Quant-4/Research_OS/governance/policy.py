@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from Research_OS.contracts.common import AdmissionAction, LifecycleStatus
+from Research_OS.contracts.composite import PolicyManifest
 from Research_OS.contracts.governance import AgentAssessment, EvidenceMatrix, GovernanceDecision
 
 
@@ -15,6 +16,11 @@ DEFAULT_CRITICAL = ("data", "implementation", "reproducibility")
 
 class GovernancePolicy:
     version = "governance-policy/v1"
+
+    @property
+    def manifest(self) -> PolicyManifest:
+        return PolicyManifest(PolicyManifest.SCHEMA, self.version, DEFAULT_MANDATORY, DEFAULT_CRITICAL,
+                              {"pass": LifecycleStatus.PASS.value, "fail_closed": True}, True)
 
     def decide(self, experiment_id: str, matrix: EvidenceMatrix,
                assessments: tuple[AgentAssessment, ...] = ()) -> GovernanceDecision:
@@ -40,7 +46,8 @@ class GovernancePolicy:
         dissent = tuple(item for item in assessments if item.status != LifecycleStatus.PASS)
         return GovernanceDecision(schema_version="governance-decision/v1", experiment_id=experiment_id,
                                   action=action, reasons=reasons, evidence_refs=refs,
-                                  dissenting_assessments=dissent, policy_version=self.version)
+                                  dissenting_assessments=dissent, policy_version=self.version,
+                                  policy_hash=self.manifest.policy_hash)
 
     @staticmethod
     def assert_production_invariants(*, locked_spec: bool, pit_passed: bool, reproducible: bool,

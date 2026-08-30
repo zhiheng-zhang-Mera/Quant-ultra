@@ -19,12 +19,21 @@ class SourceRecord(Contract):
     content_sha256: str = ""
     license_or_usage_note: str = ""
     retrieved_at: datetime = field(default_factory=utc_now)
+    publisher: str = ""
+    upstream_source_id: str | None = None
+    origin_family: str = ""
+    syndication_chain: tuple[str, ...] = ()
+    content_fingerprint: str = ""
+    canonical_event_id: str = ""
+    retrieval_channel: str = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
         validate_stable_id(self.source_id, "SRC")
         if not self.name or not self.version or not 0 <= self.reliability <= 1:
             raise ValidationError("source metadata is incomplete")
+        if self.upstream_source_id == self.source_id:
+            raise ValidationError("source cannot be its own upstream origin")
 
 
 @dataclass(frozen=True)

@@ -334,9 +334,30 @@ def test_kernel_adapter_uses_main_py_isolated_overlay_and_preserves_defaults(tmp
     def runner(command, **kwargs):
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, "ok", "")
-    adapter = QuantKernelAdapter(project, runner=runner)
+    adapter = QuantKernelAdapter(project, runner=runner, git_state_provider=lambda path: "CLEAN")
     result = adapter.run(QuantKernelRequest("EXP-test-001", "spec", {"embargo_min": 5}, ("AAA",)))
     assert result.status == "PRIMARY_EVIDENCE" and result.production_config_unchanged
     assert "main_engine.py" not in " ".join(calls[0][0])
+    assert "--no-git-check" not in calls[0][0]
+    assert result.run_classification == "CLEAN_RESEARCH_RUN"
     with pytest.raises(ValueError):
         adapter.validate_overlay({"live_trading": True})
+
+
+def test_kernel_adapter_dirty_override_is_research_only(tmp_path):
+    project = tmp_path / "Quant-4"
+    (project / "Main").mkdir(parents=True)
+    (project / "Main" / "main.py").write_text("print('kernel')")
+    (project / "Main" / "default_param.yaml").write_text("analysis_only: true\n")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    adapter = QuantKernelAdapter(project, runner=runner, git_state_provider=lambda path: "DIRTY")
+    blocked = adapter.run(QuantKernelRequest("EXP-test-001", "spec"))
+    assert blocked.status == "HOLD" and not blocked.command
+    dirty = adapter.run(QuantKernelRequest("EXP-test-001", "spec", allow_dirty_research=True))
+    assert dirty.status == "HOLD"
+    assert dirty.run_classification == "DIRTY_RESEARCH_RUN"
+    assert dirty.evidence_manifest["production_candidate_eligible"] is False
+    assert "--no-git-check" in dirty.command

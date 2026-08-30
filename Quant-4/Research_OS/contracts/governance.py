@@ -37,6 +37,7 @@ class GovernanceDecision(Contract):
     evidence_refs: tuple[str, ...] = ()
     dissenting_assessments: tuple[AgentAssessment, ...] = ()
     policy_version: str = "governance-policy/v1"
+    policy_hash: str = ""
     decided_at: datetime = field(default_factory=utc_now)
     requires_human_authorization: bool = True
 
