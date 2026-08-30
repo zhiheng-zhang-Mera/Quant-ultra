@@ -1,8 +1,10 @@
 """Deterministic, fail-closed admission. Agent votes are deliberately ignored."""
 from __future__ import annotations
 
+from enum import Enum
+
 from Research_OS.contracts.common import AdmissionAction, LifecycleStatus
-from Research_OS.contracts.composite import PolicyManifest
+from Research_OS.contracts.composite import VERIFICATION_LEVELS, CompositeVerificationMatrix, PolicyManifest
 from Research_OS.contracts.governance import AgentAssessment, EvidenceMatrix, GovernanceDecision
 
 
@@ -12,6 +14,22 @@ class ProductionInvariantError(ValueError):
 
 DEFAULT_MANDATORY = ("mechanism", "source", "data", "implementation", "reproducibility", "statistics", "risk", "robustness", "generalization")
 DEFAULT_CRITICAL = ("data", "implementation", "reproducibility")
+
+
+class AdmissionProfile(str, Enum):
+    LEGACY_RESEARCH = "LEGACY_RESEARCH"
+    STANDARD_RESEARCH = "STANDARD_RESEARCH"
+    CRITICAL_CANDIDATE = "CRITICAL_CANDIDATE"
+    CROSS_MARKET_CANDIDATE = "CROSS_MARKET_CANDIDATE"
+
+
+COMPOSITE_REQUIRED = {
+    AdmissionProfile.STANDARD_RESEARCH: tuple(
+        level for level in VERIFICATION_LEVELS if not level.startswith(("V9_", "V11_"))
+    ),
+    AdmissionProfile.CRITICAL_CANDIDATE: VERIFICATION_LEVELS,
+    AdmissionProfile.CROSS_MARKET_CANDIDATE: VERIFICATION_LEVELS,
+}
 
 
 class GovernancePolicy:
@@ -48,6 +66,52 @@ class GovernancePolicy:
                                   action=action, reasons=reasons, evidence_refs=refs,
                                   dissenting_assessments=dissent, policy_version=self.version,
                                   policy_hash=self.manifest.policy_hash)
+
+    def decide_composite(self, experiment_id: str, matrix: CompositeVerificationMatrix, *,
+                         profile: AdmissionProfile = AdmissionProfile.CRITICAL_CANDIDATE,
+                         agent_assessments: tuple[AgentAssessment, ...] = (),
+                         execution_mode: str = "UNKNOWN_LEGACY") -> GovernanceDecision:
+        required = COMPOSITE_REQUIRED.get(profile, ())
+        if profile == AdmissionProfile.LEGACY_RESEARCH:
+            raise ValueError("LEGACY_RESEARCH must use decide()")
+        rejected = tuple(level for level in required if matrix.levels.get(level) in {
+            LifecycleStatus.REJECT, LifecycleStatus.FAILED
+        })
+        unavailable = tuple(level for level in required if matrix.levels.get(level, LifecycleStatus.HOLD) in {
+            LifecycleStatus.HOLD, LifecycleStatus.PENDING, LifecycleStatus.RUNNING, LifecycleStatus.SKIPPED
+        })
+        if rejected:
+            action = AdmissionAction.REJECTED
+            reasons = tuple(f"composite critical gate failed: {level}" for level in rejected)
+        elif unavailable:
+            action = AdmissionAction.HOLD_FOR_REVIEW
+            reasons = tuple(f"composite evidence unavailable: {level}" for level in unavailable)
+        elif execution_mode == "DEMO_OFFLINE":
+            action = AdmissionAction.RESEARCH_ONLY
+            reasons = ("demo/reference execution cannot become a production candidate",)
+        else:
+            action = AdmissionAction.PRODUCTION_CANDIDATE
+            reasons = ("all profile-required composite gates passed", "human authorization is still required")
+        evidence_ids = tuple(sorted({ref for level in required for ref in matrix.evidence_refs.get(level, ())}))
+        dissent = tuple(item for item in agent_assessments if item.status != LifecycleStatus.PASS)
+        manifest = PolicyManifest(PolicyManifest.SCHEMA, f"{self.version}/{profile.value}", required, required,
+                                  {"profile": profile.value, "fail_closed": True}, True)
+        return GovernanceDecision(GovernanceDecision.SCHEMA, experiment_id, action, reasons, evidence_ids,
+                                  dissent, manifest.policy_version, manifest.policy_hash)
+
+    def assert_candidate_invariants(self, profile: AdmissionProfile, matrix: CompositeVerificationMatrix,
+                                    metadata: dict[str, object]) -> None:
+        required = COMPOSITE_REQUIRED.get(profile, VERIFICATION_LEVELS)
+        failures = [level for level in required if matrix.levels.get(level) != LifecycleStatus.PASS]
+        checks = {"locked spec": bool(metadata.get("locked_spec")),
+                  "valid holdout": bool(metadata.get("valid_holdout")),
+                  "no target search": metadata.get("target_search_trials") == 0,
+                  "frozen parameters": bool(metadata.get("parameter_hash_match")),
+                  "production defaults unchanged": not bool(metadata.get("production_config_mutated")),
+                  "AI has no production permission": not bool(metadata.get("actor_has_production_permission"))}
+        failures.extend(name for name, passed in checks.items() if not passed)
+        if failures:
+            raise ProductionInvariantError("; ".join(failures))
 
     @staticmethod
     def assert_production_invariants(*, locked_spec: bool, pit_passed: bool, reproducible: bool,

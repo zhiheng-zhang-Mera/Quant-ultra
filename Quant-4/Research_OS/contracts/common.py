@@ -53,8 +53,8 @@ class ValidationError(ValueError):
     """Raised when untrusted input violates a Research OS contract."""
 
 
-ID_PREFIXES = frozenset({"REQ", "HYP", "EXP", "SRC", "EVD", "RUN", "MEM", "AGT"})
-_ID_RE = re.compile(r"^(REQ|HYP|EXP|SRC|EVD|RUN|MEM|AGT)-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
+ID_PREFIXES = frozenset({"REQ", "HYP", "EXP", "SRC", "EVD", "RUN", "MEM", "AGT", "EVT", "VEV", "DEC"})
+_ID_RE = re.compile(r"^(REQ|HYP|EXP|SRC|EVD|RUN|MEM|AGT|EVT|VEV|DEC)-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
 
 
 def utc_now() -> datetime:

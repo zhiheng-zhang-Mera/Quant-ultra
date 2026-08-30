@@ -1,3 +1,3 @@
-from .policy import GovernancePolicy, ProductionInvariantError
+from .policy import AdmissionProfile, GovernancePolicy, ProductionInvariantError
 
-__all__ = ["GovernancePolicy", "ProductionInvariantError"]
+__all__ = ["AdmissionProfile", "GovernancePolicy", "ProductionInvariantError"]

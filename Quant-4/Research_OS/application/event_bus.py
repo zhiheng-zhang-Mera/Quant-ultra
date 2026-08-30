@@ -10,7 +10,7 @@ from typing import Any
 from Research_OS.contracts.common import canonical_json, sha256, stable_id
 from Research_OS.registry.storage import HashChainStore
 
-from .events import AppEvent
+from .events import AppEvent, AppEventV1
 
 _SECRET_KEYS = frozenset({"token", "api_key", "apikey", "password", "secret", "credential", "authorization"})
 
@@ -37,6 +37,7 @@ class PersistentEventBus:
         self._ids: set[str] = set()
         self._event_index: dict[str, AppEvent] = {}
         self._lock = RLock()
+        self.subscriber_error_count = 0
         for event in self.replay():
             self._remember(event)
 
@@ -46,6 +47,11 @@ class PersistentEventBus:
 
         data = dict(payload)
         data["occurred_at"] = datetime.fromisoformat(data["occurred_at"].replace("Z", "+00:00"))
+        if data.get("schema_version") == AppEventV1.SCHEMA:
+            legacy = AppEventV1(**data)
+            return AppEvent(AppEvent.SCHEMA, legacy.event_id, legacy.run_id, legacy.sequence, legacy.event_type,
+                            legacy.occurred_at, correlation_id=legacy.correlation_id, payload=legacy.payload,
+                            redaction_level=legacy.redaction_level, source="LegacyEventV1")
         return AppEvent(**data)
 
     def _remember(self, event: AppEvent) -> None:
@@ -60,19 +66,25 @@ class PersistentEventBus:
         self._recent.append(event)
 
     def publish(self, run_id: str, event_type: str, payload: dict[str, Any], *,
-                correlation_id: str = "", event_id: str | None = None) -> AppEvent:
+                correlation_id: str = "", event_id: str | None = None, stage_id: str = "",
+                substage_id: str = "", experiment_id: str = "", severity: str = "INFO",
+                source: str = "ResearchApplicationService") -> AppEvent:
         with self._lock:
             safe_payload = _redact(payload)
             sequence = self._sequence[run_id] + 1
-            identity = event_id or stable_id("EVD", run_id, event_type, sequence, sha256(safe_payload))
+            identity = event_id or stable_id("EVT", run_id, event_type, sequence, sha256(safe_payload))
             if identity in self._ids:
                 return self._event_index[identity]
-            event = AppEvent(AppEvent.SCHEMA, identity, run_id, sequence, event_type, safe_payload,
-                             correlation_id=correlation_id)
+            event = AppEvent(AppEvent.SCHEMA, identity, run_id, sequence, event_type,
+                             stage_id=stage_id, substage_id=substage_id, experiment_id=experiment_id,
+                             severity=severity, source=source, correlation_id=correlation_id, payload=safe_payload)
             self.store.append("APP_EVENT", event.to_dict(), actor="ResearchApplicationService")
             self._remember(event)
             for subscriber in tuple(self._subscribers):
-                subscriber(event)
+                try:
+                    subscriber(event)
+                except Exception:
+                    self.subscriber_error_count += 1
             return event
 
     def replay(self, *, run_id: str | None = None, after_sequence: int = 0,
